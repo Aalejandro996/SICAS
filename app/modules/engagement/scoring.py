@@ -16,10 +16,29 @@ SYSTEM_DOC_POINTS = {"SI": 100.0, "NO": 0.0}
 SYSTEM_EVIDENCE_POINTS = {"ACTUALIZADO": 100.0, "DESACTUALIZADO": 50.0, "INEXISTENTE": 0.0}
 
 def is_system_criteria(criteria: list[dict]) -> bool:
-    return bool(criteria) and all(c.get("evaluation_mode") in {"ERP_TI", "SEC_TI"} for c in criteria)
-DEFAULT_THRESHOLDS = {"satisfactorio": 85, "mejora": 70}
-RATING_LABEL = {"SATISFACTORIO": "Satisfactorio", "NECESITA_MEJORAS": "Necesita mejoras",
-                "INSATISFACTORIO": "Insatisfactorio", "SIN_CALIFICAR": "Sin calificar"}
+    return bool(criteria) and all(
+        c.get("evaluation_mode") in {
+            "ERP_TI",
+            "SEC_TI",
+            "SYSTEM_EXCEL",
+        }
+        for c in criteria
+    )
+DEFAULT_THRESHOLDS = {
+    "excelente": 90,
+    "satisfactorio": 70,
+    "aceptable": 60,
+    "mejora": 50,
+}
+
+RATING_LABEL = {
+    "EXCELENTE": "Excelente",
+    "SATISFACTORIO": "Satisfactorio",
+    "ACEPTABLE": "Aceptable",
+    "NECESITA_MEJORAS": "Necesita mejoras",
+    "NO_SATISFACTORIA": "No satisfactoria",
+    "SIN_CALIFICAR": "Sin calificar",
+}
 
 
 class ScoreError(ValueError):
@@ -120,12 +139,43 @@ def mean(values) -> float | None:
 
 
 def rating(score: float | None, thresholds: dict | None = None) -> str:
-    t = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
+    """
+    Escala institucional:
+
+      > 90       Excelente
+      70 - 90    Satisfactorio
+      60 - 69.99 Aceptable
+      50 - 59.99 Necesita mejoras
+      <= 49.99   No satisfactoria
+    """
+    t = {
+        **DEFAULT_THRESHOLDS,
+        **(thresholds or {}),
+    }
+
     if score is None:
         return "SIN_CALIFICAR"
-    if score >= t["satisfactorio"]:
+
+    value = float(score)
+
+    # Excelente: estrictamente mayor que 90.
+    if value > t["excelente"]:
+        return "EXCELENTE"
+
+    # Satisfactorio: 70 hasta 90 inclusive.
+    if value >= t["satisfactorio"]:
         return "SATISFACTORIO"
-    return "NECESITA_MEJORAS" if score >= t["mejora"] else "INSATISFACTORIO"
+
+    # Aceptable: 60 hasta 69.99...
+    if value >= t["aceptable"]:
+        return "ACEPTABLE"
+
+    # Necesita mejoras: 50 hasta 59.99...
+    if value >= t["mejora"]:
+        return "NECESITA_MEJORAS"
+
+    # Menor de 50.
+    return "NO_SATISFACTORIA"
 
 
 @dataclass

@@ -114,7 +114,17 @@
 
   S.stat = (n, l) => h('div', { class: 'card stat' }, h('div', { class: 'n' }, n), h('div', { class: 'l' }, l));
   S.score = (v) => (v == null ? '—' : Number(v).toFixed(1));
-  S.ratingBadge = (r) => h('span', { class: 'badge R_' + r }, ({ SATISFACTORIO: 'Satisfactorio', NECESITA_MEJORAS: 'Necesita mejoras', INSATISFACTORIO: 'Insatisfactorio', SIN_CALIFICAR: 'Sin calificar' })[r] || r);
+  S.ratingBadge = (r) => h(
+  'span',
+  { class: 'badge R_' + r },
+  ({
+    EXCELENTE: 'Excelente',
+    SATISFACTORIO: 'Satisfactorio',
+    ACEPTABLE: 'Aceptable',
+    NECESITA_MEJORAS: 'Necesita mejoras',
+    NO_SATISFACTORIA: 'No satisfactoria',
+    SIN_CALIFICAR: 'Sin calificar'
+  })[r] || r);
   S.date = (v) => (v ? String(v).slice(0, 10) : '');
 
   // ---------------------------------------------------------------- UI
