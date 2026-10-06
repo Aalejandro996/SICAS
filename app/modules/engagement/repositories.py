@@ -1,0 +1,544 @@
+"""Acceso a datos de auditorías (SQL parametrizado)."""
+from __future__ import annotations
+
+import json
+import uuid
+
+from sqlalchemy import text
+
+from app.extensions import db
+from .templates import default_criteria, KINDS, LINES, TEMPLATE_KEYS
+
+
+def q(sql, **p):
+    return [dict(r._mapping) for r in db.session.execute(text(sql), p)]
+
+
+def q1(sql, **p):
+    r = q(sql, **p)
+    return r[0] if r else None
+
+
+def x(sql, **p):
+    return db.session.execute(text(sql), p)
+
+
+# ------------------------------------------------------------------ catálogo y expedientes
+def list_units(active_only=True, domains=None):
+    where = []
+    params = {}
+    if active_only:
+        where.append("u.active")
+    if domains and "ALL" not in domains:
+        where.append("u.audit_domain = ANY(CAST(:d AS text[]))")
+        params["d"] = domains
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    return q("SELECT u.id, u.code, u.name, u.kind, u.active, u.audit_domain, u.responsible_name, u.responsible_role FROM engagement.units u" + clause + " ORDER BY u.name", **params)
+
+
+def get_unit(unit_id):
+    return q1("SELECT id, code, name, kind, active, audit_domain, responsible_name, responsible_role FROM engagement.units WHERE id = CAST(:i AS integer)", i=int(unit_id))
+
+
+def create_unit(code, name, kind, audit_domain="GENERAL", responsible_name=None, responsible_role=None):
+    r = q1("INSERT INTO engagement.units (code, name, kind, audit_domain, responsible_name, responsible_role) VALUES (:c, :n, :k, :d, :rn, :rr) RETURNING id", c=code, n=name, k=kind, d=audit_domain, rn=responsible_name, rr=responsible_role)
+    db.session.commit()
+    return r["id"]
+
+
+def next_code(prefix, seq, year):
+    n = db.session.execute(text(f"SELECT nextval('engagement.{seq}')")).scalar_one()      # seq: constante interna
+    return f"{prefix}-{year}-{n:04d}"
+
+
+def create_file(code, unit_id, title, objective, pf, pt, user, audit_domain="GENERAL"):
+    if audit_domain not in ("GENERAL", "FINANCIERA", "SISTEMAS"):
+        raise ValueError("audit_domain inválido")
+    fid = str(uuid.uuid4())
+    x("INSERT INTO engagement.files (id, code, unit_id, title, objective, period_from, period_to, audit_domain, created_by) "
+      "VALUES (CAST(:i AS uuid), :c, :u, :t, :o, :pf, :pt, :d, CAST(:by AS uuid))",
+      i=fid, c=code, u=unit_id, t=title, o=objective, pf=pf, pt=pt, d=audit_domain, by=user)
+    db.session.commit()
+    return fid
+
+
+FILE_SQL = ("SELECT f.id::text, f.code, f.title, f.objective, f.period_from, f.period_to, f.status, f.audit_domain, f.created_at, u.id AS unit_id, "
+            "u.code AS unit_code, u.name AS unit_name, u.kind AS unit_kind, u.audit_domain AS unit_audit_domain, u.responsible_name, u.responsible_role, "
+            "(SELECT count(*) FROM engagement.audits a WHERE a.file_id = f.id) AS audits FROM engagement.files f JOIN engagement.units u ON u.id = f.unit_id ")
+
+
+def list_files(domains=None):
+    sql = FILE_SQL
+    params = {}
+    if domains and "ALL" not in domains:
+        sql += " WHERE f.audit_domain = ANY(CAST(:d AS text[]))"
+        params["d"] = domains
+    return q(sql + " ORDER BY f.created_at DESC LIMIT 200", **params)
+
+
+def get_file(file_id):
+    return q1(FILE_SQL + "WHERE f.id = CAST(:i AS uuid)", i=str(file_id))
+
+
+# ------------------------------------------------------------------ auditorías
+AUDIT_SQL = ("SELECT a.id::text, a.code, a.file_id::text, a.modality, a.phase, a.status, a.audit_domain, a.objectives, a.scope, a.procedures, a.lines, "
+             "a.planned_start, a.planned_end, a.location, a.contact_name, a.contact_role, a.manual_score, a.manual_reason, a.manual_at, "
+             "a.pac_sent_at, a.pac_sent_to, a.created_at, f.code AS file_code, f.title, f.period_from, f.period_to, "
+             "u.code AS unit_code, u.name AS unit_name, u.kind AS unit_kind, u.audit_domain AS unit_audit_domain, u.responsible_name, u.responsible_role "
+             "FROM engagement.audits a JOIN engagement.files f ON f.id = a.file_id JOIN engagement.units u ON u.id = f.unit_id ")
+
+
+def list_audits(statuses=None, domains=None):
+    sql = AUDIT_SQL
+    params = {}
+    where = []
+    if statuses:
+        where.append("a.status = ANY(CAST(:st AS text[]))")
+        params["st"] = statuses
+    if domains and "ALL" not in domains:
+        where.append("a.audit_domain = ANY(CAST(:d AS text[]))")
+        params["d"] = domains
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    return q(sql + " ORDER BY a.created_at DESC LIMIT 200", **params)
+
+
+def get_audit(audit_id):
+    return q1(AUDIT_SQL + "WHERE a.id = CAST(:i AS uuid)", i=str(audit_id))
+
+
+def team(audit_id):
+    return q("SELECT t.user_id::text AS user_id, t.role, t.initials, u.full_name AS name, u.username FROM engagement.team t "
+             "JOIN iam.users u ON u.id = t.user_id WHERE t.audit_id = CAST(:a AS uuid) ORDER BY t.role DESC, u.full_name", a=str(audit_id))
+
+
+def is_member(audit_id, user_id) -> bool:
+    return q1("SELECT 1 AS ok FROM engagement.team WHERE audit_id = CAST(:a AS uuid) AND user_id = CAST(:u AS uuid)", a=str(audit_id), u=user_id) is not None
+
+
+def my_audit_ids(user_id):
+    return {r["id"] for r in q("SELECT audit_id::text AS id FROM engagement.team WHERE user_id = CAST(:u AS uuid)", u=user_id)}
+
+
+def eligible_auditors(domain="GENERAL"):
+    role_map = {
+        "GENERAL": ["AUDITOR"],
+        "FINANCIERA": ["AUDITOR_FINANCIERO"],
+        "SISTEMAS": ["AUDITOR_SISTEMAS"],
+    }
+    roles = role_map.get(domain)
+    if not roles:
+        return []
+    return q("SELECT u.id::text AS id, u.full_name AS name, u.username FROM iam.users u "
+             "JOIN iam.user_roles ur ON ur.user_id = u.id JOIN iam.roles r ON r.id = ur.role_id "
+             "WHERE r.code = ANY(CAST(:roles AS text[])) AND u.is_active ORDER BY u.full_name", roles=roles)
+
+
+def create_audit(code, file_id, d, members, user):
+    aid = str(uuid.uuid4())
+    domain = d.get("audit_domain", "GENERAL")
+    x("INSERT INTO engagement.audits (id, code, file_id, modality, audit_domain, objectives, scope, procedures, lines, planned_start, planned_end, location, "
+      "contact_name, contact_role, created_by) VALUES (CAST(:i AS uuid), :c, CAST(:f AS uuid), :m, :d, :o, :s, :p, CAST(:l AS text[]), :ps, :pe, :loc, :cn, :cr, CAST(:by AS uuid))",
+      i=aid, c=code, f=str(file_id), m=d["modality"], d=domain, o=d["objectives"], s=d["scope"], p=d.get("procedures"), l=d["lines"], ps=d.get("planned_start"),
+      pe=d.get("planned_end"), loc=d.get("location"), cn=d.get("contact_name"), cr=d.get("contact_role"), by=user)
+    for m in members:
+        x("INSERT INTO engagement.team (audit_id, user_id, role, initials) VALUES (CAST(:a AS uuid), CAST(:u AS uuid), :r, :i)",
+          a=aid, u=m["user_id"], r=m["role"], i=m["initials"])
+    x("INSERT INTO engagement.phase_log (audit_id, from_phase, to_phase, changed_by, note) VALUES (CAST(:a AS uuid), NULL, 'PLANIFICACION', CAST(:u AS uuid), 'Creación')", a=aid, u=user)
+    db.session.commit()
+    return aid
+
+
+def change_phase(audit_id, from_phase, to_phase, user, note):
+    x("UPDATE engagement.audits SET phase=:t WHERE id = CAST(:a AS uuid)", t=to_phase, a=str(audit_id))
+    x("INSERT INTO engagement.phase_log (audit_id, from_phase, to_phase, changed_by, note) VALUES (CAST(:a AS uuid), :f, :t, CAST(:u AS uuid), :n)",
+      a=str(audit_id), f=from_phase, t=to_phase, u=user, n=note)
+    db.session.commit()
+
+
+def phase_log(audit_id):
+    return q("SELECT l.from_phase, l.to_phase, l.changed_at, u.username, l.note FROM engagement.phase_log l JOIN iam.users u ON u.id = l.changed_by "
+             "WHERE l.audit_id = CAST(:a AS uuid) ORDER BY l.id", a=str(audit_id))
+
+
+def set_audit_manual(audit_id, score, reason, user):
+    x("UPDATE engagement.audits SET manual_score=:s, manual_reason=:r, manual_by=CAST(:u AS uuid), manual_at=now() WHERE id = CAST(:a AS uuid)",
+      s=score, r=reason, u=user, a=str(audit_id))
+    db.session.commit()
+
+
+# ------------------------------------------------------------------ plantillas, cédulas e ítems
+def get_template(kind, line):
+    r = q1("SELECT criteria, version FROM engagement.templates WHERE kind=:k AND line=:l", k=kind, l=line)
+    return (r["criteria"], r["version"]) if r else (default_criteria(kind, line), 0)
+
+
+def list_templates(keys=None):
+    allowed = tuple(keys) if keys is not None else TEMPLATE_KEYS
+    saved = {(r["kind"], r["line"]): r for r in q(
+        "SELECT kind, line, version, criteria, updated_at FROM engagement.templates"
+    )}
+    return [
+        {
+            "kind": kind,
+            "line": line,
+            "version": saved[(kind, line)]["version"] if (kind, line) in saved else 0,
+            "criteria": saved[(kind, line)]["criteria"] if (kind, line) in saved else default_criteria(kind, line),
+            "customized": (kind, line) in saved,
+        }
+        for kind, line in allowed
+    ]
+
+
+def save_template(kind, line, criteria, user):
+    x("INSERT INTO engagement.templates (kind, line, version, criteria, updated_by) VALUES (:k, :l, 1, CAST(:c AS jsonb), CAST(:u AS uuid)) "
+      "ON CONFLICT (kind, line) DO UPDATE SET version = engagement.templates.version + 1, criteria = EXCLUDED.criteria, updated_by = EXCLUDED.updated_by, updated_at = now()",
+      k=kind, l=line, c=json.dumps(criteria), u=user)
+    db.session.commit()
+
+
+def create_worksheet(audit_id, kind, line, criteria, version, user):
+    wid = str(uuid.uuid4())
+    x("INSERT INTO engagement.worksheets (id, audit_id, kind, line, title, criteria, template_version, created_by) "
+      "VALUES (CAST(:i AS uuid), CAST(:a AS uuid), :k, :l, :t, CAST(:c AS jsonb), :v, CAST(:u AS uuid))",
+      i=wid, a=str(audit_id), k=kind, l=line, t=f"{KINDS[kind]} — {LINES[line]}", c=json.dumps(criteria), v=version, u=user)
+    db.session.commit()
+    return wid
+
+
+def system_worksheet(audit_id, user):
+    existing = q1("SELECT id::text FROM engagement.worksheets WHERE audit_id = CAST(:a AS uuid) AND kind = 'SISTEMAS' AND line = 'ERP_TI'", a=str(audit_id))
+    if existing:
+        return existing["id"]
+    criteria, version = get_template("SISTEMAS", "ERP_TI")
+    wid = str(uuid.uuid4())
+    x("INSERT INTO engagement.worksheets (id, audit_id, kind, line, title, criteria, template_version, created_by) "
+      "VALUES (CAST(:i AS uuid), CAST(:a AS uuid), 'SISTEMAS', 'ERP_TI', :t, CAST(:c AS jsonb), :v, CAST(:u AS uuid))",
+      i=wid, a=str(audit_id), t="Auditoría de Sistemas — ERP / TI", c=json.dumps(criteria), v=version, u=user)
+    for c in criteria:
+        x("INSERT INTO engagement.items (id, worksheet_id, ref, source, updated_by) VALUES (CAST(:i AS uuid), CAST(:w AS uuid), :r, 'ONLINE', CAST(:u AS uuid)) ON CONFLICT (worksheet_id, ref) DO NOTHING",
+          i=str(uuid.uuid4()), w=wid, r=c["code"], u=user)
+    db.session.commit()
+    return wid
+
+
+def replace_system_questionnaire(worksheet_id, criteria, user, title=None):
+    """Reconfigura una cédula de Sistemas con un cuestionario importado.
+
+    Solo se permite cuando la cédula no tiene respuestas, observaciones ni
+    evidencias asociadas a sus ítems. Así se evita destruir información de
+    auditoría. Los controles importados pasan a ser la base real de la cédula;
+    los controles adicionales se agregan después manualmente.
+    """
+    ws_id = str(worksheet_id)
+    existing = q("SELECT id::text, results, observation, info_exception, manual_score, manual_reason "
+                 "FROM engagement.items WHERE worksheet_id = CAST(:w AS uuid)", w=ws_id)
+    if any((r.get("results") or {}) or r.get("observation") or r.get("info_exception") or r.get("manual_score") is not None
+           or r.get("manual_reason") for r in existing):
+        raise ValueError("La cédula ya contiene respuestas o ajustes; no se puede reemplazar su estructura mediante Excel")
+    evidence = q1("SELECT id::text FROM engagement.evidence WHERE item_id IN "
+                   "(SELECT id FROM engagement.items WHERE worksheet_id = CAST(:w AS uuid)) LIMIT 1", w=ws_id)
+    observations = q1("SELECT id::text FROM engagement.observations WHERE item_id IN "
+                      "(SELECT id FROM engagement.items WHERE worksheet_id = CAST(:w AS uuid)) LIMIT 1", w=ws_id)
+    if evidence or observations:
+        raise ValueError("La cédula ya tiene evidencias u observaciones; no se puede reemplazar su estructura mediante Excel")
+
+    # Los ítems están vacíos, por lo que es seguro recrearlos con los controles
+    # reales del archivo recibido.
+    x("DELETE FROM engagement.items WHERE worksheet_id = CAST(:w AS uuid)", w=ws_id)
+    x("UPDATE engagement.worksheets SET criteria = CAST(:c AS jsonb), template_version = template_version + 1, "
+      "title = COALESCE(:t, title), updated_at = now() WHERE id = CAST(:w AS uuid)",
+      c=json.dumps(criteria, ensure_ascii=False), t=title, w=ws_id)
+    for c in criteria:
+        x("INSERT INTO engagement.items (id, worksheet_id, ref, source, updated_by) "
+          "VALUES (CAST(:i AS uuid), CAST(:w AS uuid), :r, 'ONLINE', CAST(:u AS uuid)) "
+          "ON CONFLICT (worksheet_id, ref) DO NOTHING",
+          i=str(uuid.uuid4()), w=ws_id, r=c["code"], u=user)
+    db.session.commit()
+
+
+def add_system_control(worksheet_id, text, section, weight, user):
+    """Agrega un control de Sistemas manualmente, sin inventar su contenido."""
+    ws = q1("SELECT criteria FROM engagement.worksheets WHERE id = CAST(:w AS uuid)", w=str(worksheet_id))
+    if not ws:
+        raise ValueError("Cédula no encontrada")
+    criteria = list(ws.get("criteria") or [])
+    existing_codes = {str(c.get("code", "")) for c in criteria}
+    n = 1
+    while f"MAN{n:03d}" in existing_codes:
+        n += 1
+    if n > 999:
+        raise ValueError("Se alcanzó el máximo de controles manuales")
+    code = f"MAN{n:03d}"
+    criterion = {
+        "code": code,
+        "text": str(text).strip(),
+        "weight": int(weight),
+        "section": str(section).strip() or "Seguridad de TI",
+        "evaluation_mode": "SEC_TI",
+        "source_id": None,
+        "manual_control": True,
+    }
+    criteria.append(criterion)
+    x("UPDATE engagement.worksheets SET criteria = CAST(:c AS jsonb), updated_at = now() WHERE id = CAST(:w AS uuid)",
+      c=json.dumps(criteria, ensure_ascii=False), w=str(worksheet_id))
+    x("INSERT INTO engagement.items (id, worksheet_id, ref, source, updated_by) VALUES (CAST(:i AS uuid), CAST(:w AS uuid), :r, 'ONLINE', CAST(:u AS uuid))",
+      i=str(uuid.uuid4()), w=str(worksheet_id), r=code, u=user)
+    db.session.commit()
+    return code
+
+
+def system_item_map(worksheet_id):
+    return {r["ref"]: r for r in q("SELECT id::text, ref, results, observation, info_exception FROM engagement.items WHERE worksheet_id = CAST(:w AS uuid)", w=str(worksheet_id))}
+
+
+def update_system_item(item_id, results, observation, info_exception, auto_score, user, source="ONLINE"):
+    x("UPDATE engagement.items SET results = CAST(:r AS jsonb), observation = :o, info_exception = :e, auto_score = :a, source = :s, updated_by = CAST(:u AS uuid), updated_at = now() WHERE id = CAST(:i AS uuid)",
+      r=json.dumps(results), o=observation, e=info_exception, a=auto_score, s=source, u=user, i=str(item_id))
+    x("UPDATE engagement.worksheets SET updated_at = now() WHERE id = (SELECT worksheet_id FROM engagement.items WHERE id = CAST(:i AS uuid))", i=str(item_id))
+
+
+WS_SQL = ("SELECT id::text, audit_id::text, kind, line, title, criteria, template_version, status, manual_score, manual_reason, updated_at "
+          "FROM engagement.worksheets ")
+ITEM_SQL = ("SELECT id::text, worksheet_id::text, ref, results, auto_score, manual_score, manual_reason, observation, info_exception, source, updated_at "
+            "FROM engagement.items ")
+
+
+def worksheets_with_items(audit_id):
+    sheets = q(WS_SQL + "WHERE audit_id = CAST(:a AS uuid) ORDER BY kind, line", a=str(audit_id))
+    for ws in sheets:
+        ws["items"] = q(ITEM_SQL + "WHERE worksheet_id = CAST(:w AS uuid) ORDER BY ref", w=ws["id"])
+    return sheets
+
+
+def get_worksheet(ws_id, with_items=True):
+    ws = q1(WS_SQL + "WHERE id = CAST(:i AS uuid)", i=str(ws_id))
+    if ws and with_items:
+        ws["items"] = q(ITEM_SQL + "WHERE worksheet_id = CAST(:w AS uuid) ORDER BY ref", w=ws["id"])
+    return ws
+
+
+def get_item(item_id):
+    return q1(ITEM_SQL.replace("FROM engagement.items", "FROM engagement.items") + "WHERE id = CAST(:i AS uuid)", i=str(item_id))
+
+
+def add_items(ws_id, refs, user, source="ONLINE"):
+    n = 0
+    for ref in refs:
+        n += x("INSERT INTO engagement.items (id, worksheet_id, ref, source, updated_by) VALUES (CAST(:i AS uuid), CAST(:w AS uuid), :r, :s, CAST(:u AS uuid)) "
+               "ON CONFLICT (worksheet_id, ref) DO NOTHING", i=str(uuid.uuid4()), w=str(ws_id), r=ref, s=source, u=user).rowcount
+    db.session.commit()
+    return n
+
+
+def sample_refs(kind, line, branches, pf, pt, n, existing):
+    if kind == "SUSCRIPCION":
+        rows = q("SELECT DISTINCT policy_number AS ref FROM insurance.policies WHERE start_date BETWEEN :pf AND :pt AND upper(branch) = ANY(CAST(:b AS text[])) "
+                 "AND NOT (policy_number = ANY(CAST(:e AS text[]))) ORDER BY random() LIMIT :n", pf=pf, pt=pt, b=branches, e=list(existing), n=n)
+    else:
+        rows = q("SELECT DISTINCT c.claim_number AS ref FROM insurance.claims c JOIN LATERAL (SELECT branch FROM insurance.policies p WHERE p.policy_number = c.policy_number LIMIT 1) p ON TRUE "
+                 "WHERE c.occurrence_date BETWEEN :pf AND :pt AND upper(p.branch) = ANY(CAST(:b AS text[])) AND NOT (c.claim_number = ANY(CAST(:e AS text[]))) "
+                 "ORDER BY random() LIMIT :n", pf=pf, pt=pt, b=branches, e=list(existing), n=n)
+    return [r["ref"] for r in rows]
+
+
+def update_item(item_id, results, observation, info_exception, auto_score, user, source="ONLINE"):
+    x("UPDATE engagement.items SET results = CAST(:r AS jsonb), observation = :o, info_exception = :e, auto_score = :a, source = :s, "
+      "updated_by = CAST(:u AS uuid), updated_at = now() WHERE id = CAST(:i AS uuid)",
+      r=json.dumps(results), o=observation, e=info_exception, a=auto_score, s=source, u=user, i=str(item_id))
+    x("UPDATE engagement.worksheets SET updated_at = now() WHERE id = (SELECT worksheet_id FROM engagement.items WHERE id = CAST(:i AS uuid))", i=str(item_id))
+    db.session.commit()
+
+
+def set_item_manual(item_id, score, reason, user):
+    x("UPDATE engagement.items SET manual_score=:s, manual_reason=:r, manual_by=CAST(:u AS uuid), manual_at=CASE WHEN :s IS NULL THEN NULL ELSE now() END, "
+      "updated_at=now(), updated_by=CAST(:u AS uuid) WHERE id = CAST(:i AS uuid)", s=score, r=reason, u=user, i=str(item_id))
+    db.session.commit()
+
+
+def set_ws_manual(ws_id, score, reason, user):
+    x("UPDATE engagement.worksheets SET manual_score=:s, manual_reason=:r, manual_by=CAST(:u AS uuid), manual_at=now(), updated_at=now() WHERE id = CAST(:i AS uuid)",
+      s=score, r=reason, u=user, i=str(ws_id))
+    db.session.commit()
+
+
+# ------------------------------------------------------------------ observaciones y evidencias
+OBS_SQL = ("SELECT id::text, audit_id::text, item_id::text, seq, title, condition, criteria, cause, effect, recommendation, risk, unit_decision, unit_response, "
+           "unit_response_at, pac_action, pac_owner, pac_due, pac_status FROM engagement.observations ")
+
+
+def observations(audit_id):
+    return q(OBS_SQL + "WHERE audit_id = CAST(:a AS uuid) ORDER BY seq", a=str(audit_id))
+
+
+def get_observation(oid):
+    return q1(OBS_SQL + "WHERE id = CAST(:i AS uuid)", i=str(oid))
+
+
+def add_observation(audit_id, d, user):
+    oid = str(uuid.uuid4())
+    seq = db.session.execute(text("SELECT COALESCE(max(seq), 0) + 1 FROM engagement.observations WHERE audit_id = CAST(:a AS uuid)"), {"a": str(audit_id)}).scalar_one()
+    x("INSERT INTO engagement.observations (id, audit_id, item_id, seq, title, condition, criteria, cause, effect, recommendation, risk, created_by) "
+      "VALUES (CAST(:i AS uuid), CAST(:a AS uuid), CAST(:it AS uuid), :s, :t, :c, :cr, :ca, :e, :r, :k, CAST(:u AS uuid))",
+      i=oid, a=str(audit_id), it=d.get("item_id"), s=seq, t=d["title"], c=d["condition"], cr=d.get("criteria"), ca=d.get("cause"), e=d.get("effect"),
+      r=d.get("recommendation"), k=d["risk"], u=user)
+    db.session.commit()
+    return oid, seq
+
+
+OBS_FIELDS = ("title", "condition", "criteria", "cause", "effect", "recommendation", "risk", "unit_decision", "unit_response", "unit_response_at",
+              "pac_action", "pac_owner", "pac_due", "pac_status")
+
+
+def update_observation(oid, d):
+    cols = [f for f in OBS_FIELDS if f in d]                       # nombres de columna de lista fija
+    if not cols:
+        return
+    x("UPDATE engagement.observations SET " + ", ".join(f"{c} = :{c}" for c in cols) + ", updated_at = now() WHERE id = CAST(:i AS uuid)",
+      **{c: d[c] for c in cols}, i=str(oid))
+    db.session.commit()
+
+
+def add_evidence(audit_id, item_id, observation_id, filename, ctype, size, sha, key, desc, user):
+    eid = str(uuid.uuid4())
+    x("INSERT INTO engagement.evidence (id, audit_id, item_id, observation_id, filename, content_type, size_bytes, sha256, object_key, description, uploaded_by) "
+      "VALUES (CAST(:i AS uuid), CAST(:a AS uuid), CAST(:it AS uuid), CAST(:o AS uuid), :f, :c, :z, :h, :k, :d, CAST(:u AS uuid))",
+      i=eid, a=str(audit_id), it=item_id, o=observation_id, f=filename, c=ctype, z=size, h=sha, k=key, d=desc, u=user)
+    db.session.commit()
+    return eid
+
+
+def evidence(audit_id):
+    return q("SELECT e.id::text, e.filename, e.content_type, e.size_bytes, e.sha256, e.description, e.uploaded_at, u.username AS uploaded_by, "
+             "e.item_id::text, e.observation_id::text, (SELECT ref FROM engagement.items i WHERE i.id = e.item_id) AS item_ref "
+             "FROM engagement.evidence e JOIN iam.users u ON u.id = e.uploaded_by WHERE e.audit_id = CAST(:a AS uuid) ORDER BY e.uploaded_at", a=str(audit_id))
+
+
+def get_evidence(eid):
+    return q1("SELECT id::text, audit_id::text, filename, content_type, sha256, object_key FROM engagement.evidence WHERE id = CAST(:i AS uuid)", i=str(eid))
+
+
+# ------------------------------------------------------------------ informes
+REP_SQL = ("SELECT r.id::text, r.audit_id::text, r.kind, r.version, r.status, r.body, r.body_sha256, r.created_at, r.updated_at, r.submitted_at, "
+           "r.approved_at, r.approved_by::text, r.approved_body_sha256, r.created_by::text, r.sent_to, r.sent_at, c.username AS created_by_name, a.username AS approved_by_name "
+           "FROM engagement.reports r JOIN iam.users c ON c.id = r.created_by LEFT JOIN iam.users a ON a.id = r.approved_by ")
+
+
+def reports(audit_id):
+    rows = q(REP_SQL + "WHERE r.audit_id = CAST(:a AS uuid) ORDER BY r.kind, r.version DESC", a=str(audit_id))
+    for r in rows:
+        r.pop("body", None)
+    return rows
+
+
+def get_report(rid):
+    return q1(REP_SQL + "WHERE r.id = CAST(:i AS uuid)", i=str(rid))
+
+
+def next_version(audit_id, kind):
+    return db.session.execute(text("SELECT COALESCE(max(version), 0) + 1 FROM engagement.reports WHERE audit_id = CAST(:a AS uuid) AND kind = :k"),
+                              {"a": str(audit_id), "k": kind}).scalar_one()
+
+
+def create_report(audit_id, kind, version, body, sha, user):
+    rid = str(uuid.uuid4())
+    x("INSERT INTO engagement.reports (id, audit_id, kind, version, body, body_sha256, created_by) VALUES (CAST(:i AS uuid), CAST(:a AS uuid), :k, :v, CAST(:b AS jsonb), :h, CAST(:u AS uuid))",
+      i=rid, a=str(audit_id), k=kind, v=version, b=json.dumps(body, default=str), h=sha, u=user)
+    db.session.commit()
+    return rid
+
+
+def replace_body(rid, body, sha):
+    """Regenerar cambia el hash: se invalidan las iniciales previas (están atadas al hash)."""
+    x("UPDATE engagement.reports SET body = CAST(:b AS jsonb), body_sha256 = :h, updated_at = now() WHERE id = CAST(:i AS uuid)", b=json.dumps(body, default=str), h=sha, i=str(rid))
+    db.session.commit()
+
+
+def set_report_status(rid, status, **kw):
+    sets, params = ["status = :s", "updated_at = now()"], {"s": status, "i": str(rid)}
+    for col, val in kw.items():                                       # columnas de lista fija
+        assert col in ("submitted_at", "approved_by", "approved_at", "approved_body_sha256", "sent_to", "sent_at", "sent_by")
+        if val == "now":
+            sets.append(f"{col} = now()")
+        else:
+            sets.append(f"{col} = " + ("CAST(:%s AS uuid)" % col if col in ("approved_by", "sent_by") else ":%s" % col)); params[col] = val
+    x("UPDATE engagement.reports SET " + ", ".join(sets) + " WHERE id = CAST(:i AS uuid)", **params)
+    db.session.commit()
+
+
+def add_comment(rid, user, kind, text_):
+    x("INSERT INTO engagement.report_comments (report_id, author, kind, text) VALUES (CAST(:r AS uuid), CAST(:u AS uuid), :k, :t)", r=str(rid), u=user, k=kind, t=text_)
+    db.session.commit()
+
+
+def comments(rid):
+    return q("SELECT c.kind, c.text, c.created_at, u.username, u.full_name FROM engagement.report_comments c JOIN iam.users u ON u.id = c.author "
+             "WHERE c.report_id = CAST(:r AS uuid) ORDER BY c.id", r=str(rid))
+
+
+def add_signoff(rid, signer_type, user_id, display, sha, physical=False, note=None):
+    x("INSERT INTO engagement.signoffs (report_id, signer_type, user_id, display, body_sha256, physical, note) VALUES (CAST(:r AS uuid), :t, CAST(:u AS uuid), :d, :h, :p, :n) "
+      "ON CONFLICT DO NOTHING", r=str(rid), t=signer_type, u=user_id, d=display, h=sha, p=physical, n=note)
+    db.session.commit()
+
+
+def signoffs(rid):
+    return q("SELECT signer_type, user_id::text, display, body_sha256, signed_at, physical, note FROM engagement.signoffs WHERE report_id = CAST(:r AS uuid) ORDER BY id", r=str(rid))
+
+
+def add_signed_doc(rid, role, version, signed, key, user):
+    x("INSERT INTO engagement.signed_documents (id, report_id, signer_role, version, sha256_unsigned, sha256_signed, object_key, signer_user_id, signer_subject, cert_serial, cert_sha256, signed_at, tsa_url, timestamp_embedded) "
+      "VALUES (CAST(:i AS uuid), CAST(:r AS uuid), :ro, :v, :hu, :hs, :k, CAST(:u AS uuid), :sub, :ser, :cs, :at, :tsa, :ts)",
+      i=str(uuid.uuid4()), r=str(rid), ro=role, v=version, hu=signed.sha256_unsigned, hs=signed.sha256_signed, k=key, u=user, sub=signed.signer_subject,
+      ser=signed.cert_serial, cs=signed.cert_sha256, at=signed.signed_at, tsa=signed.tsa_url, ts=signed.timestamp_embedded)
+    db.session.commit()
+
+
+def signed_docs(rid):
+    return q("SELECT signer_role, version, sha256_signed, object_key, signer_subject, signed_at, timestamp_embedded, signer_user_id::text AS user_id "
+             "FROM engagement.signed_documents WHERE report_id = CAST(:r AS uuid) ORDER BY version", r=str(rid))
+
+
+def mark_pac_sent(audit_id, to, user):
+    x("UPDATE engagement.audits SET pac_sent_at = now(), pac_sent_to = :t, pac_sent_by = CAST(:u AS uuid), status = 'CLOSED' WHERE id = CAST(:a AS uuid)", t=to, u=user, a=str(audit_id))
+    x("UPDATE engagement.files SET status = 'CLOSED' WHERE id = (SELECT file_id FROM engagement.audits WHERE id = CAST(:a AS uuid)) "
+      "AND NOT EXISTS (SELECT 1 FROM engagement.audits o WHERE o.file_id = engagement.files.id AND o.status <> 'CLOSED')", a=str(audit_id))
+    db.session.commit()
+
+
+def thresholds():
+    r = q1("SELECT value FROM admin.system_params WHERE key = 'rating_thresholds'")
+    return r["value"] if r else None
+
+
+def company():
+    r = q1("SELECT value FROM admin.system_params WHERE key = 'company_name'")
+    return r["value"] if r else None
+
+
+def apply_offline(plan, criteria_by_ws, user):
+    """Aplica filas UPDATE/NEW de un paquete sin conexión en UNA transacción (todo o nada)."""
+    from . import scoring
+    done = 0
+    try:
+        for p in plan:
+            if p["status"] not in ("UPDATE", "NEW"):
+                continue
+            d, crit = p["data"], criteria_by_ws[p["worksheet_id"]]
+            auto = scoring.item_score(crit, d["results"])
+            iid = p["item_id"]
+            if p["status"] == "NEW":
+                iid = str(uuid.uuid4())
+                x("INSERT INTO engagement.items (id, worksheet_id, ref, source, updated_by) VALUES (CAST(:i AS uuid), CAST(:w AS uuid), :r, 'OFFLINE', CAST(:u AS uuid))",
+                  i=iid, w=p["worksheet_id"], r=p["ref"], u=user)
+            x("UPDATE engagement.items SET results = CAST(:r AS jsonb), observation = :o, info_exception = :e, auto_score = :a, source = 'OFFLINE', "
+              "manual_score = :ms, manual_reason = :mr, manual_by = CASE WHEN :ms IS NULL THEN NULL ELSE CAST(:u AS uuid) END, "
+              "manual_at = CASE WHEN :ms IS NULL THEN NULL ELSE now() END, updated_by = CAST(:u AS uuid), updated_at = now() WHERE id = CAST(:i AS uuid)",
+              r=json.dumps(d["results"]), o=d["obs"] or None, e=d["exc"] or None, a=auto, ms=d["manual"], mr=d["reason"] or None, u=user, i=iid)
+            x("UPDATE engagement.worksheets SET updated_at = now() WHERE id = CAST(:w AS uuid)", w=p["worksheet_id"])
+            done += 1
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+    return done
