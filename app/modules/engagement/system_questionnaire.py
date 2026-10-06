@@ -49,105 +49,501 @@ def _evidence(value: Any) -> str:
         return "INEXISTENTE"
     return ""
 
-
-def _parse_erp_ti(wb) -> dict:
-    if SHEET_NAME not in wb.sheetnames:
-        raise ValueError(f"El Excel debe contener la hoja '{SHEET_NAME}'")
-    ws = wb[SHEET_NAME]
-    expected = {i: (q, section) for i, q, section in SYSTEM_ERP_CONTROLS}
-    found: dict[int, dict] = {}
-    for row in ws.iter_rows(min_row=1, max_col=9, values_only=True):
-        raw_id = row[1]
-        try:
-            control_id = int(raw_id) if raw_id is not None else None
-        except (TypeError, ValueError):
-            control_id = None
-        if control_id not in expected:
-            continue
-        question = _text(row[2])
-        expected_question = expected[control_id][0]
-        if _norm(question) != _norm(expected_question):
-            raise ValueError(f"El control {control_id} no coincide con la plantilla oficial")
-        observation = _text(row[8])
-        if observation.startswith("(Indique Nombre") or observation.startswith("(Indique la justificación"):
-            observation = ""
-        found[control_id] = {
-            "control_id": control_id,
-            "source_id": str(control_id),
-            "ref": f"TI{control_id:03d}",
-            "question": expected_question,
-            "section": expected[control_id][1],
-            "control": _control(row[3]),
-            "documental": _doc(row[4]),
-            "evidencia": _evidence(row[5]),
-            "observation": observation[:2000] or None,
-        }
-    missing = sorted(set(expected) - set(found))
-    if missing:
-        raise ValueError("Faltan controles oficiales en el Excel: " + ", ".join(str(x) for x in missing[:20]))
-    return {"questionnaire_type": "ERP_TI", "rows": [found[i] for i in sorted(found)], "controls": len(found)}
-
-
-def _parse_security_ti(wb) -> dict:
-    """Lee la plantilla real de Seguridad de TI sin inventar controles faltantes.
-
-    El libro contiene 63 controles identificables con IDs como 1.1, 1.2, ... 17.3.
-    Los demás controles, si la cédula ya tiene una estructura mayor, se completan
-    manualmente desde SICAS; nunca se fabrican respuestas ni preguntas.
+def _parse_generic_system_questionnaire(wb, filename: str | None = None) -> dict:
     """
-    if SECURITY_SHEET_NAME not in wb.sheetnames:
-        raise ValueError(f"El Excel debe contener la hoja '{SECURITY_SHEET_NAME}'")
-    ws = wb[SECURITY_SHEET_NAME]
-    found = []
-    seen = set()
+    Lee un cuestionario Excel de Auditoría de Sistemas por su estructura.
+
+    No depende de:
+      - nombre del archivo;
+      - nombre de la hoja;
+      - ERP_TI;
+      - Seguridad_de_TI;
+      - Servidores;
+      - Base de Datos;
+      - cantidad fija de controles.
+
+    Detecta una tabla que contenga como mínimo:
+      ID
+      Pregunta de Auditoría
+      Existencia del Control
+      Soporte Documental
+      Evidencia / Entregable
+
+    Conserva el ID original del Excel para trazabilidad.
+    """
+
+    import math
     import re
-    for row in ws.iter_rows(min_row=8, max_col=8, values_only=True):
-        raw_id = _text(row[1])
-        if not re.fullmatch(r"\d+\.\d+", raw_id):
+    import unicodedata
+
+    def text(value) -> str:
+        if value is None:
+            return ""
+
+        if isinstance(value, float) and math.isnan(value):
+            return ""
+
+        return str(value).replace("\u00a0", " ").strip()
+
+    def header_key(value) -> str:
+        """
+        Normalización fuerte para encabezados.
+
+        Permite reconocer, por ejemplo:
+          Pregunta de Auditoría
+          PreguntadeAuditoría
+          PREGUNTA DE AUDITORIA
+        """
+        value = text(value)
+
+        value = unicodedata.normalize("NFKD", value)
+
+        value = "".join(
+            ch for ch in value
+            if not unicodedata.combining(ch)
+        )
+
+        return re.sub(
+            r"[^a-z0-9]+",
+            "",
+            value.lower(),
+        )
+
+    HEADER_ALIASES = {
+        "id": {
+            "id",
+            "idcontrol",
+            "codigo",
+            "codigocontrol",
+            "codigodelcontrol",
+            "controlid",
+            "iddelcontrol",
+        },
+        "question": {
+            "pregunta",
+            "preguntadeauditoria",
+            "preguntaauditoria",
+            "preguntadelcontrol",
+            "preguntadecontrol",
+        },
+        "control": {
+            "existenciadelcontrol",
+            "existenciacontrol",
+            "existencia",
+            "existe",
+            "respuesta",
+            "cumplimiento",
+        },
+        "documental": {
+            "soportedocumental",
+            "soporte",
+            "documental",
+        },
+        "evidence": {
+            "evidenciaentregable",
+            "evidencia",
+            "entregable",
+        },
+        "score": {
+            "puntuacion",
+            "puntuacion%",
+            "puntuacionporcentual",
+            "puntaje",
+            "calificacion",
+            "score",
+        },
+        "observation": {
+            "observaciones",
+            "observacion",
+            "detalle",
+            "comentarios",
+            "comentario",
+            "justificacion",
+            "justificaciones",
+        },
+    }
+
+    def detect_header(row):
+        positions = {}
+
+        for index, cell in enumerate(row):
+            key = header_key(cell.value)
+
+            if not key:
+                continue
+
+            for field, aliases in HEADER_ALIASES.items():
+                if key in aliases and field not in positions:
+                    positions[field] = index
+                    break
+
+        required = {
+            "id",
+            "question",
+            "control",
+            "documental",
+            "evidence",
+        }
+
+        if required.issubset(positions):
+            return positions
+
+        return None
+
+    def control_id(cell) -> str:
+        """
+        Conserva el ID tal como aparece en Excel.
+
+        Ejemplos soportados:
+          1
+          01
+          1.1
+          01.01
+          1.1.1
+          GOB-01
+          ACC-01
+          AC-A2-37-08-2026-3
+        """
+        value = cell.value
+
+        if value is None:
+            return ""
+
+        if isinstance(value, float) and math.isnan(value):
+            return ""
+
+        number_format = getattr(cell, "number_format", "") or ""
+
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+
+        if isinstance(value, int):
+            fmt = number_format.split(";")[0].strip()
+
+            if re.fullmatch(r"0+", fmt):
+                return f"{value:0{len(fmt)}d}"
+
+            return str(value)
+
+        return text(value)
+
+    def valid_control_id(value) -> bool:
+        value = text(value)
+
+        if not value:
+            return False
+
+        key = header_key(value)
+
+        if key in {
+            "id",
+            "idcontrol",
+            "codigo",
+            "codigocontrol",
+            "controlid",
+        }:
+            return False
+
+        # Numéricos:
+        # 01
+        # 1
+        # 1.1
+        # 01.01
+        # 1.1.1
+        #
+        # Alfanuméricos:
+        # GOB-01
+        # ACC-01
+        # AC-A2-37-08-2026-3
+        return bool(
+            re.fullmatch(
+                r"(?:\d+(?:[._-]\d+)*)|"
+                r"(?:[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)+)",
+                value,
+            )
+        )
+
+    def looks_like_section(value) -> bool:
+        value = text(value)
+
+        if not value:
+            return False
+
+        return bool(
+            re.match(
+                r"^\d+(?:\.\d+)*[.)]?\s+.+",
+                value,
+            )
+        )
+
+    def get_section(rows, header_index, default):
+        """
+        Busca el título de sección inmediatamente anterior
+        al encabezado de la tabla.
+        """
+        for row in reversed(rows[:header_index]):
+            values = [
+                text(cell.value)
+                for cell in row[:10]
+                if text(cell.value)
+            ]
+
+            if len(values) != 1:
+                continue
+
+            candidate = values[0]
+
+            if looks_like_section(candidate):
+                return candidate
+
+        return default
+
+    def observation_value(row, index):
+        """
+        En los cuestionarios reales, "Observaciones" suele estar
+        en H y el contenido real puede estar en I.
+
+        Se recorren algunas celdas posteriores para capturar el
+        comentario real y descartar placeholders.
+        """
+        if index is None:
+            return None
+
+        placeholders = {
+            "detalle:",
+            "(indique la justificacion, evidencia o plan de accion si aplica...)",
+            "(indique nombre del responsable...)",
+        }
+
+        values = []
+
+        for pos in range(
+            index,
+            min(index + 3, len(row)),
+        ):
+            value = text(row[pos].value)
+
+            if not value:
+                continue
+
+            if header_key(value) in {
+                header_key(x)
+                for x in placeholders
+            }:
+                continue
+
+            values.append(value)
+
+        if not values:
+            return None
+
+        return " | ".join(
+            dict.fromkeys(values)
+        )[:2000] or None
+
+    rows_found = []
+    seen = {}
+    sheets = []
+
+    for ws in wb.worksheets:
+
+        rows = list(
+            ws.iter_rows(
+                min_row=1,
+                max_row=ws.max_row,
+                max_col=min(ws.max_column, 30),
+            )
+        )
+
+        if not rows:
             continue
-        if raw_id in seen:
-            raise ValueError(f"El control {raw_id} está repetido en el Excel")
-        seen.add(raw_id)
-        question = _text(row[2])
-        if not question:
-            raise ValueError(f"El control {raw_id} no tiene pregunta de auditoría")
-        observation = _text(row[7])
-        if observation in {"Detalle:", "(Indique la justificación, evidencia o plan de acción si aplica...)"}:
-            observation = ""
-        # SEC + ID sin punto: 1.1 -> SEC11. Es un código interno estable;
-        # el ID original se conserva en source_id para trazabilidad.
-        ref = "SEC" + raw_id.replace(".", "")
-        found.append({
-            "control_id": raw_id,
-            "source_id": raw_id,
-            "ref": ref,
-            "question": question,
-            "section": "Seguridad de TI",
-            "control": _control(row[3]),
-            "documental": _doc(row[4]),
-            "evidencia": _evidence(row[5]),
-            "observation": observation[:2000] or None,
-        })
-    if not found:
-        raise ValueError("No se encontraron controles en la hoja 'Seguridad_de_TI'")
-    return {"questionnaire_type": "SEGURIDAD_TI", "rows": found, "controls": len(found)}
+
+        header = None
+        header_index = None
+
+        # Buscar la primera tabla de controles de la hoja.
+        for idx, row in enumerate(rows):
+            detected = detect_header(row)
+
+            if detected:
+                header = detected
+                header_index = idx
+                break
+
+        if header is None:
+            continue
+
+        section = get_section(
+            rows,
+            header_index,
+            ws.title,
+        )
+
+        count = 0
+
+        for row_number, row in enumerate(
+            rows[header_index + 1:],
+            start=header_index + 2,
+        ):
+
+            # Algunos libros vuelven a colocar encabezados entre secciones.
+            detected = detect_header(row)
+
+            if detected:
+                header = detected
+                continue
+
+            id_cell = row[header["id"]]
+
+            current_id = control_id(id_cell)
+
+            question = text(
+                row[header["question"]].value
+            )
+
+            # Fila que no corresponde a un control.
+            if not valid_control_id(current_id) or not question:
+
+                candidate = ""
+
+                for cell in row:
+                    value = text(cell.value)
+
+                    if value:
+                        candidate = value
+                        break
+
+                if looks_like_section(candidate):
+                    section = candidate
+
+                continue
+
+            unique_key = current_id.upper()
+
+            if unique_key in seen:
+                raise ValueError(
+                    f"El control {current_id} está repetido en el Excel "
+                    f"({seen[unique_key]} y {ws.title}:{row_number})"
+                )
+
+            seen[unique_key] = (
+                f"{ws.title}:{row_number}"
+            )
+
+            score_value = None
+
+            if header.get("score") is not None:
+                score_value = row[
+                    header["score"]
+                ].value
+
+            rows_found.append(
+                {
+                    "control_id": current_id,
+                    "source_id": current_id,
+                    "ref": current_id,
+                    "question": question,
+                    "section": section or ws.title,
+                    "control": text(
+                        row[header["control"]].value
+                    ),
+                    "documental": text(
+                        row[header["documental"]].value
+                    ),
+                    "evidencia": text(
+                        row[header["evidence"]].value
+                    ),
+                    "observation": observation_value(
+                        row,
+                        header.get("observation"),
+                    ),
+                    "score": score_value,
+                    "source_sheet": ws.title,
+                    "source_row": row_number,
+                }
+            )
+
+            count += 1
+
+        if count:
+            sheets.append(
+                {
+                    "name": ws.title,
+                    "controls": count,
+                }
+            )
+
+    if not rows_found:
+        raise ValueError(
+            "No se encontró una tabla de controles válida. "
+            "El Excel debe contener columnas equivalentes a "
+            "ID, Pregunta de Auditoría, Existencia del Control, "
+            "Soporte Documental y Evidencia / Entregable."
+        )
+
+    return {
+        "questionnaire_type": "SYSTEM_GENERIC",
+        "questionnaire_name": (
+            text(filename)
+            if filename
+            else "Cuestionario de Sistemas"
+        )[:200],
+        "source_filename": (
+            text(filename)[:255]
+            if filename
+            else None
+        ),
+        "sheets": sheets,
+        "rows": rows_found,
+        "controls": len(rows_found),
+    }
 
 
-def parse(data: bytes) -> dict:
+def parse(data: bytes, filename: str | None = None) -> dict:
+    """
+    Entrada única para cualquier cuestionario Excel de Sistemas.
+
+    NO exige:
+      - hoja ERPs TI;
+      - hoja Seguridad_de_TI;
+      - hoja Servidores;
+      - nombre específico;
+      - cantidad específica de controles.
+    """
     if not data:
-        raise ValueError("El archivo está vacío")
+        raise ValueError(
+            "El archivo está vacío"
+        )
+
     if len(data) > MAX_BYTES:
-        raise ValueError("El cuestionario supera 25 MB")
+        raise ValueError(
+            "El cuestionario supera 25 MB"
+        )
+
     if not data.startswith(b"PK"):
-        raise ValueError("El archivo no es un XLSX válido")
+        raise ValueError(
+            "El archivo no es un XLSX válido"
+        )
+
     try:
-        wb = load_workbook(BytesIO(data), read_only=True, data_only=True, keep_links=False)
+        wb = load_workbook(
+            BytesIO(data),
+            read_only=True,
+            data_only=True,
+            keep_links=False,
+        )
     except Exception as exc:  # noqa: BLE001
-        raise ValueError("No fue posible leer el archivo Excel") from exc
+        raise ValueError(
+            "No fue posible leer el archivo Excel"
+        ) from exc
 
-    # Se soportan las dos plantillas reales. No se exige que un cuestionario
-    # de Seguridad de TI tenga la hoja ERPs TI.
-    if SECURITY_SHEET_NAME in wb.sheetnames:
-        return _parse_security_ti(wb)
-    return _parse_erp_ti(wb)
-
+    try:
+        return _parse_generic_system_questionnaire(
+            wb,
+            filename=filename,
+        )
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass

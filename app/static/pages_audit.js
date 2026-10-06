@@ -183,7 +183,7 @@
       if (idx > 0) phaseBtns.append(h('button', { class: 'secondary', onclick: () => movePhase(PHASES[idx - 1]) }, 'Volver a ' + S.label2(PHASES[idx - 1])));
     }
     const rating = h('div', { class: 'panel' }, h('h3', null, 'Calificación global'), h('div', { class: 'kv' }, h('b', null, 'Automática'), S.score(d.overall.auto) + '%', h('b', null, 'Final'), h('b', null, S.score(d.overall.final) + '%' + (d.overall.manual_override ? ' (ajuste manual)' : '')),
-      h('b', null, 'Calificación'), S.ratingBadge(d.overall.rating), h('b', null, 'Escala'), `Satisfactorio ≥ ${d.thresholds.satisfactorio}; Necesita mejoras ≥ ${d.thresholds.mejora}`,
+      h('b', null, 'Calificación'), S.ratingBadge(d.overall.rating), h('b', null, 'Escala'), `Excelente > ${d.thresholds.excelente}; ` + `Satisfactorio 70–90; ` + `Aceptable 60–69; ` + `Necesita mejoras 50–59; ` + `No satisfactoria ≤ 49`,
       h('b', null, 'Excepciones de información'), d.overall.exceptions), a.manual_reason ? h('p', null, h('b', null, 'Justificación del ajuste: '), a.manual_reason) : null);
     if (can('audit:rate') && ctx.canWrite && a.phase !== 'PLANIFICACION') rating.append(h('div', { class: 'row' }, h('button', { class: 'sm', onclick: () => manual('/audits/' + a.id + '/rating', 'Calificación global', a.manual_score) }, 'Ajustar calificación global (criterio del auditor)')));
     el.append(stepper, phaseBtns, h('div', { class: 'twocol' },

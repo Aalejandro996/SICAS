@@ -406,90 +406,321 @@ def worksheet(wid):
     return jsonify(worksheet=ws, summary=s.__dict__, statistics=stats, audit={"id": a["id"], "code": a["code"], "phase": a["phase"], "status": a["status"]},
                    editable=repo.is_member(a["id"], me()) and a["status"] == "IN_PROGRESS" and a["phase"] != "PLANIFICACION")
 
-
 @bp.post("/worksheets/<uuid:wid>/system-questionnaire/import")
-@permission_required("audit:manage")
+@permission_required("audit:manage", "audit:systems_execute")
 def import_system_questionnaire(wid):
+    """
+    Importa la estructura y respuestas de cualquier cuestionario
+    Excel de Auditoría de Sistemas.
+    """
     ws, a, e = ws_for(wid, write=True)
+
     if e:
         return e
-    if ws["kind"] != "SISTEMAS" or a.get("audit_domain") != "SISTEMAS":
-        return err("La importación del cuestionario solo está disponible para Auditoría de Sistemas", 403)
+
+    if (
+        ws["kind"] != "SISTEMAS"
+        or str(a.get("audit_domain") or "").upper().strip() != "SISTEMAS"
+    ):
+        return err(
+            "La importación del cuestionario solo está disponible "
+            "para Auditoría de Sistemas",
+            403,
+        )
+
     f = request.files.get("file")
+
     if f is None:
         return err("Adjunte el cuestionario Excel")
-    data = f.read(system_questionnaire.MAX_BYTES + 1)
+
+    filename = str(
+        f.filename or ""
+    ).strip()
+
+    if not filename:
+        return err(
+            "El archivo no tiene nombre"
+        )
+
+    data = f.read(
+        system_questionnaire.MAX_BYTES + 1
+    )
+
     try:
-        name, ctype = evidence_rules.check(f.filename, data)
+        name, ctype = evidence_rules.check(
+            filename,
+            data,
+        )
+
         if not name.lower().endswith(".xlsx"):
-            return err("El cuestionario debe ser un archivo .xlsx")
-        parsed = system_questionnaire.parse(data)
-    except (ValueError, evidence_rules.EvidenceError) as ex:
+            return err(
+                "El cuestionario debe ser un archivo .xlsx"
+            )
+
+        parsed = system_questionnaire.parse(
+            data,
+            filename=name,
+        )
+
+    except (
+        ValueError,
+        evidence_rules.EvidenceError,
+    ) as ex:
         return err(str(ex))
 
-    if parsed["questionnaire_type"] == "ERP_TI":
-        items = {i["ref"]: i for i in ws["items"]}
-        criteria = {c["code"]: c for c in ws["criteria"]}
-        if len(items) != 81 or set(items) != set(criteria):
-            return err("La cédula ERP/TI no tiene los 81 controles oficiales. Cree una cédula ERP/TI nueva.", 409)
-        for row in parsed["rows"]:
-            ref = row["ref"]
-            if ref not in items:
-                return err(f"Control no reconocido: {ref}", 400)
-            result = {"control": row["control"], "documental": row["documental"], "evidencia": row["evidencia"]}
-            auto = scoring.item_score(ws["criteria"], {ref: result})
-            repo.update_system_item(items[ref]["id"], {ref: result}, row["observation"], None, auto, me(), source="ONLINE")
-        imported_count = parsed["controls"]
-    else:
-        # Seguridad de TI es un cuestionario distinto al ERP/TI. No se hace
-        # correspondencia por posición ni por aproximación de texto: se cargan
-        # exactamente los controles presentes en el Excel.
-        criteria = [
-            {
-                "code": row["ref"],
-                "text": row["question"],
-                "weight": 1,
-                "source_id": row["source_id"],
-                "section": row["section"],
-                "evaluation_mode": "SEC_TI",
-            }
-            for row in parsed["rows"]
-        ]
-        try:
-            repo.replace_system_questionnaire(
-                wid,
-                criteria,
-                me(),
-                title="Auditoría de Sistemas — Seguridad de TI",
+    rows = parsed.get("rows") or []
+
+    if not rows:
+        return err(
+            "No se encontraron controles en el Excel",
+            400,
+        )
+
+    # ---------------------------------------------------------
+    # Construir la cédula a partir EXACTAMENTE de los controles
+    # encontrados en el Excel.
+    # ---------------------------------------------------------
+    criteria = []
+
+    for row in rows:
+        ref = str(
+            row.get("ref")
+            or row.get("source_id")
+            or row.get("control_id")
+            or ""
+        ).strip()
+
+        question = str(
+            row.get("question")
+            or ""
+        ).strip()
+
+        if not ref:
+            return err(
+                "Se encontró un control sin ID",
+                400,
             )
-        except ValueError as ex:
-            return err(str(ex), 409)
-        fresh_after_replace = repo.get_worksheet(wid)
-        items = {i["ref"]: i for i in fresh_after_replace["items"]}
-        for row in parsed["rows"]:
-            ref = row["ref"]
-            result = {"control": row["control"], "documental": row["documental"], "evidencia": row["evidencia"]}
-            auto = scoring.item_score(fresh_after_replace["criteria"], {ref: result})
-            repo.update_system_item(items[ref]["id"], {ref: result}, row["observation"], None, auto, me(), source="ONLINE")
-        imported_count = parsed["controls"]
 
-    sha = hashlib.sha256(data).hexdigest()
-    key = f"evidence/{a['id']}/{uuid.uuid4()}"
+        if not question:
+            return err(
+                f"El control {ref} no tiene pregunta de auditoría",
+                400,
+            )
+
+        criteria.append(
+            {
+                "code": ref,
+                "text": question,
+                "weight": 1,
+                "source_id": row.get("source_id") or ref,
+                "section": row.get("section") or "Sin sección",
+                "evaluation_mode": "SYSTEM_EXCEL",
+                "source_sheet": row.get("source_sheet"),
+                "source_row": row.get("source_row"),
+            }
+        )
+
+    codes = [
+        str(c["code"]).upper()
+        for c in criteria
+    ]
+
+    if len(codes) != len(set(codes)):
+        return err(
+            "El Excel contiene IDs de controles duplicados",
+            400,
+        )
+
+    # ---------------------------------------------------------
+    # Crear/reemplazar la estructura de la cédula.
+    # ---------------------------------------------------------
+    questionnaire_name = str(
+        parsed.get("questionnaire_name")
+        or name
+        or "Cuestionario de Sistemas"
+    ).strip()
+
+    title = (
+        f"Auditoría de Sistemas — {questionnaire_name}"
+    )[:180]
+
     try:
-        storage.put(key, data)
-        eid = repo.add_evidence(a["id"], None, None, name, ctype, len(data), sha, key,
-                                "Cuestionario de Auditoría de Sistemas utilizado para cargar la auditoría", me())
-    except Exception as ex:  # noqa: BLE001
+        repo.replace_system_questionnaire(
+            wid,
+            criteria,
+            me(),
+            title=title,
+        )
+    except ValueError as ex:
         repo.db.session.rollback()
-        return err("El cuestionario fue procesado, pero no fue posible conservar el Excel como evidencia", 500)
+        return err(
+            str(ex),
+            409,
+        )
+    except Exception:
+        repo.db.session.rollback()
+        return err(
+            "No se pudo construir la cédula con la estructura del Excel",
+            500,
+        )
 
-    fresh = repo.get_worksheet(wid)
-    stats = scoring.system_statistics(fresh["criteria"], fresh["items"])
-    log("SYSTEM_QUESTIONNAIRE_IMPORTED", entity_type="worksheet", entity_id=wid,
-        after_data={"tipo": parsed["questionnaire_type"], "controles": imported_count, "evidence_id": eid, "sha256": sha, **stats},
-        request_id=g.request_id)
-    return jsonify(imported=True, questionnaire_type=parsed["questionnaire_type"], evidence_id=eid, sha256=sha,
-                   statistics=stats)
+    fresh_after_replace = repo.get_worksheet(
+        wid
+    )
+
+    if not fresh_after_replace:
+        return err(
+            "La cédula fue actualizada pero no pudo recuperarse",
+            500,
+        )
+
+    items = {
+        str(item["ref"]).upper(): item
+        for item in (
+            fresh_after_replace.get("items")
+            or []
+        )
+    }
+
+    # ---------------------------------------------------------
+    # Cargar las respuestas que ya trae el Excel.
+    # Los valores vacíos permanecen pendientes de completar
+    # manualmente desde SICAS.
+    # ---------------------------------------------------------
+    imported_count = 0
+
+    for row in rows:
+        ref = str(
+            row.get("ref")
+            or row.get("source_id")
+            or ""
+        ).strip()
+
+        item = items.get(
+            ref.upper()
+        )
+
+        if item is None:
+            return err(
+                f"El control {ref} no pudo crearse en la cédula",
+                500,
+            )
+
+        result = {
+            "control": row.get("control"),
+            "documental": row.get("documental"),
+            "evidencia": row.get("evidencia"),
+        }
+
+        try:
+            auto = scoring.item_score(
+                fresh_after_replace["criteria"],
+                {
+                    ref: result,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            auto = None
+
+        repo.update_system_item(
+            item["id"],
+            {
+                ref: result,
+            },
+            row.get("observation"),
+            None,
+            auto,
+            me(),
+            source="ONLINE",
+        )
+
+        imported_count += 1
+
+    # ---------------------------------------------------------
+    # Guardar el Excel original como evidencia.
+    # ---------------------------------------------------------
+    sha = hashlib.sha256(
+        data
+    ).hexdigest()
+
+    key = (
+        f"evidence/"
+        f"{a['id']}/"
+        f"{uuid.uuid4()}"
+    )
+
+    try:
+        storage.put(
+            key,
+            data,
+        )
+
+        eid = repo.add_evidence(
+            a["id"],
+            None,
+            None,
+            name,
+            ctype,
+            len(data),
+            sha,
+            key,
+            (
+                "Cuestionario de Auditoría de Sistemas "
+                "utilizado para cargar la estructura, "
+                "respuestas y evidencias de la auditoría"
+            ),
+            me(),
+        )
+
+    except Exception:  # noqa: BLE001
+        repo.db.session.rollback()
+        return err(
+            "El cuestionario fue procesado, pero no fue posible "
+            "conservar el Excel como evidencia",
+            500,
+        )
+
+    # ---------------------------------------------------------
+    # Estadísticas de la cédula resultante.
+    # ---------------------------------------------------------
+    fresh = repo.get_worksheet(
+        wid
+    )
+
+    stats = scoring.system_statistics(
+        fresh["criteria"],
+        fresh["items"],
+    )
+
+    log(
+        "SYSTEM_QUESTIONNAIRE_IMPORTED",
+        entity_type="worksheet",
+        entity_id=wid,
+        after_data={
+            "tipo": parsed["questionnaire_type"],
+            "nombre": parsed.get("questionnaire_name"),
+            "archivo": name,
+            "controles": imported_count,
+            "hojas": parsed.get("sheets") or [],
+            "evidence_id": eid,
+            "sha256": sha,
+            **stats,
+        },
+        request_id=g.request_id,
+    )
+
+    return jsonify(
+        imported=True,
+        questionnaire_type=parsed["questionnaire_type"],
+        questionnaire_name=parsed.get("questionnaire_name"),
+        source_filename=name,
+        sheets=parsed.get("sheets") or [],
+        controls=imported_count,
+        evidence_id=eid,
+        sha256=sha,
+        statistics=stats,
+    )
+
 
 
 @bp.post("/worksheets/<uuid:wid>/system-controls")
