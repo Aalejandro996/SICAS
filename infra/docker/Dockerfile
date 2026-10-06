@@ -1,0 +1,11 @@
+FROM python:3.12-slim AS base
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN useradd --create-home --uid 10001 app
+WORKDIR /srv
+COPY requirements/base.txt requirements/base.txt
+RUN pip install --no-cache-dir -r requirements/base.txt boto3
+COPY . .
+RUN mkdir -p /srv/data/engagement \
+    && chown -R app:app /srv/data
+USER app
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8000", "--access-logfile", "-", "wsgi:app"]

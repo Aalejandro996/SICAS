@@ -1,0 +1,2 @@
+Ejecutar desde la raíz: python /ruta/SICAS_cuestionario_sistemas_restore_only_v2/apply_restore.py .
+El script crea respaldos .pre_cuestionario_sistemas.bak y modifica únicamente repositories.py, api.py y agrega system_questionnaire.py. No toca frontend ni SQL.

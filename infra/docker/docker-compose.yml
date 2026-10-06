@@ -1,0 +1,53 @@
+# Referencia de despliegue (desarrollo/QA). En producción: orquestador, secretos gestionados y redes segmentadas.
+services:
+  db:
+    image: postgres:16
+    environment: {POSTGRES_DB: contraloria, POSTGRES_USER: postgres, POSTGRES_PASSWORD_FILE: /run/secrets/pg_pass}
+    volumes: [pgdata:/var/lib/postgresql/data, ../../sql:/docker-entrypoint-initdb.d:ro]
+    secrets: [pg_pass]
+  redis:
+    image: redis:7
+    env_file: ../../.env
+    command: ["sh", "-c", "exec redis-server --requirepass \"$${REDIS_PASSWORD}\""]
+  api:
+    build: {context: ../.., dockerfile: infra/docker/Dockerfile}
+    env_file: ../../.env
+    depends_on: [db, redis]
+    volumes:
+    - engagementdata:/srv/data/engagement
+    - ../../secrets:/srv/secrets:ro
+  worker:
+    build: {context: ../.., dockerfile: infra/docker/Dockerfile}
+    command: celery -A celery_worker.celery worker -Q ingestion,reports,alerts -c 4 --loglevel=INFO
+    env_file: ../../.env
+    environment:
+      SICAS_CHECKPOINT_KEY_PEM: /srv/secrets/checkpoint_private.pem
+      SICAS_CHECKPOINT_PUB_PEM: /srv/secrets/checkpoint_public.pem
+      SIGNING_PKCS12_PASSPHRASE_FILE: /srv/secrets/firma_dev.pass
+      SIGNING_PKCS12_PASSPHRASE_FILE_GERENTE: /srv/secrets/firma_dev_gerente.pass
+      SIGNING_PKCS12_PATH: /srv/secrets/firma_dev.p12
+      SIGNING_PKCS12_PATH_GERENTE: /srv/secrets/firma_dev_gerente.p12
+      SIGNING_TRUST_ROOTS_PEM: /srv/secrets/firma_dev_raiz.pem
+    depends_on: [db, redis]
+    volumes:
+    - engagementdata:/srv/data/engagement
+    - ../../secrets:/srv/secrets:ro
+  beat:
+    build: {context: ../.., dockerfile: infra/docker/Dockerfile}
+    command: celery -A celery_worker.celery beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
+    env_file: ../../.env
+    depends_on: [redis]
+    volumes:
+    - ../../secrets:/srv/secrets:ro
+  nginx:
+    image: nginx:1.27
+    volumes:
+    - ../nginx/sicas.conf:/etc/nginx/conf.d/default.conf:ro
+    - ./tls:/etc/nginx/tls:ro
+    ports: ["443:443"]
+    depends_on: [api]
+secrets:
+  pg_pass: {file: ./secrets/pg_pass}
+volumes:
+  pgdata: {}
+  engagementdata: {}

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SICAS — Sistema Integral de Contraloría y Auditoría de Seguros</title>
+  <link rel="icon" type="image/x-icon" href="/static/branding/sicas-favicon.ico?v=20261004">
+  <link rel="icon" type="image/png" sizes="64x64" href="/static/branding/sicas-favicon.png?v=20261004">
+  <link rel="apple-touch-icon" sizes="64x64" href="/static/branding/sicas-favicon.png?v=20261004">
+  <link rel="stylesheet" href="/static/style.css?v=20261004">
+</head>
+<body>
+  <header><div class="brand"><img src="/static/branding/seguros_constitucion.png" alt="Seguros Constitución"><div><h1>SICAS</h1><p>Sistema Integral de Contraloría y Auditoría de Seguros</p></div></div><img class="brand-control" src="/static/branding/contraloria.jpeg" alt="Contraloría"><span id="whoami"></span><button id="btn-logout" class="secondary small hidden">Cerrar sesión</button></header>
+  <main id="main">
+    <section id="view-login" class="card">
+      <h2>Ingreso</h2>
+      <label>Usuario <input id="username" autocomplete="username"></label>
+      <label>Contraseña <input id="password" type="password" autocomplete="current-password"></label>
+      <button id="btn-login">Ingresar</button>
+    </section>
+
+    <section id="view-change" class="card hidden">
+      <h2>Cambio obligatorio de contraseña</h2>
+      <p class="hint">Mínimo 12 caracteres, con al menos 3 de: minúsculas, mayúsculas, números y símbolos.</p>
+      <label>Contraseña actual (temporal) <input id="old_password" type="password"></label>
+      <label>Nueva contraseña <input id="new_password" type="password" autocomplete="new-password"></label>
+      <button id="btn-change">Cambiar contraseña</button>
+    </section>
+
+    <section id="view-enroll" class="card hidden">
+      <h2>Configurar verificación en dos pasos</h2>
+      <p>Agregue esta cuenta en su aplicación autenticadora (Google Authenticator, Microsoft Authenticator, Aegis…) con la clave:</p>
+      <pre id="mfa-secret"></pre>
+      <p class="hint">También puede abrir el enlace <code>otpauth://</code> en su dispositivo: <span id="mfa-uri"></span></p>
+      <label>Código de 6 dígitos <input id="enroll-code" inputmode="numeric" maxlength="6"></label>
+      <button id="btn-confirm">Confirmar e ingresar</button>
+    </section>
+
+    <section id="view-mfa" class="card hidden">
+      <h2>Verificación en dos pasos</h2>
+      <label>Código de su aplicación autenticadora <input id="mfa-code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label>
+      <button id="btn-mfa">Verificar</button>
+    </section>
+
+    <section id="view-app" class="hidden">
+      <nav id="nav" aria-label="Módulos"></nav>
+      <div id="page"></div>
+    </section>
+    <p id="msg" role="alert"></p>
+  </main>
+  <script src="/static/lib.js?v=20261004"></script>
+  <script src="/static/pages_admin.js?v=20261004"></script>
+  <script src="/static/pages_ops.js?v=20261004"></script>
+  <script src="/static/pages_audit.js?v=20261004"></script>
+  <script src="/static/app.js?v=20261004"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+flowchart LR
+    U["Usuarios internos<br/>Auditor · Contralor · Admin · Gerencia"] -->|"HTTPS TLS 1.3"| WAF["WAF + Nginx<br/>rate limit perimetral"]
+    WAF --> API["Flask API<br/>Gunicorn + Blueprints"]
+    API -->|"SQL parametrizado<br/>rol app_rw"| PGP[("PostgreSQL<br/>primario")]
+    PGP -->|"replicación"| PGR[("Réplica de lectura<br/>dashboards / reportes")]
+    API -->|"sesiones · blocklist JWT<br/>rate limit"| RED[("Redis")]
+    RED --> CW["Celery workers<br/>ingestion · reports · alerts"]
+    BEAT["Celery Beat"] --> RED
+    CW --> PGP
+    CW --> OBJ[("Object storage cifrado<br/>CSV · PDF firmados (WORM)")]
+    CW -->|"alertas"| MAIL["SMTP"]
+    CW -->|"firma PAdES + sello de tiempo"| TSA["TSA / HSM<br/>(PSC acreditado)"]
+    CW -->|"logs JSON"| LS
+    PGP -->|"backups cifrados + WAL"| BK[("Backups offsite")]
+    PGP -->|"export audit_log"| WORM[("Almacén inmutable")]
