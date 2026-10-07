@@ -27,14 +27,37 @@ def x(sql, **p):
 def list_units(active_only=True, domains=None):
     where = []
     params = {}
+
     if active_only:
         where.append("u.active")
-    if domains and "ALL" not in domains:
-        where.append("u.audit_domain = ANY(CAST(:d AS text[]))")
-        params["d"] = domains
-    clause = (" WHERE " + " AND ".join(where)) if where else ""
-    return q("SELECT u.id, u.code, u.name, u.kind, u.active, u.audit_domain, u.responsible_name, u.responsible_role FROM engagement.units u" + clause + " ORDER BY u.name", **params)
 
+    if domains and "ALL" not in domains:
+        domains = [str(d).upper() for d in domains]
+
+        # Auditoría Financiera puede utilizar sucursales generales.
+        if domains == ["FINANCIERA"]:
+            where.append(
+                "(u.audit_domain = ANY(CAST(:d AS text[])) "
+                "OR u.audit_domain = 'GENERAL')"
+            )
+        else:
+            # Sistemas y demás dominios solo ven su propio dominio.
+            where.append(
+                "u.audit_domain = ANY(CAST(:d AS text[]))"
+            )
+
+        params["d"] = domains
+
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    return q(
+        "SELECT u.id, u.code, u.name, u.kind, u.active, "
+        "u.audit_domain, u.responsible_name, u.responsible_role "
+        "FROM engagement.units u"
+        + clause
+        + " ORDER BY u.name",
+        **params,
+    )
 
 def get_unit(unit_id):
     return q1("SELECT id, code, name, kind, active, audit_domain, responsible_name, responsible_role FROM engagement.units WHERE id = CAST(:i AS integer)", i=int(unit_id))
@@ -205,7 +228,188 @@ def create_worksheet(audit_id, kind, line, criteria, version, user):
     db.session.commit()
     return wid
 
+def get_financial_template(kind, line):
+    """
+    Obtiene una plantilla financiera del catálogo 012 y sus criterios.
 
+    No utiliza engagement.templates, porque las cédulas financieras
+    utilizan el catálogo oficial de engagement.financial_templates.
+    """
+    kind = str(kind).upper().strip()
+    line = str(line).upper().strip()
+
+    template = q1(
+        """
+        SELECT
+            ft.code,
+            ft.kind,
+            ft.line,
+            ft.title,
+            ft.version,
+            ft.source_file,
+            ft.source_sheet,
+            ft.source_sha256
+        FROM engagement.financial_templates ft
+        WHERE ft.kind = :k
+          AND ft.line = :l
+          AND ft.active = TRUE
+        LIMIT 1
+        """,
+        k=kind,
+        l=line,
+    )
+
+    if template is None:
+        return None
+
+    criteria = q(
+        """
+        SELECT
+            fc.id::text AS id,
+            fc.source_id,
+            fc.section,
+            fc.subsection,
+            fc.criterion_text,
+            fc.sort_order,
+            fc.excel_row,
+            fc.weight,
+            fc.metadata
+        FROM engagement.financial_criteria fc
+        WHERE fc.template_code = :t
+        ORDER BY fc.sort_order
+        """,
+        t=template["code"],
+    )
+
+    if not criteria:
+        raise ValueError(
+            f"La plantilla financiera {template['code']} no tiene criterios cargados"
+        )
+
+    template["criteria"] = criteria
+    return template
+
+
+def create_financial_worksheet(audit_id, kind, line, user):
+    """
+    Crea una cédula financiera usando el catálogo financiero oficial.
+
+    La worksheet operativa sigue siendo engagement.worksheets, pero además
+    queda registrada en engagement.financial_worksheets mediante la función
+    SQL de la migración 013.
+
+    Todo se confirma en UNA sola transacción.
+    """
+    audit_id = str(audit_id)
+    user = str(user)
+    kind = str(kind).upper().strip()
+    line = str(line).upper().strip()
+
+    template = get_financial_template(kind, line)
+
+    if template is None:
+        raise ValueError(
+            f"No existe una plantilla financiera activa para "
+            f"{kind}/{line}"
+        )
+
+    criteria = []
+
+    for row in template["criteria"]:
+        criterion = {
+            "code": row["source_id"],
+            "text": row["criterion_text"],
+            "source_id": row["source_id"],
+            "section": row["section"],
+            "subsection": row["subsection"],
+            "evaluation_mode": "FINANCIAL_CATALOG",
+            "source_excel_row": row["excel_row"],
+            "metadata": row["metadata"] or {},
+        }
+
+        # El Excel financiero actualmente no define pesos individuales.
+        # No inventamos pesos en el catálogo.
+        # El motor actual puede tratar la ausencia del peso como peso 1
+        # mientras se define formalmente la metodología financiera.
+        if row["weight"] is not None:
+            criterion["weight"] = row["weight"]
+
+        criteria.append(criterion)
+
+    worksheet_id = str(uuid.uuid4())
+
+    title_map = {
+        ("SUSCRIPCION", "AUTO"): "Suscripción Auto",
+        ("RECLAMO", "AUTO"): "Reclamo / Indemnización Auto",
+        ("SUSCRIPCION", "PERSONAL"): "Suscripción Personal",
+        ("RECLAMO", "PERSONAL"): "Reclamo / Indemnización Personal",
+        ("SUSCRIPCION", "PATRIMONIAL"): "Suscripción Patrimonial",
+        ("RECLAMO", "PATRIMONIAL"): "Reclamo / Indemnización Patrimonial",
+    }
+
+    title = title_map.get(
+        (kind, line),
+        template["title"],
+    )[:180]
+
+    try:
+        x(
+            """
+            INSERT INTO engagement.worksheets
+            (
+                id,
+                audit_id,
+                kind,
+                line,
+                title,
+                criteria,
+                template_version,
+                created_by
+            )
+            VALUES
+            (
+                CAST(:i AS uuid),
+                CAST(:a AS uuid),
+                :k,
+                :l,
+                :t,
+                CAST(:c AS jsonb),
+                :v,
+                CAST(:u AS uuid)
+            )
+            """,
+            i=worksheet_id,
+            a=audit_id,
+            k=kind,
+            l=line,
+            t=title,
+            c=json.dumps(criteria),
+            v=template["version"],
+            u=user,
+        )
+
+        x(
+            """
+            SELECT engagement.register_financial_worksheet(
+                CAST(:w AS uuid),
+                :t,
+                CAST(:u AS uuid)
+            )
+            """,
+            w=worksheet_id,
+            t=template["code"],
+            u=user,
+        )
+
+        db.session.commit()
+
+        return worksheet_id
+
+    except Exception:
+        db.session.rollback()
+        raise
+
+    
 def system_worksheet(audit_id, user):
     existing = q1("SELECT id::text FROM engagement.worksheets WHERE audit_id = CAST(:a AS uuid) AND kind = 'SISTEMAS' AND line = 'ERP_TI'", a=str(audit_id))
     if existing:
