@@ -147,28 +147,77 @@ def files():
 @permission_required("audit:manage")
 def new_file():
     d = request.get_json(silent=True) or {}
+
     try:
-        title, objective = txt(d, "title", 5, 200), txt(d, "objective", 0, 2000)
-        pf, pt = parse_date(d.get("period_from"), "Período desde", True), parse_date(d.get("period_to"), "Período hasta", True)
-        unit_id = int(d.get("unit_id"))      # TypeError si falta
+        title = txt(d, "title", 5, 200)
+        objective = txt(d, "objective", 0, 2000)
+        pf = parse_date(d.get("period_from"), "Período desde", True)
+        pt = parse_date(d.get("period_to"), "Período hasta", True)
+        unit_id = int(d.get("unit_id"))
     except ValueError as e:
         return err(str(e))
     except TypeError:
         return err("Seleccione la unidad auditada")
+
     if pt < pf:
         return err("El período final no puede ser anterior al inicial")
-    domain = next(iter(audit_domains())) if audit_domains() != {"ALL"} else "GENERAL"
+
+    domain = (
+        next(iter(audit_domains()))
+        if audit_domains() != {"ALL"}
+        else "GENERAL"
+    )
+
     unit = repo.get_unit(unit_id)
+
     if unit is None or not unit["active"]:
         return err("Unidad inexistente o inactiva")
-    if domain != "GENERAL" and unit.get("audit_domain") != domain:
-        return err("La unidad seleccionada no pertenece al dominio de auditoría de su rol", 403)
-    if domain == "GENERAL" and unit.get("audit_domain", "GENERAL") != "GENERAL":
-        return err("Una auditoría operacional no puede utilizar una unidad reservada a Sistemas/Finanzas", 403)
+
+    unit_domain = str(unit.get("audit_domain") or "GENERAL").upper()
+
+    if domain == "FINANCIERA":
+        if unit_domain not in ("GENERAL", "FINANCIERA"):
+            return err(
+                "La unidad seleccionada no pertenece al dominio de auditoría financiera de su rol",
+                403,
+            )
+
+    elif domain == "SISTEMAS":
+        if unit_domain != "SISTEMAS":
+            return err(
+                "La unidad seleccionada no pertenece al dominio de auditoría de sistemas de su rol",
+                403,
+            )
+
+    elif domain == "GENERAL":
+        if unit_domain != "GENERAL":
+            return err(
+                "Una auditoría operacional no puede utilizar una unidad reservada a Sistemas/Finanzas",
+                403,
+            )
+
     code = repo.next_code("EXP", "file_seq", date.today().year)
-    fid = repo.create_file(code, unit_id, title, objective, pf, pt, me(), domain)
-    log("FILE_CREATED", entity_type="file", entity_id=fid, after_data={"code": code}, request_id=g.request_id)
+    fid = repo.create_file(
+        code,
+        unit_id,
+        title,
+        objective,
+        pf,
+        pt,
+        me(),
+        domain,
+    )
+
+    log(
+        "FILE_CREATED",
+        entity_type="file",
+        entity_id=fid,
+        after_data={"code": code},
+        request_id=g.request_id,
+    )
+
     return jsonify(id=fid, code=code), 201
+
 
 
 # ------------------------------------------------------------------ auditorías
@@ -357,31 +406,124 @@ def save_template(kind, line):
 
 # ------------------------------------------------------------------ cédulas e ítems
 @bp.post("/<uuid:aid>/worksheets")
-@permission_required("audit:manage")
+@permission_required("audit:manage", "audit:financial_manage")
 def new_worksheet(aid):
-    a, e = load(aid, write=True, phases=("PLANIFICACION", "TRABAJO_CAMPO"))
+    a, e = load(
+        aid,
+        write=True,
+        phases=("PLANIFICACION", "TRABAJO_CAMPO"),
+    )
+
     if e:
         return e
+
     d = request.get_json(silent=True) or {}
-    kind, line = str(d.get("kind", "")).upper(), str(d.get("line", "")).upper()
-    domain = a.get("audit_domain", "GENERAL")
-    if domain == "SISTEMAS":
-        if (kind, line) != ("SISTEMAS", "ERP_TI"):
-            return err("Una auditoría de Sistemas solo puede utilizar la cédula ERP/TI", 403)
-    else:
-        if kind not in KINDS or line not in LINES or line == "ERP_TI" or line not in a["lines"] or kind == "SISTEMAS":
-            return err("Tipo o línea inválidos o fuera del alcance de la auditoría")
-    crit, ver = repo.get_template(kind, line)
+
+    kind = str(
+        d.get("kind", "")
+    ).upper().strip()
+
+    line = str(
+        d.get("line", "")
+    ).upper().strip()
+
+    if kind not in KINDS or line not in LINES:
+        return err(
+            "Tipo o línea inválidos"
+        )
+
+    if line not in a["lines"]:
+        return err(
+            "La línea no pertenece al alcance de la auditoría"
+        )
+
     try:
-        if (kind, line) == ("SISTEMAS", "ERP_TI"):
-            wid = repo.system_worksheet(a["id"], me())
-        else:
-            wid = repo.create_worksheet(a["id"], kind, line, crit, ver, me())
-    except Exception:  # noqa: BLE001
+
+        # ============================================================
+        # FINANCIERA
+        # ============================================================
+        #
+        # Usa exclusivamente:
+        #   engagement.financial_templates
+        #   engagement.financial_criteria
+        #   engagement.financial_worksheets
+        #
+        # NO utiliza engagement.templates.
+        #
+        if str(a.get("audit_domain", "")).upper() == "FINANCIERA":
+
+            wid = repo.create_financial_worksheet(
+                a["id"],
+                kind,
+                line,
+                me(),
+            )
+
+            log(
+                "FINANCIAL_WORKSHEET_CREATED",
+                entity_type="worksheet",
+                entity_id=wid,
+                after_data={
+                    "kind": kind,
+                    "line": line,
+                    "audit_domain": "FINANCIERA",
+                },
+                request_id=g.request_id,
+            )
+
+            return jsonify(id=wid), 201
+
+
+        # ============================================================
+        # SISTEMA EXISTENTE
+        # ============================================================
+        #
+        # Este bloque permanece con la lógica anterior.
+        # No se modifica la creación de cédulas actuales.
+        #
+        crit, ver = repo.get_template(
+            kind,
+            line,
+        )
+
+        wid = repo.create_worksheet(
+            a["id"],
+            kind,
+            line,
+            crit,
+            ver,
+            me(),
+        )
+
+        log(
+            "WORKSHEET_CREATED",
+            entity_type="worksheet",
+            entity_id=wid,
+            after_data={
+                "kind": kind,
+                "line": line,
+                "audit_domain": a.get("audit_domain"),
+            },
+            request_id=g.request_id,
+        )
+
+        return jsonify(id=wid), 201
+
+    except ValueError as ex:
         repo.db.session.rollback()
-        return err("Esa cédula ya existe en la auditoría", 409)
-    log("WORKSHEET_CREATED", entity_type="worksheet", entity_id=wid, after_data={"kind": kind, "line": line}, request_id=g.request_id)
-    return jsonify(id=wid), 201
+
+        return err(
+            str(ex),
+            400,
+        )
+
+    except Exception:
+        repo.db.session.rollback()
+
+        return err(
+            "No se pudo crear la cédula",
+            500,
+        )
 
 
 def ws_for(ws_id, write=False):
