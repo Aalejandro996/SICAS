@@ -323,12 +323,12 @@ def create_financial_worksheet(audit_id, kind, line, user):
             "section": row["section"],
             "subsection": row["subsection"],
             "evaluation_mode": "FINANCIAL_CATALOG",
+            "template_code": template["code"],
             "source_excel_row": row["excel_row"],
             "metadata": row["metadata"] or {},
         }
 
         # El Excel financiero actualmente no define pesos individuales.
-        # No inventamos pesos en el catálogo.
         # El motor actual puede tratar la ausencia del peso como peso 1
         # mientras se define formalmente la metodología financiera.
         if row["weight"] is not None:
@@ -400,6 +400,26 @@ def create_financial_worksheet(audit_id, kind, line, user):
             t=template["code"],
             u=user,
         )
+        for criterion in criteria:
+            x(
+                """
+                INSERT INTO engagement.items
+                    (id, worksheet_id, ref, source, updated_by)
+                VALUES
+                    (
+                        CAST(:i AS uuid),
+                        CAST(:w AS uuid),
+                        :r,
+                        'ONLINE',
+                        CAST(:u AS uuid)
+                    )
+                ON CONFLICT (worksheet_id, ref) DO NOTHING
+                """,
+                i=str(uuid.uuid4()),
+                w=worksheet_id,
+                r=criterion["code"],
+                u=user,
+            )
 
         db.session.commit()
 
@@ -508,15 +528,59 @@ ITEM_SQL = ("SELECT id::text, worksheet_id::text, ref, results, auto_score, manu
             "FROM engagement.items ")
 
 
+FINANCIAL_TEMPLATE_CODES = {
+    ("SUSCRIPCION", "AUTO"): "FIN_AUTO_SUSCRIPCION",
+    ("RECLAMO", "AUTO"): "FIN_AUTO_RECLAMO",
+    ("SUSCRIPCION", "PERSONAL"): "FIN_PERSONAL_SUSCRIPCION",
+    ("RECLAMO", "PERSONAL"): "FIN_PERSONAL_RECLAMO",
+    ("SUSCRIPCION", "PATRIMONIAL"): "FIN_PATRIMONIAL_SUSCRIPCION",
+    ("RECLAMO", "PATRIMONIAL"): "FIN_PATRIMONIAL_RECLAMO",
+}
+
+
+def _hydrate_financial_template_code(ws):
+    """
+    Compatibilidad con cédulas financieras creadas antes de que
+    template_code formara parte del criterio operativo.
+
+    No modifica PostgreSQL: solo completa en memoria el dato
+    necesario para el evaluador financiero.
+    """
+    if not ws:
+        return ws
+
+    kind = str(ws.get("kind") or "").upper().strip()
+    line = str(ws.get("line") or "").upper().strip()
+    template_code = FINANCIAL_TEMPLATE_CODES.get((kind, line))
+
+    if not template_code:
+        return ws
+
+    criteria = ws.get("criteria") or []
+
+    for criterion in criteria:
+        if (
+            str(criterion.get("evaluation_mode") or "").upper()
+            == "FINANCIAL_CATALOG"
+            and not criterion.get("template_code")
+        ):
+            criterion["template_code"] = template_code
+
+    ws["criteria"] = criteria
+    return ws
+
+
 def worksheets_with_items(audit_id):
     sheets = q(WS_SQL + "WHERE audit_id = CAST(:a AS uuid) ORDER BY kind, line", a=str(audit_id))
     for ws in sheets:
+        _hydrate_financial_template_code(ws)
         ws["items"] = q(ITEM_SQL + "WHERE worksheet_id = CAST(:w AS uuid) ORDER BY ref", w=ws["id"])
     return sheets
 
 
 def get_worksheet(ws_id, with_items=True):
     ws = q1(WS_SQL + "WHERE id = CAST(:i AS uuid)", i=str(ws_id))
+    _hydrate_financial_template_code(ws)
     if ws and with_items:
         ws["items"] = q(ITEM_SQL + "WHERE worksheet_id = CAST(:w AS uuid) ORDER BY ref", w=ws["id"])
     return ws

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .financial_rules import evaluate_criterion, RULE_SCORED
+
 POINTS = {"CUMPLE": 100.0, "PARCIAL": 50.0, "NO_CUMPLE": 0.0}
 SYSTEM_DOC_POINTS = {"SI": 100.0, "NO": 0.0}
 SYSTEM_EVIDENCE_POINTS = {"ACTUALIZADO": 100.0, "DESACTUALIZADO": 50.0, "INEXISTENTE": 0.0}
@@ -61,7 +63,7 @@ def system_item_score(criteria: list[dict], results: dict) -> float | None:
         if control == "SI":
             score += 0.3 * SYSTEM_DOC_POINTS.get(doc, 0.0)
             score += 0.3 * SYSTEM_EVIDENCE_POINTS.get(evidence, 0.0)
-        w = float(c.get("weight", 1))
+        w = float(c.get("weight") or 1)
         num += w * score
         den += w
     return None if den == 0 else round(num / den, 2)
@@ -102,19 +104,77 @@ def system_statistics(criteria: list[dict], items: list[dict]) -> dict:
     }
 
 
+def is_financial_criteria(criteria: list[dict]) -> bool:
+    return bool(criteria) and all(
+        str(c.get("evaluation_mode") or "").upper() == "FINANCIAL_CATALOG"
+        for c in criteria
+    )
+
+
+def _criterion_result(results: dict, criterion: dict):
+    code = criterion.get("code")
+    source_id = criterion.get("source_id")
+
+    if code in results:
+        return results.get(code)
+
+    if source_id in results:
+        return results.get(source_id)
+
+    return None
+
+
+def financial_item_score(
+    criteria: list[dict],
+    results: dict,
+) -> float | None:
+    num = den = 0.0
+
+    for c in criteria:
+        response = _criterion_result(results, c)
+
+        decision = evaluate_criterion(
+            str(c.get("template_code") or ""),
+            c,
+            response,
+            exception=bool(
+                str(response or "").strip().upper() == "EXCEPCION"
+            ),
+        )
+
+        if decision.status != RULE_SCORED:
+            continue
+
+        if decision.score is None:
+            continue
+
+        w = float(c.get("weight") or 1)
+        num += w * float(decision.score)
+        den += w
+
+    return None if den == 0 else round(num / den, 2)
+
+
 def item_score(criteria: list[dict], results: dict) -> float | None:
+    # Auditoría de Sistemas: permanece exactamente en su rama propia.
     if is_system_criteria(criteria):
         return system_item_score(criteria, results)
+
+    # Auditoría Financiera: usa exclusivamente el motor financiero.
+    if is_financial_criteria(criteria):
+        return financial_item_score(criteria, results)
+
+    # Compatibilidad con la lógica genérica existente.
     num = den = 0.0
     for c in criteria:
         pts = POINTS.get(results.get(c["code"]))
         if pts is None:
             continue
-        w = float(c.get("weight", 1))
+        w = float(c.get("weight") or 1)
         num += w * pts
         den += w
-    return None if den == 0 else round(num / den, 2)
 
+    return None if den == 0 else round(num / den, 2)
 
 def final_score(auto: float | None, manual) -> float | None:
     return float(manual) if manual is not None else auto
