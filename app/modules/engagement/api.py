@@ -1029,7 +1029,23 @@ def new_observation(aid):
         fields = _obs_fields(d)
     except ValueError as ex:
         return err(str(ex))
-    fields["item_id"] = d.get("item_id") or None
+    # La observación puede ser general (sin item_id), pero si se vincula a un
+    # criterio, ese ítem debe existir y pertenecer a esta misma auditoría.
+    raw_item_id = d.get("item_id")
+    if raw_item_id in (None, ""):
+        fields["item_id"] = None
+    else:
+        try:
+            normalized_item_id = str(uuid.UUID(str(raw_item_id)))
+        except (TypeError, ValueError, AttributeError):
+            return err("El ítem asociado no tiene un identificador válido.", 400)
+        item = repo.get_item(normalized_item_id)
+        if item is None:
+            return err("El ítem asociado no existe.", 404)
+        item_ws = repo.get_worksheet(item["worksheet_id"], with_items=False)
+        if item_ws is None or str(item_ws.get("audit_id")) != str(a["id"]):
+            return err("El ítem asociado debe pertenecer a la misma auditoría.", 400)
+        fields["item_id"] = normalized_item_id
     oid, seq = repo.add_observation(a["id"], fields, me())
     log("OBSERVATION_CREATED", entity_type="observation", entity_id=oid, after_data={"seq": seq, "risk": fields["risk"]}, request_id=g.request_id)
     return jsonify(id=oid, seq=seq), 201
@@ -1193,17 +1209,34 @@ def _make_body(a, kind, version, conclusion):
 def _state(rep, team):
     sos = repo.signoffs(rep["id"])
     docs = repo.signed_docs(rep["id"])
-    return wf.ReportState(kind=rep["kind"], status=rep["status"], created_by=rep["created_by"], body_sha256=rep["body_sha256"],
-                          team_ids=[t["user_id"] for t in team],
-                          initialed_ids={s["user_id"] for s in sos if s["signer_type"] == "AUDITOR_INICIALES" and s["body_sha256"] == rep["body_sha256"]},
-                          approved_by=rep["approved_by"], approved_body_sha256=rep["approved_body_sha256"], signed_roles={d["signer_role"]: d["user_id"] for d in docs})
+    return wf.ReportState(
+        kind=rep["kind"], status=rep["status"],
+        created_by=rep["created_by"], body_sha256=rep["body_sha256"],
+        team_ids=[t["user_id"] for t in team],
+        initialed_ids={
+            s["user_id"] for s in sos
+            if s["signer_type"] == "AUDITOR_INICIALES"
+            and s["body_sha256"] == rep["body_sha256"]
+        },
+        jefe_approved_by=rep["jefe_approved_by"],
+        jefe_approved_body_sha256=rep["jefe_approved_body_sha256"],
+        gerente_approved_by=rep["gerente_approved_by"],
+        gerente_approved_body_sha256=rep["gerente_approved_body_sha256"],
+        contralor_approved_by=rep["contralor_approved_by"],
+        contralor_approved_body_sha256=rep["contralor_approved_body_sha256"],
+        approved_by=rep["approved_by"],
+        approved_body_sha256=rep["approved_body_sha256"],
+        signed_roles={d["signer_role"]: d["user_id"] for d in docs},
+    )
 
 
 def _pdf_for(rep, team):
     sos = repo.signoffs(rep["id"])
     valid = {s["user_id"]: s["display"] for s in sos if s["signer_type"] == "AUDITOR_INICIALES" and s["body_sha256"] == rep["body_sha256"]}
     collab = next(({"name": s["display"].split(" | ")[0], "role": (s["display"].split(" | ") + [""])[1]} for s in reversed(sos) if s["signer_type"] == "COLABORADOR"), None)
-    final = rep["kind"] == "FINAL" and rep["status"] in ("APPROVED", "SIGNED")
+    final = rep["kind"] == "FINAL" and rep["status"] in (
+        "GERENCIA", "CONTRALOR", "APPROVED", "SIGNED"
+    )
     return build_pdf(rep["body"], {"final": final, "initials": {t["name"]: valid.get(t["user_id"]) for t in team}, "collaborator": collab})
 
 
@@ -1212,9 +1245,24 @@ def get_rep(rid, write=False, final_viewer=False):
     if rep is None:
         return None, None, None, err("No encontrado", 404)
     a = repo.get_audit(rep["audit_id"])
-    if final_viewer and rep["kind"] == "FINAL" and (
-            (rep["status"] == "SIGNED" and "audit:read_final" in perms()) or
-            (rep["status"] in ("APPROVED", "SIGNED") and "audit:sign_gerente" in perms())):
+    pset = perms()
+    stage_view = (
+        (rep["status"] == "IN_REVIEW" and "audit:report_approve_jefe" in pset)
+        or (rep["status"] == "GERENCIA" and "audit:report_approve_gerente" in pset)
+        or (rep["status"] == "CONTRALOR" and (
+            "audit:report_approve" in pset or "audit:sign_contralor" in pset
+        ))
+    )
+    final_view = (
+        rep["status"] in ("CONTRALOR", "APPROVED", "SIGNED")
+        and (
+            "audit:read_final" in pset
+            or "audit:sign_gerente" in pset
+            or "audit:sign_contralor" in pset
+            or "audit:report_approve" in pset
+        )
+    )
+    if final_viewer and rep["kind"] == "FINAL" and (stage_view or final_view):
         return rep, a, _team_info(a["id"]), None
     if a is None or not visible(a):
         return None, None, None, err("No encontrado", 404)
@@ -1299,12 +1347,66 @@ def report_detail(rid):
         except wf.WorkflowError:
             return False
     missing = [t["name"] for t in team if t["user_id"] not in st.initialed_ids]
-    return jsonify(report=rep, team=team, comments=repo.comments(rid), signoffs=sos, signatures=docs, missing_initials=missing, is_member=member,
-                   can={"edit": member and ok(wf.can_edit) and "audit:report_draft" in perms(), "initial": ok(wf.can_initial) and "audit:initial" in perms(),
-                        "submit": ok(wf.can_submit_final) and "audit:report_submit" in perms(), "send_previo": ok(wf.can_send_previo) and "audit:report_submit" in perms(),
-                        "review": ok(wf.can_review) and "audit:report_approve" in perms(), "comment": ok(wf.can_comment),
-                        "sign_contralor": ok(wf.can_sign, "CONTRALOR") and "audit:sign_contralor" in perms(),
-                        "sign_gerente": ok(wf.can_sign, "GERENTE_CI") and "audit:sign_gerente" in perms()})
+    pset = perms()
+    domain = a.get("audit_domain", "GENERAL")
+
+    jefe_permission = (
+        st.status == "IN_REVIEW"
+        and "audit:report_approve_jefe" in pset
+        and can_review_domain(domain)
+    )
+    approve_jefe = jefe_permission and ok(wf.can_jefe_review)
+
+    review_permission = (
+        jefe_permission
+        or (st.status == "GERENCIA" and "audit:report_approve_gerente" in pset)
+        or (st.status == "CONTRALOR" and "audit:report_approve" in pset)
+    )
+    can_return = ok(wf.can_review) and review_permission
+
+    sign_gerente = (
+        "audit:sign_gerente" in pset
+        and "audit:report_approve_gerente" in pset
+        and ok(wf.can_sign, "GERENTE_CI")
+    )
+    sign_contralor = (
+        "audit:sign_contralor" in pset
+        and "audit:report_approve" in pset
+        and ok(wf.can_sign, "CONTRALOR")
+    )
+
+    # Exponer solo la firma más reciente de cada rol si su aprobación
+    # corresponde al contenido actual del informe.
+    latest_for_role = {}
+    for dct in reversed(docs):
+        role = dct["signer_role"]
+        if role in latest_for_role:
+            continue
+        approval_hash = (
+            st.gerente_approved_body_sha256 if role == "GERENTE_CI"
+            else st.contralor_approved_body_sha256 if role == "CONTRALOR"
+            else None
+        )
+        if approval_hash == rep["body_sha256"]:
+            latest_for_role[role] = dct
+    visible_signatures = list(reversed(list(latest_for_role.values())))
+
+    return jsonify(
+        report=rep, team=team, comments=repo.comments(rid),
+        signoffs=sos, signatures=visible_signatures,
+        missing_initials=missing, is_member=member,
+        can={
+            "edit": member and ok(wf.can_edit) and "audit:report_draft" in pset,
+            "initial": ok(wf.can_initial) and "audit:initial" in pset,
+            "submit": ok(wf.can_submit_final) and "audit:report_submit" in pset,
+            "send_previo": ok(wf.can_send_previo) and "audit:report_submit" in pset,
+            "review": can_return,
+            "approve_jefe": approve_jefe,
+            "comment": ok(wf.can_comment),
+            "sign_contralor": sign_contralor,
+            "sign_gerente": sign_gerente,
+        },
+    )
 
 
 @bp.post("/reports/<uuid:rid>/regenerate")
@@ -1427,71 +1529,206 @@ def comment(rid):
 
 
 @bp.post("/reports/<uuid:rid>/return")
-@permission_required("audit:report_approve", "audit:financial_review", "audit:systems_review")
+@permission_required(
+    "audit:report_approve", "audit:financial_review", "audit:systems_review",
+    "audit:report_approve_jefe", "audit:report_approve_gerente",
+)
 def return_report(rid):
-    rep, a, team, e = get_rep(rid)
+    rep, a, team, e = get_rep(rid, final_viewer=True)
     if e:
         return e
-    if not can_review_domain(a.get("audit_domain", "GENERAL")):
-        return err("No tiene alcance de revisión para esta auditoría", 403)
+
+    pset = perms()
+    stage = rep["status"]
+
+    if stage == "IN_REVIEW":
+        if "audit:report_approve_jefe" not in pset or not can_review_domain(a.get("audit_domain", "GENERAL")):
+            return err("No tiene permiso para devolver en la etapa del Jefe de Auditoría", 403)
+    elif stage == "GERENCIA":
+        if "audit:report_approve_gerente" not in pset:
+            return err("Solo Gerencia puede devolver el informe en esta etapa", 403)
+    elif stage == "CONTRALOR":
+        if "audit:report_approve" not in pset:
+            return err("Solo el Contralor puede devolver el informe en esta etapa", 403)
+    else:
+        return err(f"No se puede devolver un informe en estado {stage}", 409)
+
     try:
         wf.can_review(_state(rep, team), me())
     except wf.WorkflowError as ex:
         return err(str(ex), 409)
+
     t = str((request.get_json(silent=True) or {}).get("comment") or "").strip()
     if len(t) < 10:
         return err("Indique qué debe corregirse (mínimo 10 caracteres)")
+
     repo.add_comment(rid, me(), "DEVOLUCION", t)
-    repo.set_report_status(rid, "RETURNED")
-    log("AUDIT_REPORT_RETURNED", entity_type="audit_report", entity_id=str(rid), metadata={"comment": t}, request_id=g.request_id)
+    # Una devolución invalida las aprobaciones anteriores del contenido.
+    # Los PDF firmados históricos se conservan, pero no se presentan como actuales.
+    repo.set_report_status(
+        rid, "RETURNED",
+        approved_by=None, approved_at=None, approved_body_sha256=None,
+        jefe_approved_by=None, jefe_approved_at=None, jefe_approved_body_sha256=None,
+        gerente_approved_by=None, gerente_approved_at=None, gerente_approved_body_sha256=None,
+        contralor_approved_by=None, contralor_approved_at=None, contralor_approved_body_sha256=None,
+    )
+    log(
+        "AUDIT_REPORT_RETURNED", entity_type="audit_report", entity_id=str(rid),
+        metadata={"comment": t, "returned_from": stage}, request_id=g.request_id,
+    )
     return jsonify(status="RETURNED")
+
+
+@bp.post("/reports/<uuid:rid>/approve/jefe")
+@permission_required("audit:report_approve_jefe", step_up=True)
+def approve_jefe(rid):
+    rep, a, team, e = get_rep(rid, final_viewer=True)
+    if e:
+        return e
+
+    if not can_review_domain(a.get("audit_domain", "GENERAL")):
+        return err("No tiene alcance de revisión para esta auditoría", 403)
+
+    try:
+        wf.can_jefe_review(_state(rep, team), me())
+    except wf.WorkflowError as ex:
+        return err(str(ex), 409)
+
+    repo.set_report_status(
+        rid, "GERENCIA",
+        approved_by=None, approved_at=None, approved_body_sha256=None,
+        jefe_approved_by=me(), jefe_approved_at="now",
+        jefe_approved_body_sha256=rep["body_sha256"],
+    )
+    log(
+        "AUDIT_REPORT_JEFE_APPROVED", entity_type="audit_report",
+        entity_id=str(rid), after_data={"sha256": rep["body_sha256"]},
+        request_id=g.request_id,
+    )
+    return jsonify(
+        status="GERENCIA",
+        note="Informe aprobado por el Jefe de Auditoría y enviado a Gerencia.",
+    )
 
 
 @bp.post("/reports/<uuid:rid>/approve")
 @permission_required("audit:report_approve", step_up=True)
 def approve(rid):
-    rep, a, team, e = get_rep(rid)
-    if e:
-        return e
-    try:
-        wf.can_review(_state(rep, team), me())
-    except wf.WorkflowError as ex:
-        log("AUDIT_REPORT_APPROVE_REJECTED", outcome="DENIED", entity_type="audit_report", entity_id=str(rid), metadata={"reason": str(ex)}, request_id=g.request_id)
-        return err(str(ex), 409)
-    repo.set_report_status(rid, "APPROVED", approved_by=me(), approved_at="now", approved_body_sha256=rep["body_sha256"])
-    log("AUDIT_REPORT_APPROVED", entity_type="audit_report", entity_id=str(rid), after_data={"sha256": rep["body_sha256"]}, request_id=g.request_id)
-    return jsonify(status="APPROVED")
+    # La aprobación genérica no debe saltarse etapas ni omitir las firmas.
+    return err(
+        "La aprobación debe realizarse en la etapa correspondiente: "
+        "Jefe de Auditoría, firma de Gerencia o firma de Contraloría.",
+        409,
+    )
 
 
 def _sign(rid, role):
     from app.modules.reporting.signing import service as signing
+
     rep, a, team, e = get_rep(rid, final_viewer=True)
     if e:
         return e
+
+    pset = perms()
+    if role == "GERENTE_CI":
+        if "audit:report_approve_gerente" not in pset:
+            return err("Necesita permiso de aprobación de Gerencia además del permiso de firma", 403)
+    elif role == "CONTRALOR":
+        if "audit:report_approve" not in pset:
+            return err("Necesita permiso de aprobación del Contralor además del permiso de firma", 403)
+    else:
+        return err("Rol de firma inválido", 400)
+
     st = _state(rep, team)
     try:
         wf.can_sign(st, me(), role)
     except wf.WorkflowError as ex:
-        log("AUDIT_REPORT_SIGN_REJECTED", outcome="DENIED", entity_type="audit_report", entity_id=str(rid), metadata={"role": role, "reason": str(ex)}, request_id=g.request_id)
+        log(
+            "AUDIT_REPORT_SIGN_REJECTED", outcome="DENIED",
+            entity_type="audit_report", entity_id=str(rid),
+            metadata={"role": role, "reason": str(ex)}, request_id=g.request_id,
+        )
         return err(str(ex), 409)
+
+    docs = repo.signed_docs(rid)
+    version = max((int(d["version"]) for d in docs), default=0) + 1
+
+    if role == "GERENTE_CI":
+        # Primera firma: Gerencia firma el PDF final sin firma digital previa.
+        base = _pdf_for(rep, team)
+        box, field, label = SIG_BOX_GERENTE, "FirmaGerenteCI", "Gerente de Control Interno"
+    else:
+        # Segunda firma: Contraloría firma encima del PDF firmado por Gerencia.
+        manager_doc = next(
+            (d for d in reversed(docs) if d["signer_role"] == "GERENTE_CI"),
+            None,
+        )
+        if manager_doc is None:
+            return err("Falta la firma digital vigente de Gerencia", 409)
+        base = storage.get(manager_doc["object_key"])
+        box, field, label = SIG_BOX_CONTRALOR, "FirmaContralor", "Contralor"
+
     cfg = current_app.config
-    version = 1 if role == "CONTRALOR" else 2
     try:
-        base = _pdf_for(rep, team) if role == "CONTRALOR" else storage.get(f"reports/{rid}/v1.pdf")
-        box, field, label = (SIG_BOX_CONTRALOR, "FirmaContralor", "Contralor") if role == "CONTRALOR" else (SIG_BOX_GERENTE, "FirmaGerenteCI", "Gerente de Control Interno")
-        signed = signing.sign_pdf(base, signing.load_signer(cfg, role), reason=f"Informe de auditoría {a['code']} — {label}", location=cfg.get("SIGNING_LOCATION", "Venezuela"),
-                                  signer_name=g.claims.get("username", me()), field_name=field, box=box, tsa_url=cfg.get("TSA_URL"))
+        signed = signing.sign_pdf(
+            base, signing.load_signer(cfg, role),
+            reason=f"Informe de auditoría {a['code']} — {label}",
+            location=cfg.get("SIGNING_LOCATION", "Venezuela"),
+            signer_name=g.claims.get("username", me()),
+            field_name=field, box=box, tsa_url=cfg.get("TSA_URL"),
+        )
         key = f"reports/{rid}/v{version}.pdf"
         storage.put(key, signed.pdf_bytes)
     except Exception as ex:  # noqa: BLE001
-        log("AUDIT_REPORT_SIGN_FAILED", outcome="FAILURE", entity_type="audit_report", entity_id=str(rid), metadata={"role": role, "error": type(ex).__name__}, request_id=g.request_id)
-        return err("No fue posible firmar el documento" + (f" ({ex})" if cfg.get("ENV") == "dev" else ""), 500)
+        log(
+            "AUDIT_REPORT_SIGN_FAILED", outcome="FAILURE",
+            entity_type="audit_report", entity_id=str(rid),
+            metadata={"role": role, "error": type(ex).__name__},
+            request_id=g.request_id,
+        )
+        return err(
+            "No fue posible firmar el documento"
+            + (f" ({ex})" if cfg.get("ENV") == "dev" else ""),
+            500,
+        )
+
     repo.add_signed_doc(rid, role, version, signed, key, me())
     st.signed_roles[role] = me()
-    if wf.is_fully_signed(st):
-        repo.set_report_status(rid, "SIGNED")
-    log("AUDIT_REPORT_SIGNED", entity_type="audit_report", entity_id=str(rid), after_data={"role": role, "sha256_signed": signed.sha256_signed, "cert_serial": signed.cert_serial}, request_id=g.request_id)
-    return jsonify(status="SIGNED" if wf.is_fully_signed(st) else "APPROVED", signed_by=role, timestamp_embedded=signed.timestamp_embedded)
+
+    if role == "GERENTE_CI":
+        # Aprobar y firmar en una sola transición. El paso siguiente es Contraloría.
+        repo.set_report_status(
+            rid, "CONTRALOR",
+            gerente_approved_by=me(), gerente_approved_at="now",
+            gerente_approved_body_sha256=rep["body_sha256"],
+        )
+        new_status = "CONTRALOR"
+    else:
+        if not wf.is_fully_signed(st):
+            return err("No se pudo confirmar que ambas firmas finales estén registradas", 409)
+        repo.set_report_status(
+            rid, "SIGNED",
+            contralor_approved_by=me(), contralor_approved_at="now",
+            contralor_approved_body_sha256=rep["body_sha256"],
+            approved_by=me(), approved_at="now",
+            approved_body_sha256=rep["body_sha256"],
+        )
+        new_status = "SIGNED"
+
+    log(
+        "AUDIT_REPORT_SIGNED", entity_type="audit_report",
+        entity_id=str(rid),
+        after_data={
+            "role": role, "version": version,
+            "sha256_signed": signed.sha256_signed,
+            "cert_serial": signed.cert_serial,
+        },
+        request_id=g.request_id,
+    )
+    return jsonify(
+        status=new_status, signed_by=role,
+        timestamp_embedded=signed.timestamp_embedded,
+    )
 
 
 @bp.post("/reports/<uuid:rid>/sign/contralor")
@@ -1513,7 +1750,7 @@ def report_pdf(rid):
     if e:
         return e
     docs = repo.signed_docs(rid)
-    if rep["kind"] == "FINAL" and docs:
+    if rep["kind"] == "FINAL" and rep["status"] in ("CONTRALOR", "SIGNED") and docs:
         latest = docs[-1]
         data = storage.get(latest["object_key"])
         if hashlib.sha256(data).hexdigest() != latest["sha256_signed"]:
@@ -1573,21 +1810,78 @@ def pac_send(aid):
 
 
 @bp.get("/final-reports")
-@permission_required("audit:report_approve", "audit:sign_gerente", "audit:read_final", "audit:financial_review", "audit:systems_review")
+@permission_required(
+    "audit:report_approve", "audit:sign_gerente", "audit:read_final",
+    "audit:financial_review", "audit:systems_review",
+    "audit:report_approve_jefe", "audit:report_approve_gerente",
+)
 def final_reports():
-    """Bandeja de informes finales según el rol: Contralor (en revisión/aprobados), Gerente (por firmar y firmados), lectura (firmados)."""
+    """Bandeja de informes según la etapa de revisión y los permisos del rol."""
     p = perms()
     statuses = {"SIGNED"}
+
     if "audit:sign_gerente" in p:
-        statuses |= {"APPROVED"}
-    if "audit:report_approve" in p or "audit:financial_review" in p or "audit:systems_review" in p:
-        statuses |= {"IN_REVIEW", "APPROVED", "RETURNED"}
-    rows = repo.q("SELECT r.id::text, r.version, r.status, r.submitted_at, r.approved_at, a.code AS audit_code, a.id::text AS audit_id, f.title, u.name AS unit_name, "
-                  "(SELECT count(*) FROM engagement.signed_documents s WHERE s.report_id = r.id) AS signatures "
-                  "FROM engagement.reports r JOIN engagement.audits a ON a.id = r.audit_id JOIN engagement.files f ON f.id = a.file_id JOIN engagement.units u ON u.id = f.unit_id "
-                  "WHERE r.kind = 'FINAL' AND r.status = ANY(CAST(:s AS text[]))" + ("" if "ALL" in audit_domains() else " AND a.audit_domain = ANY(CAST(:d AS text[]))") + " ORDER BY r.updated_at DESC LIMIT 100", s=sorted(statuses), d=sorted(audit_domains()))
-    if "audit:sign_gerente" in p and "audit:report_approve" not in p and "audit:financial_review" not in p and "audit:systems_review" not in p:
-        rows = [r for r in rows if r["status"] == "SIGNED" or r["signatures"] >= 1]          # el Gerente ve lo que ya firmó el Contralor
+        statuses |= {"GERENCIA", "CONTRALOR", "APPROVED", "RETURNED"}
+    if "audit:report_approve" in p:
+        statuses |= {"IN_REVIEW", "GERENCIA", "CONTRALOR", "APPROVED", "RETURNED"}
+    if "audit:report_approve_jefe" in p:
+        statuses |= {"IN_REVIEW", "RETURNED"}
+    if "audit:report_approve_gerente" in p:
+        statuses |= {"GERENCIA", "CONTRALOR", "RETURNED"}
+    if "audit:financial_review" in p or "audit:systems_review" in p:
+        statuses |= {"IN_REVIEW", "CONTRALOR", "APPROVED", "RETURNED"}
+
+    domains = sorted(audit_domains())
+    rows = repo.q(
+        "SELECT r.id::text, r.version, r.status, r.submitted_at, r.approved_at, "
+        "a.code AS audit_code, a.id::text AS audit_id, f.title, u.name AS unit_name, "
+        "(SELECT count(*) FROM engagement.signed_documents s WHERE s.report_id = r.id) AS signatures "
+        "FROM engagement.reports r "
+        "JOIN engagement.audits a ON a.id = r.audit_id "
+        "JOIN engagement.files f ON f.id = a.file_id "
+        "JOIN engagement.units u ON u.id = f.unit_id "
+        "WHERE r.kind = 'FINAL' AND r.status = ANY(CAST(:s AS text[]))"
+        + ("" if "ALL" in domains else " AND a.audit_domain = ANY(CAST(:d AS text[]))")
+        + " ORDER BY r.updated_at DESC LIMIT 100",
+        s=sorted(statuses), d=domains,
+    )
+
+    # Gerencia ve la etapa pendiente de su firma y los documentos que
+    # ya tengan una firma registrada; no recibe informes borrador del equipo.
+    manager_only = (
+        "audit:sign_gerente" in p
+        and "audit:report_approve" not in p
+        and "audit:financial_review" not in p
+        and "audit:systems_review" not in p
+        and "audit:report_approve_jefe" not in p
+    )
+    if manager_only:
+        rows = [
+            r for r in rows
+            if r["status"] in ("GERENCIA", "SIGNED") or r["signatures"] >= 1
+        ]
+
     if "audit:report_approve" not in p:
-        rows = [r for r in rows if can_review_domain(repo.get_audit(r["audit_id"]).get("audit_domain", "GENERAL"))]
+        rows = [
+            r for r in rows
+            if can_review_domain(
+                repo.get_audit(r["audit_id"]).get("audit_domain", "GENERAL")
+            )
+            or (
+                "audit:sign_gerente" in p
+                and (
+                    r["status"] in ("GERENCIA", "SIGNED")
+                    or r["signatures"] >= 1
+                )
+            )
+            or (
+                "audit:report_approve_jefe" in p
+                and r["status"] in ("IN_REVIEW", "RETURNED")
+            )
+            or (
+                "audit:report_approve_gerente" in p
+                and r["status"] in ("GERENCIA", "CONTRALOR", "RETURNED")
+            )
+        ]
+
     return jsonify(reports=rows)

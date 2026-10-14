@@ -86,7 +86,38 @@ Leyenda: ● permitido · (vacío) denegado.
 |---|---|---|---|---|---|
 | `dashboard:operational` | Ver dashboards operativos de auditoría |  | ● | ● |  |
 | `dashboard:executive` | Ver dashboards ejecutivos/KPIs |  |  | ● | ● |
+| `dashboard:contralor` | Acceso exclusivo al dashboard agregado de Contraloría |  |  | ● |  |
+| `kpi:manage` | Crear, modificar y desactivar KPI del dashboard de Contraloría |  |  | ● |  |
 | `kpi:export` | Exportar KPIs |  |  | ● | ● |
+
+## Auditorías (expedientes, cédulas, informes)
+
+| Permiso | Descripción | SYS_ADMIN | AUDITOR | CONTRALOR | GERENCIA |
+|---|---|---|---|---|---|
+| `audit:read` | Ver expedientes, auditorías, cédulas y observaciones |  | ● | ● |  |
+| `audit:read_final` | Ver informes finales aprobados y firmados |  | ● | ● | ● |
+| `audit:manage` | Crear expedientes y auditorías; trabajar cédulas, observaciones y evidencias |  | ● |  |  |
+| `audit:rate` | Ajustar manualmente la calificación (a criterio del Auditor) |  | ● |  |  |
+| `audit:template_manage` | Editar los criterios de las cédulas (plantillas) |  |  | ● |  |
+| `audit:unit_manage` | Administrar el catálogo de unidades y sucursales |  |  | ● |  |
+| `audit:report_draft` | Generar informes previos y finales (automático) |  | ● |  |  |
+| `audit:report_submit` | Enviar el informe final al Contralor / el previo a la unidad |  | ● |  |  |
+| `audit:report_approve` | Aprobar o devolver el informe final (Contralor) |  |  | ● |  |
+| `audit:report_approve_jefe` | Aprobar o devolver el informe final como Jefe de Auditoría |  |  |  |  |
+| `audit:report_approve_gerente` | Aprobar y devolver el informe final como Gerencia |  |  |  | ● |
+| `audit:initial` | Estampar las iniciales del auditor en el informe |  | ● |  |  |
+| `audit:sign_contralor` | Firma electrónica del Contralor en el informe final |  |  | ● |  |
+| `audit:sign_gerente` | Firma electrónica del Gerente de Control Interno |  |  |  | ● |
+| `audit:pac_send` | Enviar el PAC (anexo en Excel) a la unidad |  | ● |  |  |
+| `audit:general_read` | Acceso a auditorías generales existentes |  | ● |  |  |
+| `audit:financial_read` | Acceso exclusivo a auditorías financieras |  |  |  |  |
+| `audit:financial_manage` | Crear y trabajar auditorías financieras |  |  |  |  |
+| `audit:financial_execute` | Pantalla operativa del Auditor Financiero |  |  |  |  |
+| `audit:financial_review` | Supervisar auditorías e informes financieros |  |  |  |  |
+| `audit:systems_read` | Acceso exclusivo a auditorías de sistemas/TI |  |  |  |  |
+| `audit:systems_manage` | Crear y trabajar auditorías de sistemas/TI |  |  |  |  |
+| `audit:systems_execute` | Pantalla operativa del Auditor de Sistemas |  |  |  |  |
+| `audit:systems_review` | Supervisar auditorías e informes de sistemas/TI |  |  |  |  |
 
 ## Audit trail
 
@@ -111,6 +142,10 @@ Ningún usuario puede acumular ambos permisos de un par. El servicio de asignaci
 | `role:assign` | `report:approve` | Quien asigna roles no aprueba informes. |
 | `role:assign` | `role:approve` | Quien solicita un cambio de roles no lo aprueba. |
 | `user:create` | `role:approve` | Quien crea usuarios no aprueba sus roles. |
+| `audit:manage` | `audit:report_approve` | Quien ejecuta la auditoría no aprueba su informe. |
+| `audit:report_draft` | `audit:sign_contralor` | Quien genera el informe no lo firma como Contralor. |
+| `audit:report_draft` | `audit:sign_gerente` | Quien genera el informe no lo firma como Gerente de Control Interno. |
+| `audit:sign_contralor` | `audit:sign_gerente` | Las dos firmas finales las ponen personas distintas. |
 
 ## Reglas adicionales (no expresables solo con permisos)
 

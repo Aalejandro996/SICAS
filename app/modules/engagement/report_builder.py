@@ -43,7 +43,7 @@ def initials_of(full_name: str) -> str:
 
 def auto_conclusion(modality: str, unit: str, overall: dict, observations: list[dict], preliminary: bool) -> str:
     score = overall.get("final")
-    rating = RATING_LABEL[overall["rating"]].lower()
+    rating = RATING_LABEL.get(overall["rating"], str(overall["rating"]).replace("_", " ").capitalize()).lower()
     n = len(observations)
     by = {r: sum(1 for o in observations if o["risk"] == r) for r in ("ALTO", "MEDIO", "BAJO")}
     head = "Resultado PRELIMINAR de la auditoría" if preliminary else "Como resultado de la auditoría"
@@ -184,15 +184,26 @@ def build_pdf(body: dict, state: dict | None = None) -> bytes:
         rows.append([_p(sh["title"], cell), _p(sh["items"], cell), _p(sh["exceptions"], cell),
                      _p("—" if sh["auto"] is None else f"{sh['auto']:.1f}", cell),
                      _p("—" if sh["final"] is None else f"{sh['final']:.1f}" + (" (manual)" if sh["manual_override"] else ""), cell),
-                     _p(RATING_LABEL[sh["rating"]], cell)])
+                     _p(RATING_LABEL.get(sh["rating"], str(sh["rating"]).replace("_", " ").capitalize()), cell)])
     ov = body["overall"]
     rows.append([_p("CALIFICACIÓN GLOBAL", cell), _p(ov["items"], cell), _p(ov["exceptions"], cell), _p("—" if ov["auto"] is None else f"{ov['auto']:.1f}", cell),
-                 _p("—" if ov["final"] is None else f"{ov['final']:.1f}" + (" (manual)" if ov["manual_override"] else ""), cell), _p(RATING_LABEL[ov["rating"]], cell)])
+                 _p("—" if ov["final"] is None else f"{ov['final']:.1f}" + (" (manual)" if ov["manual_override"] else ""), cell), _p(RATING_LABEL.get(ov["rating"], str(ov["rating"]).replace("_", " ").capitalize()), cell)])
     t = table(rows, [5.2 * cm, 1.6 * cm, 2.2 * cm, 2.6 * cm, 2.9 * cm, 3.0 * cm])
     t.setStyle(TableStyle([("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"), ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E8EEF7"))]))
     s += [t, Spacer(1, 4)]
     th = body.get("thresholds") or {}
-    s.append(_p(f"Escala: Satisfactorio ≥ {th.get('satisfactorio', 85)}; Necesita mejoras ≥ {th.get('mejora', 70)}; Insatisfactorio por debajo.", small))
+    excelente = th.get("excelente", 90)
+    satisfactorio = th.get("satisfactorio", 70)
+    aceptable = th.get("aceptable", 60)
+    mejora = th.get("mejora", 50)
+    s.append(_p(
+        f"Escala: Excelente > {excelente}; "
+        f"Satisfactorio ≥ {satisfactorio} y ≤ {excelente}; "
+        f"Aceptable ≥ {aceptable} y < {satisfactorio}; "
+        f"Necesita mejoras ≥ {mejora} y < {aceptable}; "
+        f"No satisfactoria < {mejora}.",
+        small,
+    ))
     if ov.get("manual_override") and body.get("overall_reason"):
         s.append(_p(f"Ajuste manual de la calificación global: {body['overall_reason']}", small))
 

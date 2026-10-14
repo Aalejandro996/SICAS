@@ -83,6 +83,8 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     # Analítica
     "dashboard:operational": ("analytics", "Ver dashboards operativos de auditoría"),
     "dashboard:executive": ("analytics", "Ver dashboards ejecutivos/KPIs"),
+    "dashboard:contralor": ("analytics", "Acceso exclusivo al dashboard agregado de Contraloría"),
+    "kpi:manage": ("analytics", "Crear, modificar y desactivar KPI del dashboard de Contraloría"),
     "kpi:export": ("analytics", "Exportar KPIs"),
     # Auditorías (expedientes, cédulas, informes)
     "audit:read": ("engagement", "Ver expedientes, auditorías, cédulas y observaciones"),
@@ -144,7 +146,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "report:verify_signature", "report:export", "template:manage",
         "lcft:alert_read", "lcft:alert_manage", "lcft:rule_configure",
         "regulatory:read", "regulatory:approve",
-        "dashboard:operational", "dashboard:executive", "kpi:export",
+        "dashboard:operational", "dashboard:executive", "dashboard:contralor", "kpi:manage", "kpi:export",
         "role:read", "role:approve", "param:read",
         "auditlog:read", "auditlog:verify_chain", "auditlog:export",
         "audit:read", "audit:read_final", "audit:report_approve", "audit:sign_contralor",

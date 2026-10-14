@@ -53,7 +53,7 @@ SPECS = {
     "retention_years": (_int_range(1, 30, "retention_years"), 10),
     "findings_sla_days": (_int_range(1, 90, "findings_sla_days"), 15),
     "alert_routing": (_routing, {}),
-    "rating_thresholds": (_thresholds, {"satisfactorio": 85, "mejora": 70}),
+    "rating_thresholds": (_thresholds, {"satisfactorio": 70, "mejora": 50}),
 }
 
 

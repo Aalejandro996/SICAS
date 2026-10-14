@@ -16,11 +16,38 @@ class RbacTest(unittest.TestCase):
         for forbidden in ("finding:read", "report:read", "ingestion:read", "auditlog:read", "report:sign"):
             self.assertNotIn(forbidden, perms)
 
-    def test_gerencia_is_read_only(self):
+    def test_gerencia_can_approve_its_stage_without_operational_edit(self):
         perms = P.permissions_for_roles([P.GERENCIA])
-        self.assertTrue(all(p.split(":")[1] in ("read_approved", "read_summary", "executive", "verify_signature", "export", "read_final", "sign_gerente")
-                            for p in perms))
 
+        allowed_actions = {
+            "read_approved",
+            "read_summary",
+            "executive",
+            "verify_signature",
+            "export",
+            "read_final",
+            "sign_gerente",
+            "report_approve_gerente",
+        }
+        self.assertTrue(
+            all(p.split(":")[1] in allowed_actions for p in perms),
+            f"Permisos no previstos para Gerencia: {sorted(perms)}",
+        )
+
+        # Gerencia aprueba y firma su etapa, pero no administra auditorías
+        # ni modifica cédulas o informes operativos.
+        self.assertIn("audit:report_approve_gerente", perms)
+        self.assertIn("audit:sign_gerente", perms)
+
+        for forbidden in (
+            "audit:manage",
+            "audit:rate",
+            "audit:report_draft",
+            "audit:report_submit",
+            "audit:template_manage",
+            "audit:unit_manage",
+        ):
+            self.assertNotIn(forbidden, perms)
     def test_only_contralor_signs_and_approves(self):
         for perm in ("report:sign", "report:approve"):
             holders = [r for r, ps in P.ROLE_PERMISSIONS.items() if perm in ps]

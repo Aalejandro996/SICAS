@@ -475,7 +475,12 @@
     const m = dlg(`${r.kind === 'PREVIO' ? 'Informe previo' : 'Informe final'} v${r.version}`, content);
     const btn = (label, cls, fn) => h('button', { class: cls || '', onclick: async (e) => { e.target.disabled = true; try { await fn(); } finally { e.target.disabled = false; } } }, label);
     const post = (label, path, cls, body) => btn(label, cls, async () => { const x = await S.send(`${A}/reports/${rid}/${path}`, 'POST', body || {}); if (x) { S.say(x.note || 'Hecho.', true); done(); reopen(m); } });
-    m.footer.append(btn(r.status === 'APPROVED' || r.status === 'SIGNED' ? 'Abrir / imprimir PDF' : 'Vista previa PDF (con marca de agua)', 'secondary', () => S.openFile(`${A}/reports/${rid}/pdf`, 'informe.pdf')));
+    m.footer.append(btn(
+      r.status === 'SIGNED' || r.status === 'APPROVED' ? 'Abrir / imprimir PDF' :
+      r.status === 'CONTRALOR' ? 'Ver PDF firmado por Gerencia' :
+      'Vista previa PDF (con marca de agua)',
+      'secondary', () => S.openFile(`${A}/reports/${rid}/pdf`, 'informe.pdf')
+    ));
     if (c.edit) m.footer.append(post('Regenerar con los datos actuales', 'regenerate', 'secondary'), btn('Editar conclusión', 'secondary', async () => {
       const v = await S.ask('Conclusión del informe', [{ name: 'conclusion', label: 'Texto (déjelo vacío para volver a la conclusión automática)', type: 'textarea', value: b.conclusion }], 'Guardar', 'Cambiar el contenido anula las iniciales ya estampadas.');
       if (v) { const x = await S.send(`${A}/reports/${rid}/regenerate`, 'POST', { conclusion: v.conclusion }); if (x) { done(); reopen(m); } }
@@ -484,7 +489,7 @@
       if (v && await S.send(`${A}/reports/${rid}/collaborator`, 'POST', v)) { done(); reopen(m); }
     }));
     if (c.initial) m.footer.append(post('Estampar mis iniciales', 'initial', 'secondary'));
-    if (c.submit) m.footer.append(post('Enviar al Contralor', 'submit'));
+    if (c.submit) m.footer.append(post('Enviar al Jefe de Auditoría', 'submit'));
     if (c.send_previo) m.footer.append(btn('Enviar a la unidad', '', async () => {
       const v = await S.ask('Enviar informe previo', [{ name: 'to_name', label: 'Destinatario en la unidad', required: true }, { name: 'to_email', label: 'Correo (opcional, para envío automático)', type: 'email' }], 'Enviar');
       if (v) { const x = await S.send(`${A}/reports/${rid}/send-previo`, 'POST', v); if (x) { S.say(x.note || 'Enviado.', true); done(); reopen(m); } }
@@ -496,9 +501,10 @@
     if (c.review) m.footer.append(btn('Devolver al auditor', 'danger', async () => {
       const v = await S.ask('Devolver el informe', [{ name: 'comment', label: 'Qué debe corregirse (mínimo 10 caracteres)', type: 'textarea', required: true }], 'Devolver');
       if (v && await S.send(`${A}/reports/${rid}/return`, 'POST', v)) { done(); reopen(m); }
-    }), post('Aprobar informe', 'approve', 'ok'));
-    if (c.sign_contralor) m.footer.append(post('Firmar como Contralor', 'sign/contralor', 'ok'));
-    if (c.sign_gerente) m.footer.append(post('Firmar como Gerente de Control Interno', 'sign/gerente', 'ok'));
+    }));
+    if (c.approve_jefe) m.footer.append(post('Aprobar y enviar a Gerencia', 'approve/jefe', 'ok'));
+    if (c.sign_gerente) m.footer.append(post('Aprobar y firmar como Gerente de Control Interno', 'sign/gerente', 'ok'));
+    if (c.sign_contralor) m.footer.append(post('Aprobar y firmar como Contralor', 'sign/contralor', 'ok'));
     m.footer.append(closeBtn(m));
   }
 

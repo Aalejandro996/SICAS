@@ -1,0 +1,1011 @@
+/* SICAS INSTITUCIONAL MODERNO — CAPA VISUAL 1 */
+
+:root {
+  --sicas-ink: #20334a;
+  --sicas-muted: #65778c;
+  --sicas-navy: #172b46;
+  --sicas-navy-light: #24466d;
+  --sicas-blue: #285b91;
+  --sicas-teal: #397f79;
+  --sicas-canvas: #f3f6fa;
+  --sicas-surface: #ffffff;
+  --sicas-surface-soft: #f7f9fc;
+  --sicas-border: #dce4ed;
+  --sicas-border-strong: #c8d4e1;
+  --sicas-shadow: 0 5px 18px rgba(23, 43, 70, .065);
+  --sicas-radius: 12px;
+}
+
+body {
+  color: var(--sicas-ink);
+  background: var(--sicas-canvas);
+}
+
+/* Espacio de trabajo y jerarquía tipográfica */
+#page {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--sicas-ink);
+  line-height: 1.55;
+}
+
+#page > * {
+  min-width: 0;
+}
+
+#page :is(h1, h2, h3, h4) {
+  color: var(--sicas-ink);
+  line-height: 1.3;
+  letter-spacing: -.018em;
+}
+
+#page h1 {
+  margin: 0 0 1rem;
+  font-size: clamp(1.4rem, 2vw, 1.9rem);
+  font-weight: 750;
+  padding-bottom: .7rem;
+  border-bottom: 1px solid var(--sicas-border);
+}
+
+#page h2 {
+  font-size: clamp(1.08rem, 1.55vw, 1.35rem);
+  font-weight: 720;
+}
+
+#page :is(.muted, .hint, .help-text, .description) {
+  color: var(--sicas-muted);
+}
+
+/* Paneles y secciones */
+#page :is(.panel, .card, .section, .audit-section,
+          .worksheet-section, .ctl-panel, .ctl-card) {
+  min-width: 0;
+  border: 1px solid var(--sicas-border);
+  border-radius: var(--sicas-radius);
+  background: var(--sicas-surface);
+  box-shadow: var(--sicas-shadow);
+}
+
+#page fieldset {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--sicas-border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+#page legend {
+  padding: 0 .4rem;
+  color: var(--sicas-ink);
+  font-weight: 700;
+}
+
+#page details {
+  border: 1px solid var(--sicas-border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+#page details > summary {
+  color: var(--sicas-navy-light);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* Controles uniformes y foco accesible */
+#page :is(input, select, textarea, button):focus-visible {
+  outline: 3px solid rgba(49, 105, 166, .28);
+  outline-offset: 2px;
+}
+
+#page input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]),
+#page select,
+#page textarea {
+  width: 100%;
+  max-width: 100%;
+  min-height: 40px;
+  padding: .58rem .72rem;
+  color: var(--sicas-ink);
+  background: #fff;
+  border: 1px solid var(--sicas-border-strong);
+  border-radius: 8px;
+}
+
+#page textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+#page input[type="checkbox"],
+#page input[type="radio"] {
+  accent-color: var(--sicas-blue);
+}
+
+#page label {
+  color: #354960;
+  font-weight: 560;
+}
+
+#page :is(.toolbar, .actions, .filters, .filter-bar, .form-actions) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .7rem;
+}
+
+#page button:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+/* Tablas de auditorías, expedientes y cédulas */
+#page :is(.grid-wrap, .table-wrap, .table-responsive,
+          .table-container, .responsive-table, .overflow-x-auto) {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior-inline: contain;
+  border: 1px solid var(--sicas-border);
+  border-radius: 11px;
+  background: #fff;
+}
+
+#page table {
+  width: 100%;
+  max-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: #293c51;
+  background: #fff;
+  font-size: .89rem;
+}
+
+#page :is(.grid-wrap, .table-wrap, .table-responsive,
+          .table-container, .responsive-table, .overflow-x-auto) table {
+  min-width: 610px;
+}
+
+#page table :is(th, td) {
+  padding: .7rem .8rem;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid #e5eaf1;
+}
+
+#page table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  color: #233e5b;
+  background: #edf3f9;
+  font-size: .8rem;
+  font-weight: 750;
+  border-bottom-color: #d5e0eb;
+}
+
+#page table tbody tr:nth-child(even) td {
+  background: #f8fafc;
+}
+
+#page table tbody tr:hover td {
+  background: #eff6fc;
+}
+
+#page table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Estados y etiquetas */
+#page :is(.badge, .pill, .tag, .status-badge, .chip) {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: .2rem .55rem;
+  border: 1px solid #d8e2ed;
+  border-radius: 999px;
+  color: #35516f;
+  background: #f0f5fa;
+  font-size: .76rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+#page :is(.success, .status-success, .badge-success) {
+  color: #20664c;
+  background: #e8f6ef;
+  border-color: #bfe6d2;
+}
+
+#page :is(.warning, .status-warning, .badge-warning) {
+  color: #855b13;
+  background: #fff5df;
+  border-color: #f0dfb2;
+}
+
+#page :is(.danger, .status-danger, .badge-danger) {
+  color: #9a3038;
+  background: #fff0f0;
+  border-color: #f0c9cb;
+}
+
+/* Expedientes y auditorías */
+#page[data-sicas-view="audit"] :is(.panel, .card, .section, fieldset) {
+  border-top: 3px solid var(--sicas-blue);
+}
+
+#page[data-sicas-view="audit"] :is(.toolbar, .actions, .filters, .row) {
+  flex-wrap: wrap;
+}
+
+#page[data-sicas-view="audit"] table td:first-child {
+  color: #294969;
+  font-weight: 650;
+}
+
+/* Cédulas de suscripción, reclamo e indemnización */
+#page[data-sicas-view="worksheet"] :is(.panel, .card, .section, fieldset) {
+  border-top: 3px solid var(--sicas-teal);
+}
+
+#page[data-sicas-view="worksheet"] table tbody td:first-child {
+  color: #294d50;
+  font-weight: 650;
+}
+
+#page[data-sicas-view="worksheet"] textarea {
+  min-height: 82px;
+}
+
+#page[data-sicas-view="worksheet"] input[type="number"] {
+  max-width: 125px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dashboard del Contralor */
+#page[data-sicas-view="contralor"] :is(
+  .ctl-kpi-grid, .ctl-kpis, .ctl-kpi-cards, .kpi-grid,
+  .metrics-grid, .stats-grid, .dashboard-metrics
+) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  gap: 1rem;
+  align-items: stretch;
+}
+
+#page[data-sicas-view="contralor"] :is(
+  .ctl-kpi, .ctl-kpi-card, .kpi-card, .metric-card,
+  .stat-card, .summary-card, .dashboard-card
+) {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--sicas-border);
+  border-radius: var(--sicas-radius);
+  background: #fff;
+  box-shadow: var(--sicas-shadow);
+}
+
+#page[data-sicas-view="contralor"] :is(
+  .ctl-tabs, [role="tablist"]
+) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  padding-bottom: .6rem;
+  border-bottom: 1px solid var(--sicas-border);
+}
+
+#page[data-sicas-view="contralor"] :is(
+  .ctl-tabs, [role="tablist"]
+) button.active,
+#page[data-sicas-view="contralor"] :is(
+  .ctl-tabs, [role="tablist"]
+) button[aria-selected="true"] {
+  color: #fff;
+  background: var(--sicas-navy);
+  border-color: var(--sicas-navy);
+}
+
+#page[data-sicas-view="contralor"] :is(svg, canvas, img) {
+  max-width: 100%;
+}
+
+/* Actividad del auditor */
+#page[data-sicas-view="activity"] :is(.panel, .card, .section) {
+  border-top: 3px solid #6a7ea0;
+}
+
+/* Navegación plegable que ya está integrada en app.js */
+#nav [data-sicas-nav-item] {
+  min-width: 0;
+  border-radius: 9px;
+  transition: color .15s ease, background-color .15s ease;
+}
+
+#nav [data-sicas-nav-item]:focus-visible,
+#nav .sicas-nav-toggle:focus-visible {
+  outline: 3px solid #9bc9f0;
+  outline-offset: 2px;
+}
+
+/* Apariencia del login/MFA sin cambiar visibilidad ni .hidden */
+#view-login:not(.hidden),
+#view-change:not(.hidden),
+#view-enroll:not(.hidden),
+#view-mfa:not(.hidden) {
+  border: 1px solid var(--sicas-border);
+  border-radius: 15px;
+  box-shadow: var(--sicas-shadow);
+}
+
+/* Adaptación móvil */
+@media (max-width: 850px) {
+  #page[data-sicas-view="contralor"] :is(
+    .ctl-kpi-grid, .ctl-kpis, .ctl-kpi-cards, .kpi-grid,
+    .metrics-grid, .stats-grid, .dashboard-metrics
+  ) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  #page {
+    font-size: .92rem;
+  }
+
+  #page h1 {
+    font-size: 1.35rem;
+  }
+
+  #page table :is(th, td) {
+    padding: .58rem .63rem;
+  }
+
+  #page[data-sicas-view="contralor"] :is(
+    .ctl-kpi-grid, .ctl-kpis, .ctl-kpi-cards, .kpi-grid,
+    .metrics-grid, .stats-grid, .dashboard-metrics
+  ) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #page *, #nav * {
+    transition-duration: .01ms !important;
+  }
+}
+
+/* SICAS-CONTRALOR-DASHBOARD-POLISH-20261014-v1 */
+
+/* Filtros: orden y agrupación sin alterar los controles */
+#page .ctl-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 16px;
+  margin-bottom: 14px;
+  border: 1px solid #d9e3ee;
+  border-radius: 13px;
+  background: linear-gradient(135deg, #fff 0%, #f7fafd 100%);
+  box-shadow: 0 4px 14px rgba(23, 43, 70, .045);
+}
+
+#page .ctl-filters > label {
+  flex: 1 1 150px;
+  min-width: 135px;
+  margin: 0;
+  color: #43566c;
+  font-size: .83rem;
+  font-weight: 650;
+}
+
+#page .ctl-filters :is(input, select) {
+  margin-top: 5px;
+  min-width: 0;
+}
+
+/* Pestañas del dashboard ejecutivo */
+#page .ctl-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px;
+  margin: 12px 0 15px;
+  border: 1px solid #dce5ee;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(23, 43, 70, .04);
+}
+
+#page .ctl-tabs .ctl-tab-button {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 9px 14px;
+  color: #435a73;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: .86rem;
+  font-weight: 650;
+}
+
+#page .ctl-tabs .ctl-tab-button:hover {
+  color: #183b63;
+  background: #eef4fa;
+}
+
+#page .ctl-tabs .ctl-tab-button.is-active {
+  color: #fff;
+  background: #1c385b;
+  border-color: #1c385b;
+  box-shadow: 0 2px 5px rgba(23, 43, 70, .15);
+}
+
+#page .ctl-tab-panel {
+  min-width: 0;
+  width: 100%;
+}
+
+/* Tarjetas de indicadores */
+#page .ctl-cards,
+#page .ctl-ingestion-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+  margin: 12px 0 16px;
+}
+
+#page .ctl-cards > .card.stat,
+#page .ctl-ingestion-cards > .card.stat {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 5px;
+  min-width: 0;
+  min-height: 94px;
+  padding: 15px 14px;
+  overflow-wrap: anywhere;
+  border: 1px solid #dce5ee;
+  border-top: 3px solid #3678b5;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 4px 13px rgba(23, 43, 70, .055);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+#page .ctl-cards > .card.stat:nth-child(4n + 2),
+#page .ctl-ingestion-cards > .card.stat:nth-child(4n + 2) {
+  border-top-color: #319c91;
+}
+
+#page .ctl-cards > .card.stat:nth-child(4n + 3),
+#page .ctl-ingestion-cards > .card.stat:nth-child(4n + 3) {
+  border-top-color: #8065c8;
+}
+
+#page .ctl-cards > .card.stat:nth-child(4n + 4),
+#page .ctl-ingestion-cards > .card.stat:nth-child(4n + 4) {
+  border-top-color: #dc9b31;
+}
+
+#page .ctl-cards > .card.stat:hover,
+#page .ctl-ingestion-cards > .card.stat:hover {
+  box-shadow: 0 7px 19px rgba(23, 43, 70, .09);
+  border-color: #cbd9e7;
+}
+
+/* Paneles de resultados */
+#page .contralor-panel {
+  min-width: 0;
+  margin: 12px 0;
+  padding: 18px;
+  border: 1px solid #dce5ee;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 4px 15px rgba(23, 43, 70, .05);
+}
+
+#page .contralor-panel > :is(h2, h3, h4):first-child {
+  margin-top: 0;
+  padding-bottom: 11px;
+  border-bottom: 1px solid #e4ebf2;
+  color: #203b5c;
+}
+
+/* Tablas: mantener legibles las columnas comparativas */
+#page .tablewrap {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow: auto;
+  overscroll-behavior-inline: contain;
+  border: 1px solid #e0e8f0;
+  border-radius: 10px;
+  background: #fff;
+}
+
+#page .tablewrap table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: .84rem;
+}
+
+#page .ctl-tab-panel-resumen .tablewrap table {
+  min-width: 930px;
+}
+
+#page .tablewrap table th {
+  padding: 11px 12px;
+  color: #294561;
+  background: #eef4fa;
+  border-bottom: 1px solid #d7e2ed;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+#page .tablewrap table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e8edf3;
+  vertical-align: middle;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+#page .tablewrap table tbody tr:nth-child(even) td {
+  background: #f8fafc;
+}
+
+#page .tablewrap table tbody tr:hover td {
+  background: #edf5fc;
+}
+
+#page .tablewrap table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Gráficos y tendencias */
+#page .ctl-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  align-items: stretch;
+  gap: 14px;
+  min-width: 0;
+  margin: 12px 0 16px;
+}
+
+#page .ctl-chart-grid > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#page .ctl-trend-chart {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid #e0e8f0;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fff, #f9fbfe);
+}
+
+#page .ctl-trend-chart svg,
+#page .ctl-chart-grid svg,
+#page .ctl-chart-grid canvas {
+  display: block;
+  max-width: 100%;
+}
+
+/* Alertas y vencimientos */
+#page .ctl-alert-details {
+  margin: 12px 0;
+  border: 1px solid #dce5ee;
+  border-radius: 10px;
+  background: #f9fbfd;
+}
+
+#page .ctl-alert-details > summary {
+  padding: 12px 14px;
+  color: #294561;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#page .ctl-alert-details[open] > summary {
+  border-bottom: 1px solid #e1e8f0;
+}
+
+#page .ctl-alert-details > :not(summary) {
+  max-width: 100%;
+}
+
+/* Gestión del histórico de KPI */
+#page .ctl-kpi-host,
+#page .ctl-kpi-history {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#page .ctl-kpi-history {
+  margin-top: 14px;
+}
+
+#page .ctl-kpi-host .tablewrap,
+#page .ctl-kpi-history .tablewrap {
+  margin-block: 10px;
+}
+
+/* Adaptación móvil */
+@media (max-width: 720px) {
+  #page .ctl-filters {
+    align-items: stretch;
+  }
+
+  #page .ctl-filters > label {
+    flex-basis: 100%;
+  }
+
+  #page .ctl-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+  }
+
+  #page .ctl-tab-panel-resumen .tablewrap table {
+    min-width: 930px;
+  }
+
+  #page .contralor-panel {
+    padding: 13px;
+  }
+
+  #page .ctl-chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 440px) {
+  #page .ctl-cards,
+  #page .ctl-ingestion-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  #page .ctl-cards > .card.stat,
+  #page .ctl-ingestion-cards > .card.stat {
+    padding: 11px;
+  }
+}
+
+/* SICAS-AUDIT-MODULE-POLISH-20261014-v1 */
+
+/* Área de trabajo y encabezado */
+#page[data-sicas-view="audit"] {
+  color: #20334a;
+  min-width: 0;
+  max-width: 100%;
+}
+
+#page[data-sicas-view="audit"] > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#page[data-sicas-view="audit"] h2 {
+  margin: 0 0 1rem;
+  padding: 0 0 .85rem;
+  color: #172f4e;
+  font-size: clamp(1.4rem, 2vw, 1.85rem);
+  font-weight: 760;
+  letter-spacing: -.02em;
+  line-height: 1.3;
+  border-bottom: 1px solid #dce5ee;
+}
+
+#page[data-sicas-view="audit"] h3 {
+  margin: 1.25rem 0 .65rem;
+  padding: .72rem .9rem;
+  color: #254667;
+  background: linear-gradient(90deg, #edf4fb 0%, #f8fafc 100%);
+  border: 1px solid #dce6f0;
+  border-left: 4px solid #326b9f;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 720;
+}
+
+/* Listados: Auditorías, Expedientes e Informes finales */
+#page[data-sicas-view="audit"] table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  border: 1px solid #dce5ee;
+  border-radius: 10px;
+  background: #fff;
+  color: #293c51;
+  font-size: .87rem;
+  line-height: 1.45;
+  border-spacing: 0;
+  box-shadow: 0 3px 12px rgba(23, 43, 70, .045);
+}
+
+/* Ancho mínimo para que las columnas no se compriman hasta ser ilegibles */
+#page[data-sicas-view="audit"] table thead,
+#page[data-sicas-view="audit"] table tbody {
+  min-width: 100%;
+}
+
+#page[data-sicas-view="audit"] table th,
+#page[data-sicas-view="audit"] table td {
+  padding: .72rem .8rem;
+  vertical-align: middle;
+  text-align: left;
+  border-bottom: 1px solid #e6ecf2;
+  overflow-wrap: normal;
+}
+
+#page[data-sicas-view="audit"] table th {
+  color: #284666;
+  background: #edf3f9;
+  font-size: .79rem;
+  font-weight: 750;
+  white-space: nowrap;
+  border-bottom: 1px solid #d5e0eb;
+}
+
+#page[data-sicas-view="audit"] table tbody tr:nth-child(even) td {
+  background: #f8fafc;
+}
+
+#page[data-sicas-view="audit"] table tbody tr:hover td {
+  background: #eef6fd;
+}
+
+#page[data-sicas-view="audit"] table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Botones de pestañas y acciones */
+#page[data-sicas-view="audit"] button {
+  max-width: 100%;
+  border-radius: 8px;
+  font-weight: 620;
+  transition: color .15s ease, background-color .15s ease,
+    border-color .15s ease;
+}
+
+#page[data-sicas-view="audit"] button:focus-visible,
+#page[data-sicas-view="audit"] a:focus-visible {
+  outline: 3px solid rgba(49, 105, 166, .3);
+  outline-offset: 2px;
+}
+
+#page[data-sicas-view="audit"] button.active,
+#page[data-sicas-view="audit"] button.is-active,
+#page[data-sicas-view="audit"] button[aria-selected="true"] {
+  color: #fff;
+  background: #1f4168;
+  border-color: #1f4168;
+}
+
+/* Formularios de auditoría y filtros */
+#page[data-sicas-view="audit"] :is(input, select, textarea) {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+#page[data-sicas-view="audit"] :is(fieldset, details) {
+  min-width: 0;
+  border: 1px solid #dce5ee;
+  border-radius: 10px;
+  background: #fff;
+}
+
+#page[data-sicas-view="audit"] legend {
+  padding: 0 .4rem;
+  color: #294969;
+  font-weight: 700;
+}
+
+#page[data-sicas-view="audit"] :is(.row, .toolbar, .actions, .filters) {
+  flex-wrap: wrap;
+  gap: .7rem;
+}
+
+/* Mensajes y estados */
+#page[data-sicas-view="audit"] :is(.muted, .hint, .help-text) {
+  color: #687a8e;
+}
+
+#page[data-sicas-view="audit"] :is(.badge, .pill, .tag, .status-badge) {
+  display: inline-flex;
+  align-items: center;
+  padding: .2rem .55rem;
+  border-radius: 999px;
+  font-size: .76rem;
+  font-weight: 700;
+}
+
+/* Evitar desbordamientos en pantallas pequeñas */
+@media (max-width: 720px) {
+  #page[data-sicas-view="audit"] h3 {
+    font-size: .95rem;
+    padding: .65rem .75rem;
+  }
+
+  #page[data-sicas-view="audit"] table {
+    font-size: .83rem;
+  }
+
+  #page[data-sicas-view="audit"] table th,
+  #page[data-sicas-view="audit"] table td {
+    padding: .62rem .68rem;
+  }
+}
+
+/* SICAS-HOME-AUDIT-LAYOUT-FIX-20261014-v1 */
+
+/* FIX: las tablas deben conservar su modelo de tabla, no display:block */
+#page[data-sicas-view="audit"] > div {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+#page[data-sicas-view="audit"] table {
+  display: table !important;
+  width: 100% !important;
+  min-width: 100% !important;
+  max-width: 100% !important;
+  overflow: visible !important;
+  table-layout: auto;
+  border-collapse: separate;
+}
+
+#page[data-sicas-view="audit"] table thead,
+#page[data-sicas-view="audit"] table tbody {
+  min-width: 0 !important;
+}
+
+#page[data-sicas-view="audit"] table th,
+#page[data-sicas-view="audit"] table td {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* FIX: menú plegado, evitar que el título NAVEGACIÓN se recorte */
+#view-app.sicas-nav-collapsed #nav::before {
+  display: none !important;
+  content: none !important;
+}
+
+/* INICIO: jerarquía visual y espacios */
+#page[data-sicas-view="general"] > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#page[data-sicas-view="general"] > div > h2:first-child {
+  margin: 0 0 12px;
+  padding: 0 0 10px;
+  color: #172f4e;
+  font-size: clamp(1.4rem, 2vw, 1.85rem);
+  font-weight: 760;
+  letter-spacing: -.02em;
+  border-bottom: 1px solid #dce5ee;
+}
+
+/* Tarjetas métricas que siguen al título Inicio */
+#page[data-sicas-view="general"] > div > h2:first-child + div:has(> .card.stat) {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin: 12px 0 18px;
+  align-items: stretch;
+}
+
+#page[data-sicas-view="general"] > div > h2:first-child + div:has(> .card.stat) > .card.stat {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid #dce5ee;
+  border-top: 3px solid #3479b8;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(23, 43, 70, .055);
+}
+
+#page[data-sicas-view="general"] > div > h2:first-child + div:has(> .card.stat) > .card.stat:nth-child(4n + 2) {
+  border-top-color: #319c91;
+}
+
+#page[data-sicas-view="general"] > div > h2:first-child + div:has(> .card.stat) > .card.stat:nth-child(4n + 3) {
+  border-top-color: #8065c8;
+}
+
+#page[data-sicas-view="general"] > div > h2:first-child + div:has(> .card.stat) > .card.stat:nth-child(4n + 4) {
+  border-top-color: #dc9b31;
+}
+
+#page[data-sicas-view="general"] > div > h2:first-child + div:has(> .card.stat) > .card.stat:hover {
+  border-color: #bfd2e4;
+  box-shadow: 0 7px 20px rgba(23, 43, 70, .09);
+}
+
+/* Secciones de Inicio: Auditorías en curso e Informes finales */
+#page[data-sicas-view="general"] > div > h3 {
+  margin: 16px 0 9px;
+  padding: 0 0 8px;
+  color: #254667;
+  font-size: 1rem;
+  font-weight: 730;
+  border-bottom: 1px solid #dce5ee;
+  background: transparent;
+}
+
+#page[data-sicas-view="general"] table {
+  display: table !important;
+  width: 100% !important;
+  min-width: 100% !important;
+  max-width: 100% !important;
+  overflow: visible !important;
+  table-layout: auto;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid #dce5ee;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(23, 43, 70, .045);
+}
+
+#page[data-sicas-view="general"] table th {
+  padding: 11px 12px;
+  color: #294561;
+  background: #edf3f9;
+  border-bottom: 1px solid #d7e2ed;
+  font-weight: 720;
+  text-align: left;
+}
+
+#page[data-sicas-view="general"] table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e8edf3;
+  vertical-align: middle;
+}
+
+#page[data-sicas-view="general"] table tbody tr:nth-child(even) td {
+  background: #f8fafc;
+}
+
+#page[data-sicas-view="general"] table tbody tr:hover td {
+  background: #eef6fd;
+}
+
+#page[data-sicas-view="general"] table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Evitar que Inicio se desborde en pantallas estrechas */
+@media (max-width: 720px) {
+  #page[data-sicas-view="general"] > div > h2:first-child + div:has(> .card.stat) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #page[data-sicas-view="general"] table {
+    font-size: .82rem;
+  }
+
+  #page[data-sicas-view="general"] table th,
+  #page[data-sicas-view="general"] table td {
+    padding: 8px;
+  }
+}

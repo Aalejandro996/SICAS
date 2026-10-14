@@ -1,15 +1,15 @@
-cat >> .gitignore <<'EOF'
-
-# ============================================================
-# SECRETOS Y CREDENCIALES
-# ============================================================
+# Secretos y credenciales
 .env
 .env.*
 !.env.example
 secrets/
 **/secrets/
+infra/docker/secrets/
+infra/docker/tls/
+hola.md
+*.pass
 
-# Certificados, claves y contenedores de claves
+# Certificados y contenedores de claves
 *.pem
 *.key
 *.p12
@@ -18,21 +18,13 @@ secrets/
 *.keystore
 *.crt
 
-# ============================================================
-# BASE DE DATOS / SQL
-# ============================================================
-*.sql
-**/*.sql
-
-# Dumps y respaldos de BD
+# Respaldos y exportaciones de bases de datos
 *.dump
 *.backup
 *.bak
 *.sql.gz
 
-# ============================================================
-# PYTHON / ENTORNO LOCAL
-# ============================================================
+# Python y entornos locales
 .venv/
 venv/
 env/
@@ -41,25 +33,18 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# ============================================================
-# LOGS
-# ============================================================
+# Logs
 *.log
 logs/
 
-# ============================================================
-# EDITOR / SISTEMA
-# ============================================================
+# Editor y sistema
 .DS_Store
 .vscode/
 .idea/
 
-# ============================================================
-# ARCHIVOS TEMPORALES
-# ============================================================
+# Archivos temporales
 *.tmp
 *.temp
 *.swp
 *.swo
-EOF*.pyc
-hola.md
+~$*.xls*
