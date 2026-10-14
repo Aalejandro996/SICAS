@@ -110,20 +110,92 @@
     return typeof p.title === 'function' ? p.title() : p.title;
   }
 
-  function buildNav() {
-    const nav = $('nav');
-    nav.replaceChildren(...visible().map((p) =>
-      S.h(
-        'button',
-        {
-          id: 'nav-' + p.id,
-          onclick: () => { location.hash = '#/' + p.id; }
-        },
-        pageTitle(p)
-      )
-    ));
+  // SICAS-INTEGRATED-VISUAL-20261014-v2
+  function shortNavName(label) {
+    const words = String(label || '').trim().split(/\s+/).filter(Boolean);
+    if (words.length > 1) {
+      return words.slice(0, 2)
+        .map((word) => Array.from(word)[0])
+        .join('')
+        .toLocaleUpperCase('es');
+    }
+    return Array.from(words[0] || '')
+      .slice(0, 2)
+      .join('')
+      .toLocaleUpperCase('es');
   }
 
+  function classifyPage() {
+    const root = $('page');
+    const heading = (
+      root.querySelector('h1, h2, h3')?.textContent || ''
+    ).trim().toLocaleLowerCase('es');
+
+    let view = 'general';
+
+    if (/contralor|dashboard ejecutivo/.test(heading)) {
+      view = 'contralor';
+    } else if (/registro de actividad|actividad del auditor/.test(heading)) {
+      view = 'activity';
+    } else if (/c[eé]dula|suscripci[oó]n|reclamo|indemnizaci[oó]n/.test(heading)) {
+      view = 'worksheet';
+    } else if (/auditor[ií]a|expediente|trabajo de campo/.test(heading)) {
+      view = 'audit';
+    }
+
+    root.dataset.sicasView = view;
+  }
+
+  function buildNav() {
+    const nav = $('nav');
+    const app = $('view-app');
+    const collapsed = app.classList.contains('sicas-nav-collapsed');
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'sicas-nav-toggle';
+    toggle.setAttribute('aria-controls', 'nav');
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.title = collapsed ? 'Expandir navegación' : 'Plegar navegación';
+    toggle.textContent = collapsed ? '› Expandir menú' : '‹ Plegar menú';
+
+    toggle.addEventListener('click', () => {
+      const isCollapsed = app.classList.toggle('sicas-nav-collapsed');
+      const label = isCollapsed ? '› Expandir menú' : '‹ Plegar menú';
+
+      toggle.setAttribute('aria-expanded', String(!isCollapsed));
+      toggle.title = isCollapsed ? 'Expandir navegación' : 'Plegar navegación';
+
+      if (toggle.textContent !== label) {
+        toggle.textContent = label;
+      }
+    });
+
+    const buttons = visible().map((p) => {
+      const label = String(pageTitle(p) || '').trim();
+      const button = document.createElement('button');
+
+      button.type = 'button';
+      button.id = 'nav-' + p.id;
+      button.dataset.sicasNavItem = 'true';
+      button.dataset.sicasShort = shortNavName(label);
+      button.setAttribute('aria-label', label);
+      button.title = label;
+
+      const labelElement = document.createElement('span');
+      labelElement.className = 'sicas-nav-label';
+      labelElement.textContent = label;
+      button.appendChild(labelElement);
+
+      button.addEventListener('click', () => {
+        location.hash = '#/' + p.id;
+      });
+
+      return button;
+    });
+
+    nav.replaceChildren(toggle, ...buttons);
+  }
   async function navigate() {
     if (!S.user) return;
     if (S.onLeave) { S.onLeave(); S.onLeave = null; }
@@ -154,6 +226,7 @@
     try {
       await page.render(holder, args);
       el.replaceChildren(holder);
+      classifyPage();
     } catch (e) {
       console.error(e);
       el.replaceChildren(

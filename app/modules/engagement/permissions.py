@@ -154,7 +154,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "finding:read_summary",
         "report:read_approved", "report:verify_signature",
         "dashboard:executive", "kpi:export",
-        "audit:read_final", "audit:sign_gerente", "audit:report_approve_gerente",
+        "audit:read", "audit:read_final",
+        "audit:sign_gerente", "audit:report_approve_gerente",
     },
     AUDITOR_FINANCIERO: {
         "ingestion:upload", "ingestion:read", "ingestion:review_rejects", "ingestion:cancel",

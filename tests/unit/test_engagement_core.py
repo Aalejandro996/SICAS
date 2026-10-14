@@ -6,15 +6,30 @@ from openpyxl import load_workbook
 
 from app.modules.engagement import offline, scoring
 from app.modules.engagement.pac import build_pac
-from app.modules.engagement.templates import DEFAULTS, default_criteria, validate_criteria, branches_for_line, KINDS, LINES
+from app.modules.engagement.templates import DEFAULTS, default_criteria, validate_criteria, branches_for_line, TEMPLATE_KEYS
 
 SECRET = b"k" * 32
 NOW = datetime(2026, 10, 2, 9, 0, tzinfo=timezone.utc)
 
 
 class TemplatesTest(unittest.TestCase):
-    def test_six_templates_exist_and_are_valid(self):
-        self.assertEqual(set(DEFAULTS), {(k, l) for k in KINDS for l in LINES})        # 2 tipos x 3 líneas, separadas
+    def test_six_financial_templates_and_system_template_are_valid(self):
+        financial_keys = {
+            (kind, line)
+            for kind in ("SUSCRIPCION", "RECLAMO")
+            for line in ("AUTO", "PATRIMONIAL", "PERSONAL")
+        }
+        self.assertEqual(set(DEFAULTS), financial_keys)
+
+        # Sistemas / ERP-TI utiliza el cuestionario específico, no DEFAULTS.
+        self.assertIn(("SISTEMAS", "ERP_TI"), TEMPLATE_KEYS)
+        self.assertNotIn(("SISTEMAS", "ERP_TI"), DEFAULTS)
+        system_criteria = default_criteria("SISTEMAS", "ERP_TI")
+        self.assertEqual(len(system_criteria), 81)
+        self.assertEqual(validate_criteria(system_criteria), system_criteria)
+        self.assertTrue(
+            all(c["evaluation_mode"] == "ERP_TI" for c in system_criteria)
+        )
         for (k, l), crit in DEFAULTS.items():
             self.assertEqual(validate_criteria(crit), crit)
             self.assertGreaterEqual(len(crit), 9)
@@ -57,9 +72,15 @@ class ScoringTest(unittest.TestCase):
         self.assertIsInstance(scoring.final_score(10.0, Decimal("55.5")), float)
 
     def test_rating_thresholds(self):
-        self.assertEqual(scoring.rating(90), "SATISFACTORIO"); self.assertEqual(scoring.rating(85), "SATISFACTORIO")
-        self.assertEqual(scoring.rating(84.99), "NECESITA_MEJORAS"); self.assertEqual(scoring.rating(70), "NECESITA_MEJORAS")
-        self.assertEqual(scoring.rating(69.9), "INSATISFACTORIO"); self.assertEqual(scoring.rating(None), "SIN_CALIFICAR")
+        self.assertEqual(scoring.rating(91), "EXCELENTE")
+        self.assertEqual(scoring.rating(90), "SATISFACTORIO")
+        self.assertEqual(scoring.rating(70), "SATISFACTORIO")
+        self.assertEqual(scoring.rating(69.99), "ACEPTABLE")
+        self.assertEqual(scoring.rating(60), "ACEPTABLE")
+        self.assertEqual(scoring.rating(59.99), "NECESITA_MEJORAS")
+        self.assertEqual(scoring.rating(50), "NECESITA_MEJORAS")
+        self.assertEqual(scoring.rating(49.99), "NO_SATISFACTORIA")
+        self.assertEqual(scoring.rating(None), "SIN_CALIFICAR")
         self.assertEqual(scoring.rating(80, {"satisfactorio": 80}), "SATISFACTORIO")
 
     def test_worksheet_and_audit_summary_with_overrides_and_exceptions(self):
@@ -68,12 +89,12 @@ class ScoringTest(unittest.TestCase):
                  {"results": {"A1": "EXCEPCION"}, "info_exception": "No entregaron el expediente"}]
         s = scoring.worksheet_summary(self.CR, items)
         self.assertEqual((s.items, s.scored, s.exceptions, s.auto), (3, 2, 1, 80.0))        # (100 + 60) / 2
-        self.assertEqual(s.rating, "NECESITA_MEJORAS")
+        self.assertEqual(s.rating, "SATISFACTORIO")
         s2 = scoring.worksheet_summary(self.CR, items, sheet_manual=95)
-        self.assertTrue(s2.manual_override); self.assertEqual((s2.final, s2.auto), (95, 80.0)); self.assertEqual(s2.rating, "SATISFACTORIO")
+        self.assertTrue(s2.manual_override); self.assertEqual((s2.final, s2.auto), (95, 80.0)); self.assertEqual(s2.rating, "EXCELENTE")
         a = scoring.audit_summary([s, s2])
         self.assertEqual(a["auto"], 87.5)
-        self.assertEqual(scoring.audit_summary([s, s2], manual=50)["rating"], "INSATISFACTORIO")
+        self.assertEqual(scoring.audit_summary([s, s2], manual=50)["rating"], "NECESITA_MEJORAS")
         self.assertEqual(a["exceptions"], 2)
 
 
@@ -183,7 +204,7 @@ class OfflineTest(unittest.TestCase):
         items = [{"id": f"00000000-0000-0000-0000-{i:012d}", "ref": f"POL-{i}", "results": {}, "updated_at": NOW} for i in range(1500)]
         big = offline.export_workbook(self.audit, [{"id": "ws-9", "kind": "SUSCRIPCION", "line": "PERSONAL", "title": "x", "criteria": crit, "items": items}], SECRET, NOW, "a")
         control, rows, errs = offline.parse_workbook(big, SECRET, "aud-1")
-        self.assertEqual(len(control["sheets"]["SUS-PERSO"]["items"]), 1500); self.assertEqual(len(rows), 1500)
+        self.assertEqual(len(control["sheets"]["SUS-PERSONAL"]["items"]), 1500); self.assertEqual(len(rows), 1500)
 
 
 class PacTest(unittest.TestCase):

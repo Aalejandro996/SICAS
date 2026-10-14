@@ -688,7 +688,11 @@ def get_evidence(eid):
 
 # ------------------------------------------------------------------ informes
 REP_SQL = ("SELECT r.id::text, r.audit_id::text, r.kind, r.version, r.status, r.body, r.body_sha256, r.created_at, r.updated_at, r.submitted_at, "
-           "r.approved_at, r.approved_by::text, r.approved_body_sha256, r.created_by::text, r.sent_to, r.sent_at, c.username AS created_by_name, a.username AS approved_by_name "
+           "r.approved_at, r.approved_by::text, r.approved_body_sha256, "
+           "r.jefe_approved_by::text AS jefe_approved_by, r.jefe_approved_body_sha256, "
+           "r.gerente_approved_by::text AS gerente_approved_by, r.gerente_approved_body_sha256, "
+           "r.contralor_approved_by::text AS contralor_approved_by, r.contralor_approved_body_sha256, "
+           "r.created_by::text, r.sent_to, r.sent_at, c.username AS created_by_name, a.username AS approved_by_name "
            "FROM engagement.reports r JOIN iam.users c ON c.id = r.created_by LEFT JOIN iam.users a ON a.id = r.approved_by ")
 
 
@@ -724,12 +728,25 @@ def replace_body(rid, body, sha):
 
 def set_report_status(rid, status, **kw):
     sets, params = ["status = :s", "updated_at = now()"], {"s": status, "i": str(rid)}
-    for col, val in kw.items():                                       # columnas de lista fija
-        assert col in ("submitted_at", "approved_by", "approved_at", "approved_body_sha256", "sent_to", "sent_at", "sent_by")
+    allowed = {
+        "submitted_at", "approved_by", "approved_at", "approved_body_sha256",
+        "sent_to", "sent_at", "sent_by",
+        "jefe_approved_by", "jefe_approved_at", "jefe_approved_body_sha256",
+        "gerente_approved_by", "gerente_approved_at", "gerente_approved_body_sha256",
+        "contralor_approved_by", "contralor_approved_at", "contralor_approved_body_sha256",
+    }
+    uuid_cols = {
+        "approved_by", "sent_by",
+        "jefe_approved_by", "gerente_approved_by", "contralor_approved_by",
+    }
+    for col, val in kw.items():
+        assert col in allowed, f"Columna no permitida: {col}"
         if val == "now":
             sets.append(f"{col} = now()")
         else:
-            sets.append(f"{col} = " + ("CAST(:%s AS uuid)" % col if col in ("approved_by", "sent_by") else ":%s" % col)); params[col] = val
+            expression = f"CAST(:{col} AS uuid)" if col in uuid_cols else f":{col}"
+            sets.append(f"{col} = {expression}")
+            params[col] = val
     x("UPDATE engagement.reports SET " + ", ".join(sets) + " WHERE id = CAST(:i AS uuid)", **params)
     db.session.commit()
 

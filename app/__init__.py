@@ -40,6 +40,8 @@ def create_app(config=None) -> Flask:
     app = Flask(__name__, static_folder="static", static_url_path="/static")
     app.json = SicasJSON(app)
     app.config.from_object(config)
+    from .core.logging_redaction import install_redaction_filter
+    install_redaction_filter(app=app)
 
     db.init_app(app)
     jwt.init_app(app)

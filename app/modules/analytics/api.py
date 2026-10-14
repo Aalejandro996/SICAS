@@ -17,3 +17,6 @@ def overview():
                                    "count(*) FILTER (WHERE reconciled IS FALSE) unreconciled FROM insurance.ingestion_jobs GROUP BY 1")).all()
     return jsonify(open_findings_by_severity={r.severity: r.n for r in sev},
                    ingestion=[dict(r._mapping) for r in jobs])
+
+from .contralor_api import register_contralor_routes
+register_contralor_routes(bp)

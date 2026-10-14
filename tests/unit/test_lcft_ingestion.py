@@ -1,3 +1,5 @@
+import logging
+from app.core.logging_redaction import RedactingFilter, redact
 import unittest
 from decimal import Decimal as Dec
 

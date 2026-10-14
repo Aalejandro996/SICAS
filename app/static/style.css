@@ -162,3 +162,404 @@ button.link { background: none; color: var(--navy); text-decoration: underline; 
   header p { display:none; }
   .brand img { width:58px; height:46px; }
 }
+
+/* Dashboard privado de Contraloría */
+.ctl-filters .toolbar { align-items: end; }
+.ctl-filters .toolbar label { min-width: 150px; flex: 1 1 150px; }
+.ctl-dashboard-output .ctl-cards { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); }
+.ctl-dashboard-output .ctl-cards .stat .n { font-size: 1.55rem; }
+.ctl-chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: stretch; }
+.ctl-chart-grid > .panel { min-width: 0; }
+.ctl-bar-list { display: grid; gap: 11px; margin: 10px 0 16px; }
+.ctl-bar-row { display: grid; grid-template-columns: minmax(85px, 130px) minmax(70px, 1fr) 48px; align-items: center; gap: 8px; font-size: .85rem; }
+.ctl-bar-label { overflow-wrap: anywhere; }
+.ctl-bar-track { height: 13px; border-radius: 8px; overflow: hidden; background: #e7ebf2; }
+.ctl-bar-value { height: 100%; border-radius: 8px; background: #315d91; }
+.ctl-bar-number { text-align: right; font-variant-numeric: tabular-nums; }
+.ctl-legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: .8rem; color: #555; margin: 4px 0 12px; }
+.ctl-legend span { display: flex; gap: 5px; align-items: center; }
+.ctl-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
+.ctl-legend-audits { background: #315d91; }
+.ctl-legend-obs { background: #c57b23; }
+.ctl-trend-chart { display: flex; align-items: end; gap: 7px; overflow-x: auto; min-height: 225px; padding: 8px 4px 0; border-bottom: 1px solid #d6dce7; }
+.ctl-trend-col { flex: 1 0 48px; min-width: 48px; text-align: center; font-size: .7rem; }
+.ctl-trend-bars { height: 155px; display: flex; align-items: end; justify-content: center; gap: 3px; border-bottom: 1px solid #d6dce7; }
+.ctl-trend-audits, .ctl-trend-obs { width: 14px; min-height: 2px; border-radius: 3px 3px 0 0; }
+.ctl-trend-audits { background: #315d91; }
+.ctl-trend-obs { background: #c57b23; }
+.ctl-trend-label { margin-top: 5px; white-space: nowrap; }
+.ctl-trend-value { color: #666; margin: 2px 0 8px; white-space: nowrap; }
+.ctl-kpi-host .row.between { align-items: center; gap: 12px; flex-wrap: wrap; }
+.ctl-kpi-host table { font-size: .82rem; }
+.ctl-ingestion-cards { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+@media (max-width: 850px) { .ctl-chart-grid { grid-template-columns: 1fr; } }
+
+/* CSP: alturas y anchuras variables se expresan mediante clases, sin estilos inline. */
+.ctl-width-0{width:0%}
+.ctl-width-1{width:1%}
+.ctl-width-2{width:2%}
+.ctl-width-3{width:3%}
+.ctl-width-4{width:4%}
+.ctl-width-5{width:5%}
+.ctl-width-6{width:6%}
+.ctl-width-7{width:7%}
+.ctl-width-8{width:8%}
+.ctl-width-9{width:9%}
+.ctl-width-10{width:10%}
+.ctl-width-11{width:11%}
+.ctl-width-12{width:12%}
+.ctl-width-13{width:13%}
+.ctl-width-14{width:14%}
+.ctl-width-15{width:15%}
+.ctl-width-16{width:16%}
+.ctl-width-17{width:17%}
+.ctl-width-18{width:18%}
+.ctl-width-19{width:19%}
+.ctl-width-20{width:20%}
+.ctl-width-21{width:21%}
+.ctl-width-22{width:22%}
+.ctl-width-23{width:23%}
+.ctl-width-24{width:24%}
+.ctl-width-25{width:25%}
+.ctl-width-26{width:26%}
+.ctl-width-27{width:27%}
+.ctl-width-28{width:28%}
+.ctl-width-29{width:29%}
+.ctl-width-30{width:30%}
+.ctl-width-31{width:31%}
+.ctl-width-32{width:32%}
+.ctl-width-33{width:33%}
+.ctl-width-34{width:34%}
+.ctl-width-35{width:35%}
+.ctl-width-36{width:36%}
+.ctl-width-37{width:37%}
+.ctl-width-38{width:38%}
+.ctl-width-39{width:39%}
+.ctl-width-40{width:40%}
+.ctl-width-41{width:41%}
+.ctl-width-42{width:42%}
+.ctl-width-43{width:43%}
+.ctl-width-44{width:44%}
+.ctl-width-45{width:45%}
+.ctl-width-46{width:46%}
+.ctl-width-47{width:47%}
+.ctl-width-48{width:48%}
+.ctl-width-49{width:49%}
+.ctl-width-50{width:50%}
+.ctl-width-51{width:51%}
+.ctl-width-52{width:52%}
+.ctl-width-53{width:53%}
+.ctl-width-54{width:54%}
+.ctl-width-55{width:55%}
+.ctl-width-56{width:56%}
+.ctl-width-57{width:57%}
+.ctl-width-58{width:58%}
+.ctl-width-59{width:59%}
+.ctl-width-60{width:60%}
+.ctl-width-61{width:61%}
+.ctl-width-62{width:62%}
+.ctl-width-63{width:63%}
+.ctl-width-64{width:64%}
+.ctl-width-65{width:65%}
+.ctl-width-66{width:66%}
+.ctl-width-67{width:67%}
+.ctl-width-68{width:68%}
+.ctl-width-69{width:69%}
+.ctl-width-70{width:70%}
+.ctl-width-71{width:71%}
+.ctl-width-72{width:72%}
+.ctl-width-73{width:73%}
+.ctl-width-74{width:74%}
+.ctl-width-75{width:75%}
+.ctl-width-76{width:76%}
+.ctl-width-77{width:77%}
+.ctl-width-78{width:78%}
+.ctl-width-79{width:79%}
+.ctl-width-80{width:80%}
+.ctl-width-81{width:81%}
+.ctl-width-82{width:82%}
+.ctl-width-83{width:83%}
+.ctl-width-84{width:84%}
+.ctl-width-85{width:85%}
+.ctl-width-86{width:86%}
+.ctl-width-87{width:87%}
+.ctl-width-88{width:88%}
+.ctl-width-89{width:89%}
+.ctl-width-90{width:90%}
+.ctl-width-91{width:91%}
+.ctl-width-92{width:92%}
+.ctl-width-93{width:93%}
+.ctl-width-94{width:94%}
+.ctl-width-95{width:95%}
+.ctl-width-96{width:96%}
+.ctl-width-97{width:97%}
+.ctl-width-98{width:98%}
+.ctl-width-99{width:99%}
+.ctl-width-100{width:100%}
+.ctl-height-0{height:0%}
+.ctl-height-1{height:1%}
+.ctl-height-2{height:2%}
+.ctl-height-3{height:3%}
+.ctl-height-4{height:4%}
+.ctl-height-5{height:5%}
+.ctl-height-6{height:6%}
+.ctl-height-7{height:7%}
+.ctl-height-8{height:8%}
+.ctl-height-9{height:9%}
+.ctl-height-10{height:10%}
+.ctl-height-11{height:11%}
+.ctl-height-12{height:12%}
+.ctl-height-13{height:13%}
+.ctl-height-14{height:14%}
+.ctl-height-15{height:15%}
+.ctl-height-16{height:16%}
+.ctl-height-17{height:17%}
+.ctl-height-18{height:18%}
+.ctl-height-19{height:19%}
+.ctl-height-20{height:20%}
+.ctl-height-21{height:21%}
+.ctl-height-22{height:22%}
+.ctl-height-23{height:23%}
+.ctl-height-24{height:24%}
+.ctl-height-25{height:25%}
+.ctl-height-26{height:26%}
+.ctl-height-27{height:27%}
+.ctl-height-28{height:28%}
+.ctl-height-29{height:29%}
+.ctl-height-30{height:30%}
+.ctl-height-31{height:31%}
+.ctl-height-32{height:32%}
+.ctl-height-33{height:33%}
+.ctl-height-34{height:34%}
+.ctl-height-35{height:35%}
+.ctl-height-36{height:36%}
+.ctl-height-37{height:37%}
+.ctl-height-38{height:38%}
+.ctl-height-39{height:39%}
+.ctl-height-40{height:40%}
+.ctl-height-41{height:41%}
+.ctl-height-42{height:42%}
+.ctl-height-43{height:43%}
+.ctl-height-44{height:44%}
+.ctl-height-45{height:45%}
+.ctl-height-46{height:46%}
+.ctl-height-47{height:47%}
+.ctl-height-48{height:48%}
+.ctl-height-49{height:49%}
+.ctl-height-50{height:50%}
+.ctl-height-51{height:51%}
+.ctl-height-52{height:52%}
+.ctl-height-53{height:53%}
+.ctl-height-54{height:54%}
+.ctl-height-55{height:55%}
+.ctl-height-56{height:56%}
+.ctl-height-57{height:57%}
+.ctl-height-58{height:58%}
+.ctl-height-59{height:59%}
+.ctl-height-60{height:60%}
+.ctl-height-61{height:61%}
+.ctl-height-62{height:62%}
+.ctl-height-63{height:63%}
+.ctl-height-64{height:64%}
+.ctl-height-65{height:65%}
+.ctl-height-66{height:66%}
+.ctl-height-67{height:67%}
+.ctl-height-68{height:68%}
+.ctl-height-69{height:69%}
+.ctl-height-70{height:70%}
+.ctl-height-71{height:71%}
+.ctl-height-72{height:72%}
+.ctl-height-73{height:73%}
+.ctl-height-74{height:74%}
+.ctl-height-75{height:75%}
+.ctl-height-76{height:76%}
+.ctl-height-77{height:77%}
+.ctl-height-78{height:78%}
+.ctl-height-79{height:79%}
+.ctl-height-80{height:80%}
+.ctl-height-81{height:81%}
+.ctl-height-82{height:82%}
+.ctl-height-83{height:83%}
+.ctl-height-84{height:84%}
+.ctl-height-85{height:85%}
+.ctl-height-86{height:86%}
+.ctl-height-87{height:87%}
+.ctl-height-88{height:88%}
+.ctl-height-89{height:89%}
+.ctl-height-90{height:90%}
+.ctl-height-91{height:91%}
+.ctl-height-92{height:92%}
+.ctl-height-93{height:93%}
+.ctl-height-94{height:94%}
+.ctl-height-95{height:95%}
+.ctl-height-96{height:96%}
+.ctl-height-97{height:97%}
+.ctl-height-98{height:98%}
+.ctl-height-99{height:99%}
+.ctl-height-100{height:100%}
+
+/* Controles de seguimiento del Contralor */
+.ctl-kpi-history { margin-top: 14px; }
+.ctl-kpi-history h4 { margin-bottom: 8px; }
+.ctl-heat-cell { display: inline-block; min-width: 28px; text-align: center; border-radius: 4px; padding: 3px 6px; font-variant-numeric: tabular-nums; }
+.ctl-heat-zero { background: #edf1f5; color: #526071; }
+.ctl-heat-low { background: #f7e8c7; color: #78591a; }
+.ctl-heat-mid { background: #f6c27a; color: #70400b; }
+.ctl-heat-high { background: #e99b93; color: #681f1a; }
+.ctl-alert-table { min-width: 850px; }
+.ctl-snapshots-host table, .ctl-kpi-history table { font-size: .82rem; }
+@media (max-width: 850px) { .ctl-filters .toolbar label { min-width: 135px; } }
+
+.ctl-activity-host { display:grid; gap:14px; }
+.ctl-activity-current { border:1px solid var(--border, #d7dee7); border-radius:12px; padding:16px; background:var(--panel, #fff); }
+.ctl-activity-current label { display:grid; gap:6px; max-width:720px; margin-bottom:12px; }
+.ctl-activity-timer { font-size:2rem; line-height:1.1; font-weight:700; font-variant-numeric:tabular-nums; margin:12px 0; }
+
+/* Dashboard UX refinement v1: navegación compacta, densidad legible y responsive. */
+.ctl-dashboard-output { min-width: 0; display: block; }
+.ctl-workspace { min-width: 0; }
+.ctl-tabs {
+  display: flex; flex-wrap: nowrap; gap: .35rem; align-items: center;
+  margin: 0 0 1rem; padding: .35rem; overflow-x: auto;
+  background: var(--panel, #fff); border: 1px solid var(--border, #d8e0ea);
+  border-radius: 13px; box-shadow: 0 2px 8px rgba(22, 42, 72, .05);
+  scrollbar-width: thin;
+}
+.ctl-tab-button {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  min-height: 40px; padding: .58rem .9rem; border: 1px solid transparent;
+  border-radius: 9px; background: transparent; color: var(--text, #34445b);
+  font-size: .88rem; font-weight: 650; white-space: nowrap; cursor: pointer;
+  transition: background .16s ease, border-color .16s ease, color .16s ease, box-shadow .16s ease;
+}
+.ctl-tab-button:hover { background: var(--surface-hover, #f1f5fa); }
+.ctl-tab-button.is-active, .ctl-tab-button[aria-selected="true"] {
+  background: var(--primary, #244f80); color: #fff; border-color: var(--primary, #244f80);
+  box-shadow: 0 2px 5px rgba(36, 79, 128, .18);
+}
+.ctl-tab-button:focus-visible, .ctl-alert-details summary:focus-visible {
+  outline: 3px solid rgba(62, 132, 205, .45); outline-offset: 2px;
+}
+.ctl-tab-panel { min-width: 0; }
+.ctl-tab-panel[hidden] { display: none !important; }
+.ctl-tab-panel.is-active { animation: ctl-fade-in .16s ease-out; }
+.ctl-tab-panel > .cards { margin: 0 0 .9rem; }
+.ctl-tab-panel > .contralor-panel,
+.ctl-tab-panel > .ctl-chart-grid,
+.ctl-tab-panel > .cards { margin-bottom: .9rem; }
+.ctl-tab-panel > :last-child { margin-bottom: 0; }
+
+/* Paneles uniformes: menos relleno vertical sin reducir el contenido. */
+.ctl-dashboard-output .contralor-panel {
+  min-width: 0; padding: clamp(12px, 1.5vw, 19px); margin: 0;
+  border: 1px solid var(--border, #d8e0ea); border-radius: 13px;
+  background: var(--panel, #fff); box-shadow: 0 2px 8px rgba(22, 42, 72, .045);
+}
+.ctl-dashboard-output .contralor-panel > h3 {
+  display: flex; align-items: center; gap: .6rem;
+  margin: 0 0 .85rem; padding: 0 0 .7rem;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  font-size: clamp(.98rem, 1.1vw, 1.1rem); line-height: 1.35; font-weight: 750;
+  letter-spacing: -.012em;
+}
+.ctl-dashboard-output .muted { max-width: 110ch; margin-top: .35rem; line-height: 1.5; font-size: .82rem; }
+.ctl-dashboard-output .ctl-cards { gap: 10px; margin-bottom: .9rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); }
+.ctl-dashboard-output .ctl-cards .stat { min-width: 0; padding: 13px 15px; border-radius: 12px; }
+.ctl-dashboard-output .ctl-cards .stat .n { font-size: clamp(1.35rem, 2.1vw, 1.8rem); line-height: 1.15; font-variant-numeric: tabular-nums; }
+.ctl-dashboard-output .ctl-cards .stat .label { font-size: .78rem; line-height: 1.35; }
+.ctl-chart-grid { gap: 12px; margin-bottom: .9rem; }
+.ctl-chart-grid > .panel { min-width: 0; }
+
+/* Filtros compactos: controles en una rejilla y acciones en una franja propia. */
+.ctl-filters { padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--border, #d8e0ea); border-radius: 13px; }
+.ctl-filters .toolbar {
+  display: grid; grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: end; gap: 9px 10px;
+}
+.ctl-filters .toolbar > label {
+  grid-column: span 2; display: grid; min-width: 0; gap: 5px; margin: 0;
+  color: var(--muted, #596a80); font-size: .75rem; font-weight: 700; line-height: 1.2;
+}
+.ctl-filters .toolbar input, .ctl-filters .toolbar select {
+  box-sizing: border-box; width: 100%; min-width: 0; min-height: 38px;
+  padding: .45rem .55rem; border: 1px solid var(--border, #ccd6e2); border-radius: 8px;
+  background: var(--panel, #fff); font-size: .84rem;
+}
+.ctl-filters .toolbar > button { grid-column: span 3; min-height: 38px; padding: .55rem .8rem; white-space: nowrap; }
+.ctl-filters .toolbar > button:first-of-type { grid-column: span 3; }
+
+/* Tablas densas, con cabecera visible y desplazamiento propio para conservar columnas. */
+.ctl-dashboard-output .contralor-panel table {
+  display: block; width: 100%; max-width: 100%; max-height: min(54vh, 470px);
+  overflow: auto; border-collapse: separate; border-spacing: 0; font-size: .81rem;
+  line-height: 1.35; overscroll-behavior: contain; scrollbar-width: thin;
+}
+.ctl-dashboard-output .contralor-panel th,
+.ctl-dashboard-output .contralor-panel td {
+  padding: .58rem .68rem; min-width: 76px; vertical-align: top;
+  border-bottom: 1px solid var(--border, #e6ebf1);
+}
+.ctl-dashboard-output .contralor-panel th {
+  position: sticky; top: 0; z-index: 1; background: var(--surface-secondary, #f2f5f9);
+  color: var(--text, #26394f); font-size: .73rem; font-weight: 750; letter-spacing: .01em;
+  white-space: nowrap; box-shadow: 0 1px 0 var(--border, #d9e1ea);
+}
+.ctl-dashboard-output .contralor-panel tbody tr:nth-child(even) { background: var(--table-stripe, #fafbfd); }
+.ctl-dashboard-output .contralor-panel tbody tr:hover { background: var(--surface-hover, #edf4fb); }
+.ctl-dashboard-output .contralor-panel td { overflow-wrap: anywhere; }
+.ctl-dashboard-output .ctl-alert-table { min-width: 950px; }
+.ctl-alert-details { margin-top: .85rem; border: 1px solid var(--border, #dbe3ec); border-radius: 10px; overflow: hidden; }
+.ctl-alert-details summary {
+  padding: .75rem .9rem; cursor: pointer; user-select: none; list-style-position: inside;
+  background: var(--surface-secondary, #f5f7fa); color: var(--text, #31455d);
+  font-size: .84rem; font-weight: 750;
+}
+.ctl-alert-details[open] summary { border-bottom: 1px solid var(--border, #dbe3ec); }
+.ctl-alert-details table { margin: 0; }
+
+/* Visualizaciones y calidad: colores sobrios y cifras alineadas. */
+.ctl-bar-track { height: 10px; background: var(--surface-secondary, #e9eef4); }
+.ctl-bar-value { background: var(--primary, #315d91); }
+.ctl-heat-cell { min-width: 32px; padding: 4px 7px; font-weight: 700; border-radius: 6px; }
+.ctl-heat-zero { background: #eff3f7; color: #627286; }
+.ctl-heat-low { background: #fff1c7; color: #715311; }
+.ctl-heat-mid { background: #ffdbad; color: #7a430a; }
+.ctl-heat-high { background: #f8d0cf; color: #8b2421; }
+.ctl-trend-chart { min-height: 180px; }
+.ctl-trend-bars { height: 125px; }
+.ctl-kpi-host table, .ctl-snapshots-host table, .ctl-kpi-history table { font-size: .8rem; }
+.ctl-kpi-host .row.between { padding-bottom: .6rem; }
+.ctl-kpi-host button, .ctl-snapshots-host button { min-height: 34px; }
+.ctl-ingestion-cards { grid-template-columns: repeat(auto-fit, minmax(min(100%, 125px), 1fr)); gap: 9px; }
+.ctl-ingestion-cards .stat { padding: 10px 12px; }
+.ctl-activity-host { gap: 12px; }
+.ctl-activity-current { padding: clamp(14px, 2vw, 22px); border-radius: 13px; box-shadow: 0 2px 8px rgba(22, 42, 72, .045); }
+.ctl-activity-current h3 { margin-top: 0; font-size: 1.05rem; }
+.ctl-activity-current .actions { display: flex; gap: .55rem; flex-wrap: wrap; }
+.ctl-activity-timer { padding: .45rem 0; font-size: clamp(2rem, 4vw, 2.8rem); letter-spacing: .035em; color: var(--primary, #244f80); }
+
+@keyframes ctl-fade-in { from { opacity: .72; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .ctl-tab-panel.is-active { animation: none; } .ctl-tab-button { transition: none; } }
+@media (max-width: 1100px) {
+  .ctl-filters .toolbar > label { grid-column: span 4; }
+  .ctl-filters .toolbar > button { grid-column: span 4; }
+}
+@media (max-width: 760px) {
+  .ctl-tabs { margin-left: -2px; margin-right: -2px; border-radius: 10px; }
+  .ctl-tab-button { min-height: 38px; padding: .5rem .72rem; font-size: .82rem; }
+  .ctl-chart-grid { grid-template-columns: minmax(0, 1fr); }
+  .ctl-filters .toolbar > label { grid-column: span 6; }
+  .ctl-filters .toolbar > button { grid-column: span 6; }
+  .ctl-dashboard-output .contralor-panel table { max-height: 58vh; font-size: .78rem; }
+}
+@media (max-width: 420px) {
+  .ctl-filters .toolbar > label, .ctl-filters .toolbar > button { grid-column: 1 / -1; }
+  .ctl-dashboard-output .ctl-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ctl-dashboard-output .ctl-cards .stat { padding: 10px; }
+}
+@media print {
+  .ctl-tabs, .ctl-filters { display: none !important; }
+  .ctl-tab-panel[hidden] { display: block !important; }
+  .ctl-tab-panel { break-inside: avoid; }
+  .ctl-dashboard-output .contralor-panel table { display: table; max-height: none; overflow: visible; font-size: 8pt; }
+}

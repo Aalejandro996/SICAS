@@ -21,7 +21,7 @@ def sample_body(kind="FINAL"):
                       overall=overall, observations=obs, limitations=[{"sheet": "Reclamo — Auto", "ref": "SIN-12", "detail": "No entregaron el expediente"}],
                       adjustments=[{"sheet": "Reclamo — Auto", "ref": "SIN-5", "auto": 40.0, "final": 70.0, "reason": "Subsanado durante la visita"}],
                       evidence=[{"n": 1, "filename": "peritaje.pdf", "description": "Peritaje SIN-5", "sha256": "ab" * 32}],
-                      company="Aseguradora Ejemplo", version=1, today=date(2026, 10, 2), thresholds={"satisfactorio": 85, "mejora": 70})
+                      company="Aseguradora Ejemplo", version=1, today=date(2026, 10, 2), thresholds={"satisfactorio": 70, "mejora": 50})
 
 
 class BuilderTest(unittest.TestCase):
@@ -84,18 +84,60 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(wf.WorkflowError): wf.can_review(self.st(status="DRAFT"), "contralor")
 
     def test_signing_order_and_integrity(self):
-        s = self.st(status="APPROVED", approved_by="contralor", approved_body_sha256="h1")
-        with self.assertRaises(wf.WorkflowError): wf.can_sign(s, "gerente", "GERENTE_CI")          # primero el Contralor
-        with self.assertRaises(wf.WorkflowError): wf.can_sign(s, "otro", "CONTRALOR")              # firma quien aprobó
-        wf.can_sign(s, "contralor", "CONTRALOR")
-        s.signed_roles["CONTRALOR"] = "contralor"
+        # Gerencia es la primera firma, después de la aprobación del Jefe.
+        s = self.st(
+            status="GERENCIA",
+            jefe_approved_by="jefe",
+            jefe_approved_body_sha256="h1",
+        )
+
+        # No se puede saltar Gerencia ni puede firmar el equipo auditor.
+        with self.assertRaises(wf.WorkflowError):
+            wf.can_sign(s, "gerente", "CONTRALOR")
+        with self.assertRaises(wf.WorkflowError):
+            wf.can_sign(s, "lead", "GERENTE_CI")
+        with self.assertRaises(wf.WorkflowError):
+            wf.can_sign(s, "jefe", "GERENTE_CI")
+
         wf.can_sign(s, "gerente", "GERENTE_CI")
-        with self.assertRaises(wf.WorkflowError): wf.can_sign(s, "contralor", "GERENTE_CI")        # el gerente es otra persona
-        with self.assertRaises(wf.WorkflowError): wf.can_sign(s, "contralor", "CONTRALOR")         # no se firma dos veces
-        s.signed_roles["GERENTE_CI"] = "gerente"; self.assertTrue(wf.is_fully_signed(s))
-        s2 = self.st(status="APPROVED", approved_by="contralor", approved_body_sha256="OTRO")
-        with self.assertRaises(wf.WorkflowError): wf.can_sign(s2, "contralor", "CONTRALOR")        # contenido cambió tras aprobar
-        with self.assertRaises(wf.WorkflowError): wf.can_sign(self.st(status="APPROVED", approved_by="lead", approved_body_sha256="h1"), "lead", "CONTRALOR")
+
+        # Simular la transición que realiza la API tras la firma de Gerencia.
+        s.status = "CONTRALOR"
+        s.gerente_approved_by = "gerente"
+        s.gerente_approved_body_sha256 = "h1"
+        s.signed_roles["GERENTE_CI"] = "gerente"
+
+        # La misma persona no puede firmar ambos roles; tampoco se puede
+        # volver a firmar como Gerente cuando la etapa ya es Contraloría.
+        with self.assertRaises(wf.WorkflowError):
+            wf.can_sign(s, "gerente", "CONTRALOR")
+        with self.assertRaises(wf.WorkflowError):
+            wf.can_sign(s, "contralor", "GERENTE_CI")
+
+        wf.can_sign(s, "contralor", "CONTRALOR")
+
+        # Simular la transición final después de registrar la firma del Contralor.
+        s.status = "SIGNED"
+        s.contralor_approved_by = "contralor"
+        s.contralor_approved_body_sha256 = "h1"
+        s.signed_roles["CONTRALOR"] = "contralor"
+        self.assertTrue(wf.is_fully_signed(s))
+
+        # Un informe ya firmado no acepta otra firma.
+        with self.assertRaises(wf.WorkflowError):
+            wf.can_sign(s, "contralor", "CONTRALOR")
+
+        # Se rechaza la firma si la aprobación anterior no corresponde
+        # al contenido actual del informe.
+        s2 = self.st(
+            status="CONTRALOR",
+            jefe_approved_by="jefe",
+            jefe_approved_body_sha256="h1",
+            gerente_approved_by="gerente",
+            gerente_approved_body_sha256="OTRO",
+        )
+        with self.assertRaises(wf.WorkflowError):
+            wf.can_sign(s2, "contralor", "CONTRALOR")
 
     def test_previo_and_pac(self):
         wf.can_send_previo(self.st(kind="PREVIO"), "lead")

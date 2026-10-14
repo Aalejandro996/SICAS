@@ -1,4 +1,16 @@
 from celery import Celery
+from celery.signals import after_setup_logger, after_setup_task_logger
+
+from app.core.logging_redaction import install_redaction_filter
+
+
+def _install_celery_log_redaction(logger=None, **_kwargs):
+    extra = (logger,) if logger is not None else ()
+    install_redaction_filter(extra_loggers=extra)
+
+
+after_setup_logger.connect(_install_celery_log_redaction, weak=False)
+after_setup_task_logger.connect(_install_celery_log_redaction, weak=False)
 
 
 def make_celery(app) -> Celery:
