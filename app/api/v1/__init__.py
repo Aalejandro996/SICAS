@@ -1,5 +1,6 @@
 def register_blueprints(app):
     from app.modules.admin.api import bp as admin_bp
+    from app.modules.notifications.api import bp as notifications_bp
     from app.modules.analytics.api import bp as analytics_bp
     from app.modules.audit_engine.api import bp as engine_bp
     from app.modules.auditlog.api import bp as auditlog_bp
@@ -14,6 +15,7 @@ def register_blueprints(app):
     app.register_blueprint(health_bp, url_prefix=p)
     app.register_blueprint(auth_bp, url_prefix=f"{p}/auth")
     app.register_blueprint(admin_bp, url_prefix=f"{p}/admin")
+    app.register_blueprint(notifications_bp, url_prefix=f"{p}/notifications")
     app.register_blueprint(ingestion_bp, url_prefix=f"{p}/ingestion")
     app.register_blueprint(engine_bp, url_prefix=f"{p}/engine")
     app.register_blueprint(compliance_bp, url_prefix=f"{p}/compliance")

@@ -21,7 +21,7 @@
   };
   const currentTitle = () => {
     const d = currentDomain();
-    return d === 'SISTEMAS' ? 'Auditoría de Sistemas' : d === 'FINANCIERA' ? 'Auditoría Financiera' : 'Auditorías';
+    return d === 'SISTEMAS' ? 'Auditoría de Sistemas' : d === 'FINANCIERA' ? 'Auditoría Operativa' : 'Auditorías';
   };
 
   // ================================================================== lista, expedientes, unidades, plantillas
@@ -30,7 +30,7 @@
     title = title || currentTitle();
     el.replaceChildren(h('h2', null, title));
     if (domain) {
-      const label = domain === 'FINANCIERA' ? 'FINANCIERA' : 'SISTEMAS / TI';
+      const label = domain === 'FINANCIERA' ? 'OPERATIVA' : 'SISTEMAS / TI';
       el.append(h('div', { class: 'panel' }, h('b', null, `Alcance: ${label}`),
         h('p', { class: 'muted' }, 'Esta pantalla muestra únicamente expedientes y auditorías del dominio asignado a su rol. El control también se aplica en el servidor.')));
     }
@@ -175,26 +175,242 @@
   // ---------------------------------------------------------------- Resumen y fases
   function resumen(el) {
     const { d } = ctx, a = d.audit;
-    const idx = PHASES.indexOf(a.phase);
-    const stepper = h('div', { class: 'stepper' }, PHASES.map((p, i) => h('div', { class: 'step ' + (i < idx ? 'done' : i === idx ? 'cur' : '') }, `${i + 1}. ${S.label2(p)}`)));
-    const phaseBtns = h('div', { class: 'row' });
+    const sheets = Array.isArray(d.sheets) ? d.sheets : [];
+    const phasePos = PHASES.indexOf(a.phase);
+    const idx = phasePos < 0 ? 0 : phasePos;
+    const phaseLog = Array.isArray(d.phase_log) ? d.phase_log : [];
+    const team = Array.isArray(d.team) ? d.team : [];
+
+    const totalItems = sheets.reduce((n, s) => n + Number(s.items || 0), 0);
+    const scoredItems = sheets.reduce((n, s) => n + Number(s.scored || 0), 0);
+    const exceptions = Number(
+      d.overall.exceptions ??
+      sheets.reduce((n, s) => n + Number(s.exceptions || 0), 0)
+    );
+    const completion = totalItems
+      ? Math.min(100, Math.round(scoredItems / totalItems * 100))
+      : 0;
+
+    const scoreText = (v) => v == null ? 'Pendiente' : `${S.score(v)}%`;
+    const scorePct = (v) => v == null
+      ? 0
+      : Math.min(100, Math.max(0, Number(v) || 0));
+
+    const makeProgress = (value) => {
+      const track = h('div', { class: 'audit-progress' });
+      const fill = h('span', { class: 'audit-progress-fill' });
+      fill.style.width = `${scorePct(value)}%`;
+      track.append(fill);
+      return track;
+    };
+
+    const metric = (label, value, note, tone) =>
+      h('div', { class: `audit-kpi ${tone}` },
+        h('div', { class: 'audit-kpi-label' }, label),
+        h('div', { class: 'audit-kpi-value' }, value),
+        h('div', { class: 'audit-kpi-note' }, note)
+      );
+
+    const stepper = h('div', { class: 'stepper audit-phase-stepper' },
+      PHASES.map((p, i) => h('div', {
+        class: 'step ' + (i < idx ? 'done' : i === idx ? 'cur' : '')
+      }, `${i + 1}. ${S.label2(p)}`))
+    );
+
+    const phaseBtns = h('div', { class: 'row audit-phase-actions' });
     if (ctx.canWrite) {
-      if (idx < 2) phaseBtns.append(h('button', { onclick: () => movePhase(PHASES[idx + 1]) }, 'Avanzar a ' + S.label2(PHASES[idx + 1])));
-      if (idx > 0) phaseBtns.append(h('button', { class: 'secondary', onclick: () => movePhase(PHASES[idx - 1]) }, 'Volver a ' + S.label2(PHASES[idx - 1])));
+      if (idx < 2) {
+        phaseBtns.append(h('button', {
+          onclick: () => movePhase(PHASES[idx + 1])
+        }, 'Avanzar a ' + S.label2(PHASES[idx + 1])));
+      }
+      if (idx > 0) {
+        phaseBtns.append(h('button', {
+          class: 'secondary',
+          onclick: () => movePhase(PHASES[idx - 1])
+        }, 'Volver a ' + S.label2(PHASES[idx - 1])));
+      }
     }
-    const rating = h('div', { class: 'panel' }, h('h3', null, 'Calificación global'), h('div', { class: 'kv' }, h('b', null, 'Automática'), S.score(d.overall.auto) + '%', h('b', null, 'Final'), h('b', null, S.score(d.overall.final) + '%' + (d.overall.manual_override ? ' (ajuste manual)' : '')),
-      h('b', null, 'Calificación'), S.ratingBadge(d.overall.rating), h('b', null, 'Escala'), `Excelente > ${d.thresholds.excelente}; ` + `Satisfactorio 70–90; ` + `Aceptable 60–69; ` + `Necesita mejoras 50–59; ` + `No satisfactoria ≤ 49`,
-      h('b', null, 'Excepciones de información'), d.overall.exceptions), a.manual_reason ? h('p', null, h('b', null, 'Justificación del ajuste: '), a.manual_reason) : null);
-    if (can('audit:rate') && ctx.canWrite && a.phase !== 'PLANIFICACION') rating.append(h('div', { class: 'row' }, h('button', { class: 'sm', onclick: () => manual('/audits/' + a.id + '/rating', 'Calificación global', a.manual_score) }, 'Ajustar calificación global (criterio del auditor)')));
-    el.append(stepper, phaseBtns, h('div', { class: 'twocol' },
-      h('div', { class: 'panel' }, h('h3', null, 'Datos de la auditoría'), h('div', { class: 'kv' }, h('b', null, 'Objetivos'), a.objectives, h('b', null, 'Alcance'), a.scope, h('b', null, 'Procedimientos'), a.procedures || '—',
-        h('b', null, 'Líneas'), (a.lines || []).map((l) => LINE[l]).join(', '), a.location ? [h('b', null, 'Lugar'), a.location] : null, h('b', null, 'Colaborador en la unidad'), (a.contact_name || '—') + (a.contact_role ? ' · ' + a.contact_role : ''),
-        h('b', null, 'Previsto'), `${S.date(a.planned_start) || '—'} → ${S.date(a.planned_end) || '—'}`)),
-      h('div', { class: 'panel' }, h('h3', null, 'Equipo auditor'), tbl(['Nombre', 'Rol', 'Iniciales'], d.team.map((t) => [t.name, t.role === 'LIDER' ? 'Líder' : 'Auditor', t.initials])))),
-      rating, h('h3', null, 'Resultados por cédula'),
-      tbl(['Cédula', 'Ítems', 'Calificados', 'Excepciones', 'Automática', 'Final', 'Calificación'], d.sheets.map((s) => [s.title, s.items, s.scored, s.exceptions, S.score(s.auto), S.score(s.final) + (s.manual_override ? ' (manual)' : ''), S.ratingBadge(s.rating)]), (i) => { location.hash = `#/audits/${a.id}/cedulas/${d.sheets[i].id}`; }),
-      h('h3', null, 'Historial de fases'), tbl(['Fecha', 'De', 'A', 'Usuario', 'Nota'], d.phase_log.map((p) => [fmt(p.changed_at), p.from_phase ? S.label2(p.from_phase) : '—', S.label2(p.to_phase), p.username, p.note || ''])));
+
+    const kpis = h('div', { class: 'audit-kpi-grid' });
+    kpis.append(
+      metric(
+        'Calificación final',
+        scoreText(d.overall.final),
+        d.overall.rating ? S.label2(d.overall.rating) : 'Sin calificación calculada',
+        'audit-kpi-blue'
+      )
+    );
+
+    const controlKpi = metric(
+      'Controles calificados',
+      `${scoredItems} / ${totalItems}`,
+      `${completion}% completado`,
+      'audit-kpi-teal'
+    );
+    controlKpi.append(makeProgress(completion));
+    kpis.append(
+      controlKpi,
+      metric(
+        'Excepciones',
+        String(exceptions),
+        'Información no recibida',
+        'audit-kpi-rose'
+      ),
+      metric(
+        'Cédulas',
+        String(sheets.length),
+        'En esta auditoría',
+        'audit-kpi-violet'
+      )
+    );
+
+    const dataPanel = h('section', { class: 'panel audit-summary-panel' },
+      h('h3', null, 'Datos de la auditoría'),
+      h('div', { class: 'kv audit-summary-kv' },
+        h('b', null, 'Objetivos'), a.objectives || '—',
+        h('b', null, 'Alcance'), a.scope || '—',
+        h('b', null, 'Procedimientos'), a.procedures || '—',
+        h('b', null, 'Líneas'),
+        (a.lines || []).map((l) => LINE[l] || l).join(', ') || '—',
+        h('b', null, 'Lugar'), a.location || '—',
+        h('b', null, 'Colaborador en la unidad'),
+        (a.contact_name || '—') + (a.contact_role ? ' · ' + a.contact_role : ''),
+        h('b', null, 'Modalidad'), a.modality || '—',
+        h('b', null, 'Período'),
+        `${S.date(a.period_from) || '—'} → ${S.date(a.period_to) || '—'}`,
+        h('b', null, 'Fechas previstas'),
+        `${S.date(a.planned_start) || '—'} → ${S.date(a.planned_end) || '—'}`
+      )
+    );
+
+    const teamPanel = h('section', { class: 'panel audit-summary-panel' },
+      h('h3', null, 'Equipo auditor'),
+      tbl(
+        ['Nombre', 'Rol', 'Iniciales'],
+        team.map((t) => [
+          t.name,
+          t.role === 'LIDER' ? 'Líder' : 'Auditor',
+          t.initials || '—'
+        ])
+      )
+    );
+
+    const excellent = d.thresholds?.excelente ?? 90;
+    const ratingPanel = h('section', {
+      class: 'panel audit-summary-panel audit-rating-panel'
+    },
+      h('h3', null, 'Calificación global'),
+      h('div', { class: 'audit-rating-metrics' },
+        h('div', { class: 'audit-rating-metric' },
+          h('span', null, 'Automática'),
+          h('strong', null, scoreText(d.overall.auto))
+        ),
+        h('div', { class: 'audit-rating-metric' },
+          h('span', null, 'Final'),
+          h('strong', null, scoreText(d.overall.final))
+        ),
+        h('div', { class: 'audit-rating-metric' },
+          h('span', null, 'Resultado'),
+          S.ratingBadge(d.overall.rating)
+        )
+      ),
+      h('div', { class: 'audit-rating-scale' },
+        `Escala: Excelente > ${excellent}; Satisfactorio 70–90; ` +
+        'Aceptable 60–69; Necesita mejoras 50–59; No satisfactoria ≤ 49'
+      )
+    );
+
+    if (a.manual_reason) {
+      ratingPanel.append(
+        h('p', { class: 'audit-manual-reason' },
+          h('b', null, 'Justificación del ajuste: '),
+          a.manual_reason
+        )
+      );
+    }
+
+    if (can('audit:rate') && ctx.canWrite && a.phase !== 'PLANIFICACION') {
+      ratingPanel.append(
+        h('div', { class: 'audit-rating-actions' },
+          h('button', {
+            class: 'sm',
+            onclick: () => manual(
+              '/audits/' + a.id + '/rating',
+              'Calificación global',
+              a.manual_score
+            )
+          }, 'Ajustar calificación global')
+        )
+      );
+    }
+
+    const resultCards = h('div', { class: 'audit-sheet-results' });
+    if (!sheets.length) {
+      resultCards.append(
+        h('div', { class: 'empty panel' }, 'No hay cédulas registradas.')
+      );
+    } else {
+      sheets.forEach((s) => {
+        const result = h('button', {
+          class: 'audit-sheet-result',
+          type: 'button',
+          onclick: () => {
+            location.hash = `#/audits/${a.id}/cedulas/${s.id}`;
+          }
+        });
+
+        result.append(
+          h('div', { class: 'audit-sheet-result-head' },
+            h('span', { class: 'audit-sheet-result-title' }, s.title || 'Cédula'),
+            h('strong', { class: 'audit-sheet-result-score' }, scoreText(s.final))
+          ),
+          makeProgress(s.final),
+          h('div', { class: 'audit-sheet-result-meta' },
+            `${Number(s.scored || 0)} de ${Number(s.items || 0)} controles calificados`,
+            h('span', null, `${Number(s.exceptions || 0)} excepciones`)
+          ),
+          S.ratingBadge(s.rating)
+        );
+        resultCards.append(result);
+      });
+    }
+
+    const resultsPanel = h('section', {
+      class: 'panel audit-summary-panel audit-results-panel'
+    },
+      h('div', { class: 'audit-section-heading' },
+        h('h3', null, 'Resultados por cédula'),
+        h('p', { class: 'muted' }, 'Seleccione una cédula para abrir sus controles.')
+      ),
+      resultCards
+    );
+
+    const history = h('details', { class: 'audit-history-details' },
+      h('summary', null, `Historial de fases (${phaseLog.length})`),
+      tbl(
+        ['Fecha', 'De', 'A', 'Usuario', 'Nota'],
+        phaseLog.map((p) => [
+          fmt(p.changed_at),
+          p.from_phase ? S.label2(p.from_phase) : '—',
+          S.label2(p.to_phase),
+          p.username || '—',
+          p.note || '—'
+        ])
+      )
+    );
+
+    const dashboard = h('div', { class: 'audit-summary-dashboard' },
+      kpis,
+      h('div', { class: 'audit-summary-layout' }, dataPanel, teamPanel),
+      ratingPanel,
+      resultsPanel,
+      history
+    );
+
+    el.replaceChildren(stepper, phaseBtns, dashboard);
   }
+
   async function movePhase(to) {
     const back = PHASES.indexOf(to) < PHASES.indexOf(ctx.d.audit.phase);
     const v = await S.ask('Cambiar de fase: ' + S.label2(to), [{ name: 'note', label: back ? 'Motivo (obligatorio)' : 'Nota (opcional)', type: 'textarea', required: back }], 'Confirmar');
@@ -259,8 +475,8 @@
       const criteria = Object.fromEntries(ws.criteria.map((c) => [c.code, c]));
       const rows = ws.items.map((it) => systemQuestionRow(it, criteria[it.ref], edit, paint, wid));
       el.append(bar, h('div', { class: 'row' }, sum), stats, section,
-        !edit ? h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'El cuestionario se califica en Trabajo de campo.' : 'Solo lectura.') : null,
-        h('div', { class: 'grid-wrap' }, h('table', null, h('thead', null, h('tr', null, ['ID', 'Sección', 'Pregunta de auditoría', 'Existencia', 'Soporte documental', 'Evidencia / entregable', 'Puntaje', 'Observación', ''].map((x) => h('th', null, x)))), h('tbody', null, rows))));
+        ...(!edit ? [h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'El cuestionario se califica en Trabajo de campo.' : 'Solo lectura.')] : []),
+        h('div', { class: 'grid-wrap audit-system-questionnaire' }, h('table', null, h('thead', null, h('tr', null, ['ID', 'Sección', 'Pregunta de auditoría', 'Existencia', 'Soporte documental', 'Evidencia / entregable', 'Puntaje', 'Observación', ''].map((x) => h('th', null, x)))), h('tbody', null, rows))));
       return;
     }
 
@@ -273,15 +489,51 @@
         if (v) { const r = await S.send(`${A}/worksheets/${wid}/sample`, 'POST', { n: Number(v.n) }); if (r) { S.say(r.added + ' ítems agregados.' + (r.note ? ' ' + r.note : ''), true); reload(); } }
       } }, 'Muestra aleatoria'));
     }
-    if (edit && can('audit:rate')) bar.append(h('button', { class: 'secondary', onclick: () => manual(`${A}/worksheets/${wid}/rating`, ws.title, ws.manual_score) }, 'Ajustar nota de la cédula'),
-      ws.manual_score != null ? h('button', { class: 'secondary', onclick: () => clearManual(`${A}/worksheets/${wid}/rating`) }, 'Quitar ajuste') : null);
+    if (edit && can('audit:rate')) {
+      bar.append(h('button', { class: 'secondary', onclick: () => manual(`${A}/worksheets/${wid}/rating`, ws.title, ws.manual_score) }, 'Ajustar nota de la cédula'));
+      if (ws.manual_score != null) {
+        bar.append(h('button', { class: 'secondary', onclick: () => clearManual(`${A}/worksheets/${wid}/rating`) }, 'Quitar ajuste'));
+      }
+    }
     const legend = h('details', null, h('summary', null, `Criterios (${ws.criteria.length})`), h('div', { class: 'legend' }, ws.criteria.map((c) => h('div', null, h('b', null, c.code), ` (peso ${c.weight}) `, c.text))));
     const head = ['Referencia', ...ws.criteria.map((c) => h('span', { title: c.text }, c.code)), 'Auto', 'Final', 'Observación del auditor', 'Excepción: información no recibida', ''];
     const rows = ws.items.map((it) => rowFor(it, ws, edit, paint, wid));
-    el.append(bar, h('div', { class: 'row' }, sum), legend,
-      ws.manual_reason ? h('div', { class: 'warn' }, 'Ajuste manual de la cédula: ' + ws.manual_reason) : null,
-      !edit ? h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'La cédula se califica en Trabajo de campo.' : 'Solo lectura (no es del equipo, la auditoría está cerrada o el informe quedó bloqueado).') : null,
-      ws.items.length ? h('div', { class: 'grid-wrap' }, h('table', null, h('thead', null, h('tr', null, head.map((x) => h('th', null, x)))), h('tbody', null, rows))) : h('div', { class: 'empty panel' }, 'Sin ítems: agregue referencias o saque una muestra aleatoria.'));
+    const worksheetContent = [
+      bar,
+      h('div', { class: 'row' }, sum),
+      legend
+    ];
+
+    if (ws.manual_reason) {
+      worksheetContent.push(
+        h('div', { class: 'warn' },
+          'Ajuste manual de la cédula: ' + ws.manual_reason)
+      );
+    }
+
+    if (!edit) {
+      worksheetContent.push(
+        h('div', { class: 'warn' },
+          d.audit.phase === 'PLANIFICACION'
+            ? 'La cédula se califica en Trabajo de campo.'
+            : 'Solo lectura (no es del equipo, la auditoría está cerrada o el informe quedó bloqueado).')
+      );
+    }
+
+    worksheetContent.push(
+      ws.items.length
+        ? h('div', { class: 'grid-wrap audit-financial-worksheet' },
+            h('table', null,
+              h('thead', null,
+                h('tr', null, head.map((x) => h('th', null, x)))),
+              h('tbody', null, rows)
+            )
+          )
+        : h('div', { class: 'empty panel' },
+            'Sin ítems: agregue referencias o saque una muestra aleatoria.')
+    );
+
+    el.append(...worksheetContent);
   }
 
   function systemQuestionRow(it, criterion, edit, paint, wid) {
@@ -308,7 +560,12 @@
     const obs = h('textarea', { disabled: !edit, value: state.observation, placeholder: 'Justificación, evidencia o plan de acción' });
     obs.addEventListener('change', () => { state.observation = obs.value; save(); });
     const actions = h('td', null, saving);
-    if (edit && can('audit:rate')) actions.append(h('button', { class: 'sm secondary', onclick: () => manual(`${A}/items/${it.id}/rating`, code, it.manual_score) }, 'Ajustar nota'), it.manual_score != null ? h('button', { class: 'sm secondary', onclick: () => clearManual(`${A}/items/${it.id}/rating`) }, 'Quitar') : null);
+    if (edit && can('audit:rate')) {
+      actions.append(h('button', { class: 'sm secondary', onclick: () => manual(`${A}/items/${it.id}/rating`, code, it.manual_score) }, 'Ajustar nota'));
+      if (it.manual_score != null) {
+        actions.append(h('button', { class: 'sm secondary', onclick: () => clearManual(`${A}/items/${it.id}/rating`) }, 'Quitar'));
+      }
+    }
     if (edit) actions.append(h('button', { class: 'sm', onclick: () => obsForm({ item_id: it.id, title: '', condition: it.observation || '' }) }, '+ Obs.'));
     return h('tr', null, h('td', null, h('b', null, code)), h('td', null, criterion?.section || '—'), h('td', { title: criterion?.text || '' }, criterion?.text || 'Pregunta no disponible'),
       h('td', null, select('control', [['SI', 'Sí'], ['NO', 'No'], ['PARCIAL', 'Parcialmente']])),
@@ -354,13 +611,254 @@
   async function observaciones(el) {
     const d = await S.get(`${A}/${ctx.aid}/observations`);
     if (!d) return;
-    const bar = h('div', { class: 'toolbar' });
+
+    const observations = Array.isArray(d.observations) ? d.observations : [];
     const phaseOk = ctx.d.audit.phase !== 'PLANIFICACION';
-    if (ctx.canWrite && phaseOk) bar.append(h('button', { onclick: () => obsForm({}) }, 'Nueva observación'));
-    el.append(bar, !phaseOk ? h('div', { class: 'warn' }, 'Las observaciones se registran desde Trabajo de campo.') : null,
-      tbl(['N°', 'Riesgo', 'Observación', 'Respuesta de la unidad', 'PAC', 'Fecha compromiso', ''], d.observations.map((o) => [o.seq, S.badge(o.risk === 'ALTO' ? 'HIGH' : o.risk === 'MEDIO' ? 'MEDIUM' : 'LOW'), o.title, o.unit_decision || '—', S.badge(o.pac_status === 'CUMPLIDA' ? 'OK' : o.pac_status === 'EN_CURSO' ? 'PROCESSING' : 'PENDING'), S.date(o.pac_due),
-        ctx.canWrite && phaseOk ? h('div', { class: 'actions' }, h('button', { class: 'sm', onclick: () => obsForm(o) }, 'Editar'), h('button', { class: 'sm secondary', onclick: () => obsResponse(o) }, 'Respuesta / PAC')) : ''])));
+    const canEdit = Boolean(ctx.canWrite && phaseOk);
+
+    const riskOf = (o) => String(o.risk || 'BAJO').toUpperCase();
+    const pacOf = (o) => String(o.pac_status || 'PENDIENTE').toUpperCase();
+
+    const highRisk = (o) => ['ALTO', 'HIGH'].includes(riskOf(o));
+    const mediumRisk = (o) => ['MEDIO', 'MEDIUM'].includes(riskOf(o));
+    const pendingResponse = (o) => !String(o.unit_decision || '').trim();
+
+    const highCount = observations.filter(highRisk).length;
+    const responseCount = observations.filter(pendingResponse).length;
+    const pacOpenCount = observations.filter((o) => pacOf(o) !== 'CUMPLIDA').length;
+
+    const riskFilter = h('select', { 'aria-label': 'Filtrar por riesgo' });
+    [
+      ['', 'Todos los riesgos'],
+      ['ALTO', 'Riesgo alto'],
+      ['MEDIO', 'Riesgo medio'],
+      ['BAJO', 'Riesgo bajo']
+    ].forEach(([value, label]) => riskFilter.append(
+      h('option', { value }, label)
+    ));
+
+    const stateFilter = h('select', { 'aria-label': 'Filtrar por estado' });
+    [
+      ['', 'Todos los estados'],
+      ['SIN_RESPUESTA', 'Sin respuesta de la unidad'],
+      ['PAC_PENDIENTE', 'PAC pendiente'],
+      ['PAC_EN_CURSO', 'PAC en curso'],
+      ['PAC_CUMPLIDA', 'PAC cumplida']
+    ].forEach(([value, label]) => stateFilter.append(
+      h('option', { value }, label)
+    ));
+
+    const search = h('input', {
+      type: 'search',
+      placeholder: 'Buscar por número u observación',
+      'aria-label': 'Buscar observaciones'
+    });
+
+    const kpi = (label, value, note, tone) =>
+      h('div', { class: `audit-observation-kpi ${tone}` },
+        h('span', { class: 'audit-observation-kpi-label' }, label),
+        h('strong', { class: 'audit-observation-kpi-value' }, String(value)),
+        h('span', { class: 'audit-observation-kpi-note' }, note)
+      );
+
+    const header = h('div', { class: 'audit-observations-heading' },
+      h('div', null,
+        h('h3', null, 'Seguimiento de observaciones'),
+        h('p', { class: 'muted' },
+          'Consulte hallazgos, respuestas de la unidad y avance del plan de acción correctiva.')
+      ),
+      h('span', { class: 'audit-observation-total' },
+        `${observations.length} registradas`
+      )
+    );
+
+    const toolbar = h('div', { class: 'toolbar audit-observations-toolbar' });
+    if (canEdit) {
+      toolbar.append(
+        h('button', { onclick: () => obsForm({}) }, 'Nueva observación')
+      );
+    }
+
+    const kpis = h('div', { class: 'audit-observation-kpis' },
+      kpi('Observaciones', observations.length,
+        'Total de hallazgos registrados', 'audit-observation-blue'),
+      kpi('Riesgo alto', highCount,
+        'Hallazgos de mayor prioridad', 'audit-observation-red'),
+      kpi('Sin respuesta', responseCount,
+        'Pendientes de respuesta de la unidad', 'audit-observation-amber'),
+      kpi('PAC por completar', pacOpenCount,
+        'Acciones correctivas no cumplidas', 'audit-observation-violet')
+    );
+
+    const filters = h('section', { class: 'panel audit-observation-filters' },
+      h('label', { class: 'audit-observation-filter' },
+        h('span', null, 'Buscar'),
+        search
+      ),
+      h('label', { class: 'audit-observation-filter' },
+        h('span', null, 'Nivel de riesgo'),
+        riskFilter
+      ),
+      h('label', { class: 'audit-observation-filter' },
+        h('span', null, 'Seguimiento'),
+        stateFilter
+      )
+    );
+
+    const resultCount = h('span', { class: 'audit-observation-total' });
+    const tableArea = h('div', { class: 'audit-observations-table' });
+
+    const tablePanel = h('section', {
+      class: 'panel audit-observations-panel'
+    },
+      h('div', { class: 'audit-observations-table-heading' },
+        h('div', null,
+          h('h3', null, 'Registro de observaciones'),
+          h('p', { class: 'muted' },
+            'Cada observación conserva su seguimiento y acciones PAC.')
+        ),
+        resultCount
+      ),
+      tableArea
+    );
+
+    function renderRows() {
+      const query = search.value.trim().toLocaleLowerCase('es');
+      const selectedRisk = riskFilter.value;
+      const selectedState = stateFilter.value;
+
+      const filtered = observations.filter((o) => {
+        const risk = riskOf(o);
+        const pac = pacOf(o);
+
+        if (selectedRisk) {
+          const sameRisk = selectedRisk === 'ALTO'
+            ? ['ALTO', 'HIGH'].includes(risk)
+            : selectedRisk === 'MEDIO'
+              ? ['MEDIO', 'MEDIUM'].includes(risk)
+              : ['BAJO', 'LOW'].includes(risk);
+
+          if (!sameRisk) return false;
+        }
+
+        if (selectedState === 'SIN_RESPUESTA' && !pendingResponse(o)) {
+          return false;
+        }
+        if (selectedState === 'PAC_PENDIENTE' && pac !== 'PENDIENTE') {
+          return false;
+        }
+        if (selectedState === 'PAC_EN_CURSO' && pac !== 'EN_CURSO') {
+          return false;
+        }
+        if (selectedState === 'PAC_CUMPLIDA' && pac !== 'CUMPLIDA') {
+          return false;
+        }
+
+        if (query) {
+          const searchable = [
+            o.seq, o.title, o.condition, o.criteria, o.recommendation,
+            o.unit_decision, o.unit_response, o.pac_action, o.pac_owner
+          ].filter(Boolean).join(' ').toLocaleLowerCase('es');
+
+          if (!searchable.includes(query)) return false;
+        }
+
+        return true;
+      });
+
+      resultCount.textContent = `${filtered.length} de ${observations.length}`;
+
+      if (!filtered.length) {
+        tableArea.replaceChildren(h('div', { class: 'empty panel' },
+          observations.length
+            ? 'Ninguna observación coincide con los filtros.'
+            : 'Todavía no hay observaciones registradas.'
+        ));
+        return;
+      }
+
+      const decisionLabels = {
+        ACEPTA: 'Acepta',
+        PARCIAL: 'Acepta parcialmente',
+        NO_ACEPTA: 'No acepta'
+      };
+
+      const rows = filtered.map((o) => {
+        const risk = riskOf(o);
+        const pac = pacOf(o);
+
+        const riskType = ['ALTO', 'HIGH'].includes(risk)
+          ? 'HIGH'
+          : ['MEDIO', 'MEDIUM'].includes(risk) ? 'MEDIUM' : 'LOW';
+
+        const pacType = pac === 'CUMPLIDA'
+          ? 'OK'
+          : pac === 'EN_CURSO' ? 'PROCESSING' : 'PENDING';
+
+        const actions = h('div', {
+          class: 'actions audit-observation-actions'
+        });
+
+        if (canEdit) {
+          actions.append(
+            h('button', {
+              class: 'sm',
+              onclick: () => obsForm(o)
+            }, 'Editar'),
+            h('button', {
+              class: 'sm secondary',
+              onclick: () => obsResponse(o)
+            }, 'Respuesta / PAC')
+          );
+        } else {
+          actions.append('Solo lectura');
+        }
+
+        return [
+          h('strong', null, String(o.seq ?? '—')),
+          S.badge(riskType),
+          h('div', { class: 'audit-observation-description' },
+            h('strong', null, o.title || 'Sin título'),
+            o.condition
+              ? h('p', { class: 'muted' }, o.condition)
+              : null
+          ),
+          decisionLabels[o.unit_decision] ||
+            (o.unit_decision ? S.label2(o.unit_decision) : 'Pendiente'),
+          S.badge(pacType),
+          S.date(o.pac_due) || '—',
+          actions
+        ];
+      });
+
+      tableArea.replaceChildren(
+        tbl(
+          ['N.º', 'Riesgo', 'Observación', 'Respuesta de la unidad',
+            'Estado PAC', 'Fecha compromiso', 'Acciones'],
+          rows
+        )
+      );
+    }
+
+    search.addEventListener('input', renderRows);
+    riskFilter.addEventListener('change', renderRows);
+    stateFilter.addEventListener('change', renderRows);
+
+    const root = h('div', { class: 'audit-observations-dashboard' },
+      header
+    );
+
+    if (!phaseOk) {
+      root.append(h('div', { class: 'warn' },
+        'Las observaciones se registran desde Trabajo de campo.'
+      ));
+    }
+
+    root.append(toolbar, kpis, filters, tablePanel);
+    el.replaceChildren(root);
+    renderRows();
   }
+
   async function obsForm(o) {
     const v = await S.ask(o.id ? 'Editar observación ' + o.seq : 'Nueva observación', [
       { name: 'title', label: 'Título', value: o.title || '', required: true }, { name: 'risk', label: 'Riesgo', type: 'select', options: [['ALTO', 'Alto'], ['MEDIO', 'Medio'], ['BAJO', 'Bajo']].map(([v2, l]) => [v2, l]), value: o.risk || 'MEDIO' },

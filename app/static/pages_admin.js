@@ -3,42 +3,711 @@
   'use strict';
   const S = window.SICAS, { h, can, tbl, badge, fmt } = S;
 
-  // ------------------------------------------------------------------ Inicio
-  S.pages.push({ id: 'home', title: 'Inicio', perms: [], render: async (el) => {
-    el.append(h('h2', null, 'Inicio'));
-    const cards = h('div', { class: 'cards' });
-    el.append(cards);
-    if (can('dashboard:operational', 'dashboard:executive')) {
-      const d = await S.get('/analytics/overview');
-      if (d) {
-        const sev = d.open_findings_by_severity || {};
-        ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].forEach((k) => cards.append(S.stat(sev[k] || 0, 'Hallazgos abiertos · ' + S.label(k))));
-        const bad = (d.ingestion || []).filter((j) => j.status === 'FAILED').reduce((a, j) => a + j.n, 0);
-        cards.append(S.stat(bad, 'Cargas fallidas'));
+  // SICAS-HOME-DASHBOARD-20261014-v1
+  S.pages.push({
+    id: 'home',
+    title: 'Inicio',
+    perms: [],
+    render: async (el) => {
+      el.classList.add('home-dashboard');
+
+      const hasAnalytics = can('dashboard:operational', 'dashboard:executive');
+      const hasAuditAccess = can('audit:read');
+      const hasReportAccess = can(
+        'audit:report_approve', 'audit:sign_gerente', 'audit:read_final'
+      );
+
+      // Reutilizar las consultas existentes; no se introducen endpoints nuevos.
+      const overview = hasAnalytics
+        ? await S.get('/analytics/overview')
+        : null;
+
+      const auditData = hasAuditAccess
+        ? await S.get('/audits')
+        : null;
+
+      const reportData = hasReportAccess
+        ? await S.get('/audits/final-reports')
+        : null;
+
+      const audits = Array.isArray(auditData?.audits)
+        ? auditData.audits : [];
+
+      const reports = Array.isArray(reportData?.reports)
+        ? reportData.reports : [];
+
+      const activeAudits = audits.filter(
+        (a) => a.status === 'IN_PROGRESS'
+      );
+
+      const activeFileCodes = new Set(
+        activeAudits.map((a) => a.file_code).filter(Boolean)
+      );
+
+      const pendingReports = reports.filter(
+        (r) => r.status !== 'SIGNED'
+      );
+
+      const severity = overview?.open_findings_by_severity || {};
+      const totalFindings = Object.values(severity).reduce(
+        (sum, value) => sum + (Number(value) || 0), 0
+      );
+
+      const failedUploads = (overview?.ingestion || [])
+        .filter((job) => job.status === 'FAILED')
+        .reduce((sum, job) => sum + (Number(job.n) || 0), 0);
+
+      const number = (value) => Number(value || 0).toLocaleString('es-ES');
+
+      const statusName = (value) => ({
+        IN_PROGRESS: 'En curso',
+        CLOSED: 'Cerrada',
+        SIGNED: 'Firmado',
+        APPROVED: 'Aprobado',
+        PENDING: 'Pendiente',
+        DRAFT: 'Borrador',
+        OPEN: 'Abierto',
+        UNDER_REVIEW: 'En revisión',
+        IN_REVIEW: 'En revisión',
+        CANCELLED: 'Cancelada',
+        REJECTED: 'Rechazado',
+        RETURNED: 'Devuelto'
+      })[value] || String(value || 'Sin estado')
+        .replaceAll('_', ' ');
+
+      const statusBadge = (value) => {
+        const node = S.badge(value || '—');
+        if (node && value) node.textContent = statusName(value);
+        return node;
+      };
+
+      const header = h('div', { class: 'home-dashboard-header' });
+      const intro = h('div', { class: 'home-dashboard-intro' });
+
+      intro.append(
+        h('p', { class: 'home-eyebrow' }, 'SICAS · CONTROL Y AUDITORÍA'),
+        h('h2', null, 'Inicio'),
+        h('p', { class: 'home-subtitle' },
+          'Resumen operativo de auditorías, expedientes e informes.')
+      );
+
+      const live = h('span', { class: 'home-live-badge' });
+      live.append(
+        h('span', { class: 'home-live-dot' }),
+        document.createTextNode(' Datos del sistema')
+      );
+
+      header.append(intro, live);
+      el.append(header);
+
+      // Indicadores: solo métricas respaldadas por los datos accesibles.
+      const metrics = h('div', { class: 'cards home-metrics' });
+
+      const addMetric = (value, label) => {
+        metrics.append(S.stat(number(value), label));
+      };
+
+      if (hasAuditAccess) {
+        addMetric(activeAudits.length, 'Auditorías en curso');
+        addMetric(activeFileCodes.size, 'Expedientes con actividad');
+      }
+
+      if (hasReportAccess) {
+        addMetric(pendingReports.length, 'Informes por atender');
+      }
+
+      if (overview) {
+        addMetric(totalFindings, 'Hallazgos abiertos');
+        addMetric(Number(severity.CRITICAL || 0), 'Hallazgos críticos');
+
+        if (failedUploads > 0) {
+          addMetric(failedUploads, 'Cargas fallidas');
+        }
+      }
+
+      if (metrics.children.length) {
+        el.append(metrics);
+      } else {
+        el.append(h('section', { class: 'home-panel home-empty-access' },
+          h('h3', null, 'Resumen operativo'),
+          h('p', null,
+            'El resumen depende de los permisos asignados a su usuario.')));
+      }
+
+      // Construcción de gráficas con datos reales.
+      const countBy = (items, getLabel) => {
+        const counts = new Map();
+
+        items.forEach((item) => {
+          const label = String(getLabel(item) || 'Sin dato');
+          counts.set(label, (counts.get(label) || 0) + 1);
+        });
+
+        return [...counts.entries()]
+          .map(([label, value]) => ({ label, value }))
+          .sort((a, b) => b.value - a.value);
+      };
+
+      const chartPanel = (title, subtitle, items) => {
+        const panel = h('section', { class: 'home-panel home-chart-panel' });
+        const heading = h('div', { class: 'home-panel-head' });
+        const copy = h('div', { class: 'home-panel-title' });
+
+        copy.append(
+          h('h3', null, title),
+          h('p', { class: 'home-panel-note' }, subtitle)
+        );
+
+        heading.append(copy);
+        panel.append(heading);
+
+        if (!items.length) {
+          panel.append(h('p', { class: 'home-empty' },
+            'No hay datos disponibles para esta visualización.'));
+          return panel;
+        }
+
+        const maxValue = Math.max(
+          1, ...items.map((item) => Number(item.value) || 0)
+        );
+
+        const bars = h('div', { class: 'home-bars' });
+
+        items.forEach((item, index) => {
+          const value = Number(item.value) || 0;
+          const percentage = Math.round(value / maxValue * 100);
+          const row = h('div', { class: 'home-bar-row' });
+          const meta = h('div', { class: 'home-bar-meta' });
+
+          meta.append(
+            h('span', { class: 'home-bar-label' }, item.label),
+            h('strong', { class: 'home-bar-value' }, number(value))
+          );
+
+          const track = h('div', { class: 'home-bar-track' });
+          const fill = h('span', {
+            class: 'home-bar-fill tone-' + (index % 5)
+          });
+
+          fill.style.width = percentage + '%';
+          track.append(fill);
+          row.append(meta, track);
+          bars.append(row);
+        });
+
+        panel.append(bars);
+        return panel;
+      };
+
+      // Gráfico de líneas SVG sin bibliotecas externas.
+      const lineChartPanel = (title, subtitle, labels, series) => {
+        const panel = h('section', {
+          class: 'home-panel home-chart-panel home-line-panel'
+        });
+        const heading = h('div', { class: 'home-panel-head' });
+        const copy = h('div', { class: 'home-panel-title' });
+
+        copy.append(
+          h('h3', null, title),
+          h('p', { class: 'home-panel-note' }, subtitle)
+        );
+        heading.append(copy);
+        panel.append(heading);
+
+        if (labels.length < 2 || !series.length) {
+          panel.append(h('p', { class: 'home-empty' },
+            'No hay suficientes fechas válidas para calcular una tendencia.'));
+          return panel;
+        }
+
+        const ns = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(ns, 'svg');
+        const width = 720;
+        const height = 300;
+        const pad = { left: 48, right: 20, top: 22, bottom: 48 };
+        const plotWidth = width - pad.left - pad.right;
+        const plotHeight = height - pad.top - pad.bottom;
+        const maxValue = Math.max(
+          1,
+          ...series.flatMap((item) => item.values)
+        );
+        const scaleMax = Math.max(4, Math.ceil(maxValue / 4) * 4);
+        const palette = ['#3479b8', '#319c91', '#8065c8', '#dc9b31', '#d35e69'];
+
+        svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        svg.setAttribute('role', 'img');
+        svg.setAttribute(
+          'aria-label',
+          title + ': evolución mensual de auditorías por unidad'
+        );
+        svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+        svg.classList.add('home-line-chart');
+
+        const makeSvg = (tag, attrs, text) => {
+          const node = document.createElementNS(ns, tag);
+          Object.entries(attrs || {}).forEach(([key, value]) =>
+            node.setAttribute(key, String(value))
+          );
+          if (text != null) node.textContent = String(text);
+          return node;
+        };
+
+        // Ejes y cuadrícula.
+        for (let tick = 0; tick <= 4; tick++) {
+          const value = scaleMax * tick / 4;
+          const y = pad.top + plotHeight - (value / scaleMax) * plotHeight;
+
+          svg.append(
+            makeSvg('line', {
+              x1: pad.left,
+              y1: y,
+              x2: width - pad.right,
+              y2: y,
+              stroke: '#e5edf5',
+              'stroke-width': 1
+            }),
+            makeSvg('text', {
+              x: pad.left - 10,
+              y: y + 4,
+              fill: '#74869a',
+              'font-size': 11,
+              'text-anchor': 'end'
+            }, Math.round(value))
+          );
+        }
+
+        labels.forEach((label, index) => {
+          const x = pad.left + (
+            labels.length === 1
+              ? plotWidth / 2
+              : index * plotWidth / (labels.length - 1)
+          );
+
+          svg.append(makeSvg('text', {
+            x,
+            y: height - 18,
+            fill: '#647890',
+            'font-size': 11,
+            'text-anchor': 'middle'
+          }, label));
+        });
+
+        const legend = h('div', { class: 'home-line-legend' });
+
+        series.forEach((item, seriesIndex) => {
+          const color = palette[seriesIndex % palette.length];
+          const points = item.values.map((value, index) => ({
+            x: pad.left + index * plotWidth / (labels.length - 1),
+            y: pad.top + plotHeight -
+              (Number(value || 0) / scaleMax) * plotHeight,
+            value: Number(value || 0)
+          }));
+
+          const pointText = points.map((point) =>
+            `${point.x},${point.y}`
+          ).join(' ');
+
+          svg.append(makeSvg('polyline', {
+            points: pointText,
+            fill: 'none',
+            stroke: color,
+            'stroke-width': 2.5,
+            'stroke-linecap': 'round',
+            'stroke-linejoin': 'round'
+          }));
+
+          points.forEach((point, index) => {
+            const circle = makeSvg('circle', {
+              cx: point.x,
+              cy: point.y,
+              r: 4,
+              fill: color,
+              stroke: '#fff',
+              'stroke-width': 1.5
+            });
+
+            circle.append(makeSvg(
+              'title',
+              {},
+              `${item.label}, ${labels[index]}: ${point.value} auditorías`
+            ));
+            svg.append(circle);
+          });
+
+          const legendItem = h('span', { class: 'home-line-legend-item' });
+          const swatch = h('span', { class: 'home-line-swatch' });
+          swatch.style.backgroundColor = color;
+          legendItem.append(swatch, document.createTextNode(item.label));
+          legend.append(legendItem);
+        });
+
+        panel.append(svg, legend);
+        return panel;
+      };
+
+      // Dona de severidad; conserva los conteos y porcentajes reales.
+      const severityDonutPanel = (values) => {
+        const panel = h('section', {
+          class: 'home-panel home-chart-panel home-severity-panel'
+        });
+        const heading = h('div', { class: 'home-panel-head' });
+        const copy = h('div', { class: 'home-panel-title' });
+
+        copy.append(
+          h('h3', null, 'Hallazgos abiertos por severidad'),
+          h('p', { class: 'home-panel-note' },
+            'Distribución de los hallazgos informados por el sistema')
+        );
+        heading.append(copy);
+        panel.append(heading);
+
+        const rows = [
+          { key: 'CRITICAL', label: 'Críticos', color: '#d9485f' },
+          { key: 'HIGH', label: 'Altos', color: '#ed8b32' },
+          { key: 'MEDIUM', label: 'Medios', color: '#e0b13e' },
+          { key: 'LOW', label: 'Bajos', color: '#3479b8' }
+        ].map((row) => ({
+          ...row,
+          value: Math.max(0, Number(values[row.key] || 0))
+        }));
+
+        const total = rows.reduce((sum, row) => sum + row.value, 0);
+        const layout = h('div', { class: 'home-donut-layout' });
+        const ring = h('div', {
+          class: 'home-donut-ring',
+          role: 'img',
+          'aria-label': `Total de hallazgos abiertos: ${number(total)}`
+        });
+
+        if (total > 0) {
+          let offset = 0;
+          const stops = [];
+
+          rows.filter((row) => row.value > 0).forEach((row) => {
+            const end = offset + row.value / total * 100;
+            stops.push(
+              `${row.color} ${offset.toFixed(2)}% ${end.toFixed(2)}%`
+            );
+            offset = end;
+          });
+
+          ring.style.background = `conic-gradient(${stops.join(', ')})`;
+        } else {
+          ring.style.background = '#e7edf4';
+        }
+
+        const hole = h('div', { class: 'home-donut-center' });
+        hole.append(
+          h('strong', null, number(total)),
+          h('span', null, 'abiertos')
+        );
+        ring.append(hole);
+        layout.append(ring);
+
+        const legend = h('div', { class: 'home-donut-legend' });
+
+        rows.forEach((row) => {
+          const legendRow = h('div', { class: 'home-donut-row' });
+          const name = h('span', { class: 'home-donut-name' });
+          const swatch = h('span', { class: 'home-donut-swatch' });
+          swatch.style.backgroundColor = row.color;
+          name.append(swatch, document.createTextNode(row.label));
+
+          const count = h('strong', { class: 'home-donut-count' },
+            number(row.value));
+          const percentage = total
+            ? Math.round(row.value / total * 100)
+            : 0;
+
+          legendRow.append(
+            name,
+            count,
+            h('span', { class: 'home-donut-percent' }, percentage + '%')
+          );
+          legend.append(legendRow);
+        });
+
+        layout.append(legend);
+        panel.append(layout);
+        return panel;
+      };
+
+      const charts = h('div', { class: 'home-chart-grid' });
+
+      // Evolución mensual solo si la API ya proporciona fechas válidas.
+      const auditDate = (audit) => {
+        for (const key of [
+          'created_at', 'created_on', 'createdAt', 'created', 'started_at'
+        ]) {
+          if (!audit?.[key]) continue;
+
+          const date = new Date(audit[key]);
+          if (Number.isFinite(date.getTime())) return date;
+        }
+        return null;
+      };
+
+      // SICAS-HOME-UNIT-PERIOD-CHARTS-20261014-v2
+      const datedAudits = audits
+        .map((audit) => ({ audit, date: auditDate(audit) }))
+        .filter((item) => item.date);
+
+      if (hasAuditAccess) {
+        const statuses = countBy(audits, (a) => statusName(a.status));
+        const phases = countBy(audits, (a) =>
+          a.phase && typeof S.label2 === 'function'
+            ? S.label2(a.phase) : a.phase
+        );
+
+        // countBy ya ordena de mayor a menor por cantidad.
+        const units = countBy(
+          audits,
+          (a) => a.unit_name || 'Sin unidad'
+        ).slice(0, 5);
+
+        charts.append(
+          chartPanel(
+            'Estado de auditorías',
+            `${number(audits.length)} auditorías en la lista disponible`,
+            statuses
+          ),
+          chartPanel(
+            'Auditorías por fase',
+            'Distribución según la fase actual',
+            phases
+          )
+        );
+
+        // 1. Ranking estático de unidades, siempre en barras.
+        const ranking = chartPanel(
+          'Unidades con más auditorías',
+          'Total de auditorías por unidad, de mayor a menor',
+          units
+        );
+        ranking.classList.add('home-units-ranking');
+        charts.append(ranking);
+
+        // 2. Tendencia de las mismas unidades a lo largo del tiempo.
+        if (datedAudits.length && units.length) {
+          const periodSelect = document.createElement('select');
+          periodSelect.className = 'home-period-select';
+          periodSelect.setAttribute('aria-label', 'Período de evolución');
+          periodSelect.title = 'Cambiar período del gráfico';
+
+          [
+            { value: 'month', label: 'Mensual' },
+            { value: 'quarter', label: 'Trimestral' }
+          ].forEach(({ value, label }) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            periodSelect.appendChild(option);
+          });
+
+          const trendHost = h('div', { class: 'home-trend-host' });
+
+          const renderUnitTrend = () => {
+            const period = periodSelect.value;
+            const bucketCount = period === 'quarter' ? 4 : 6;
+            const now = new Date();
+
+            const buckets = Array.from(
+              { length: bucketCount },
+              (_, index) => {
+                const offset = index - (bucketCount - 1);
+                const date = period === 'quarter'
+                  ? new Date(
+                      now.getFullYear(),
+                      Math.floor(now.getMonth() / 3) * 3 + offset * 3,
+                      1
+                    )
+                  : new Date(
+                      now.getFullYear(),
+                      now.getMonth() + offset,
+                      1
+                    );
+
+                const label = period === 'quarter'
+                  ? `T${Math.floor(date.getMonth() / 3) + 1} ${date.getFullYear()}`
+                  : date.toLocaleDateString('es-ES', {
+                      month: 'short',
+                      year: '2-digit'
+                    }).replace(/\.$/, '');
+
+                return {
+                  year: date.getFullYear(),
+                  monthIndex: date.getMonth(),
+                  quarter: Math.floor(date.getMonth() / 3),
+                  label
+                };
+              }
+            );
+
+            const series = units.map((unit) => ({
+              label: unit.label,
+              values: buckets.map((bucket) =>
+                datedAudits.filter(({ audit, date }) => {
+                  if ((audit.unit_name || 'Sin unidad') !== unit.label) {
+                    return false;
+                  }
+
+                  if (date.getFullYear() !== bucket.year) {
+                    return false;
+                  }
+
+                  return period === 'quarter'
+                    ? Math.floor(date.getMonth() / 3) === bucket.quarter
+                    : date.getMonth() === bucket.monthIndex;
+                }).length
+              )
+            }));
+
+            const panel = lineChartPanel(
+              period === 'quarter'
+                ? 'Evolución trimestral por unidad'
+                : 'Evolución mensual por unidad',
+              period === 'quarter'
+                ? 'Últimos cuatro trimestres con fechas disponibles'
+                : 'Últimos seis meses con fechas disponibles',
+              buckets.map((bucket) => bucket.label),
+              series
+            );
+
+            panel.classList.add('home-unit-trend-panel');
+
+            const heading = panel.querySelector('.home-panel-head');
+            if (heading) heading.appendChild(periodSelect);
+
+            trendHost.replaceChildren(panel);
+          };
+
+          periodSelect.addEventListener('change', renderUnitTrend);
+          charts.append(trendHost);
+          renderUnitTrend();
+        } else {
+          charts.append(chartPanel(
+            'Evolución por unidad',
+            'No hay fechas válidas suficientes para calcular una tendencia temporal.',
+            []
+          ));
+        }
+      }
+      if (overview) {
+        charts.append(severityDonutPanel(severity));
+      }
+
+      if (charts.children.length) {
+        const sectionTitle = h('div', {
+          class: 'home-section-heading'
+        });
+
+        sectionTitle.append(
+          h('h3', null, 'Panorama operativo'),
+          h('p', { class: 'home-panel-note' },
+            'Las visualizaciones resumen los registros disponibles para su usuario.')
+        );
+
+        el.append(sectionTitle, charts);
+      }
+
+      // Tabla de auditorías: mantiene el detalle y la navegación existentes.
+      const tablePanel = (
+        title, subtitle, records, headers, rowMapper,
+        emptyMessage, onRow
+      ) => {
+        const panel = h('section', { class: 'home-panel home-table-panel' });
+        const head = h('div', { class: 'home-panel-head' });
+        const text = h('div', { class: 'home-panel-title' });
+
+        text.append(
+          h('h3', null, title),
+          h('p', { class: 'home-panel-note' }, subtitle)
+        );
+
+        head.append(text);
+
+        const more = h('button', {
+          type: 'button',
+          class: 'home-link-button',
+          onclick: () => { location.hash = '#/audits'; }
+        }, 'Ver módulo →');
+
+        head.append(more);
+        panel.append(head);
+
+        if (records.length) {
+          const rows = records.map(rowMapper);
+          panel.append(tbl(
+            headers,
+            rows,
+            onRow ? (index) => onRow(records[index]) : undefined
+          ));
+        } else {
+          panel.append(h('p', { class: 'home-empty' }, emptyMessage));
+        }
+
+        return panel;
+      };
+
+      const tables = h('div', { class: 'home-table-grid' });
+
+      if (hasAuditAccess) {
+        tables.append(tablePanel(
+          'Auditorías recientes',
+          'Acceso directo a los expedientes de auditoría',
+          audits.slice(0, 6),
+          ['Código', 'Expediente', 'Unidad', 'Fase', 'Estado'],
+          (audit) => [
+            audit.code || '—',
+            audit.file_code || '—',
+            audit.unit_name || '—',
+            audit.phase && typeof S.label2 === 'function'
+              ? S.label2(audit.phase) : (audit.phase || '—'),
+            statusBadge(audit.status)
+          ],
+          auditData
+            ? 'No hay auditorías registradas.'
+            : 'No fue posible cargar las auditorías.',
+          (audit) => {
+            if (audit.id) location.hash = '#/audits/' + audit.id;
+          }
+        ));
+      }
+
+      if (hasReportAccess) {
+        // Los pendientes aparecen primero, pero se conservan informes firmados.
+        const prioritizedReports = [
+          ...pendingReports,
+          ...reports.filter((report) => report.status === 'SIGNED')
+        ].slice(0, 6);
+
+        tables.append(tablePanel(
+          'Informes finales',
+          'Estado de aprobación y número de firmas',
+          prioritizedReports,
+          ['Auditoría', 'Unidad', 'Estado', 'Firmas'],
+          (report) => [
+            report.audit_code || '—',
+            report.unit_name || '—',
+            statusBadge(report.status),
+            String(report.signatures ?? 0) + ' / 2'
+          ],
+          reportData
+            ? 'No hay informes finales disponibles.'
+            : 'No fue posible cargar los informes.',
+          (report) => {
+            if (report.audit_id) {
+              location.hash = '#/audits/' + report.audit_id + '/informes';
+            }
+          }
+        ));
+      }
+
+      if (tables.children.length) {
+        el.append(tables);
       }
     }
-    if (can('audit:read')) {
-      const d = await S.get('/audits');
-      if (d) {
-        const mine = d.audits.filter((a) => a.status === 'IN_PROGRESS');
-        cards.append(S.stat(mine.length, 'Auditorías en curso'));
-        el.append(h('h3', null, 'Auditorías en curso'),
-          tbl(['Código', 'Unidad', 'Fase', 'Modalidad'], mine.map((a) => [a.code, a.unit_name, S.label2(a.phase), a.modality]),
-            (i) => { location.hash = '#/audits/' + mine[i].id; }));
-      }
-    }
-    if (can('audit:report_approve', 'audit:sign_gerente', 'audit:read_final')) {
-      const d = await S.get('/audits/final-reports');
-      if (d) {
-        const pend = d.reports.filter((r) => r.status !== 'SIGNED');
-        cards.append(S.stat(pend.length, can('audit:sign_gerente') && !can('audit:report_approve') ? 'Informes por firmar' : 'Informes por atender'));
-        el.append(h('h3', null, 'Informes finales'),
-          tbl(['Auditoría', 'Unidad', 'Estado', 'Firmas'], d.reports.map((r) => [r.audit_code, r.unit_name, S.badge(r.status), r.signatures + ' / 2']),
-            (i) => { location.hash = '#/audits/' + d.reports[i].audit_id + '/informes'; }));
-      }
-    }
-    if (!cards.children.length) el.append(h('div', { class: 'panel' }, 'Bienvenido. Use el menú para acceder a sus módulos.'));
-  } });
+  });
   S.label2 = (p) => ({ PLANIFICACION: 'Planificación', TRABAJO_CAMPO: 'Trabajo de campo', INFORME: 'Informe' })[p] || p;
 
   // ------------------------------------------------------------------ Usuarios

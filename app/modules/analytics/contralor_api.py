@@ -1,8 +1,8 @@
 """Rutas del dashboard privado del Contralor y administración de KPI."""
 from __future__ import annotations
 
-from flask import Response, jsonify, request, send_file
-from flask_jwt_extended import get_jwt_identity
+from flask import Response, abort, jsonify, request, send_file
+from flask_jwt_extended import get_jwt, get_jwt_identity
 from sqlalchemy.exc import IntegrityError
 
 from app.core.security.rbac import permission_required
@@ -10,17 +10,47 @@ from app.core.security.rbac import permission_required
 from . import contralor_service as service
 
 
+def _dashboard_domain_scope() -> str | None:
+    """Devuelve el dominio autorizado para un jefe; nunca confía en la URL."""
+    perms = set(get_jwt().get("perms", []))
+
+    # Contralor y Gerencia pueden consultar el panorama completo.
+    if "dashboard:contralor" in perms or "dashboard:executive" in perms:
+        return None
+
+    domains = []
+    if "audit:financial_review" in perms:
+        domains.append("FINANCIERA")
+    if "audit:systems_review" in perms:
+        domains.append("SISTEMAS")
+
+    # Una combinación ambigua no puede elevarse a acceso global.
+    if len(domains) > 1:
+        abort(403)
+    return domains[0] if domains else None
+
+
+def _dashboard_filters(args):
+    filters = service.parse_filters(args)
+    scope = _dashboard_domain_scope()
+    if scope:
+        filters["audit_domain"] = scope
+        filters["_domain_locked"] = True
+    return filters
+
+
 def register_contralor_routes(bp):
     @bp.get("/contralor/options")
-    @permission_required("dashboard:contralor")
+    @permission_required("dashboard:contralor", "dashboard:executive", "audit:financial_review", "audit:systems_review")
     def contralor_options():
-        return jsonify(**service.get_options(), metrics=service.METRICS)
+        scope = _dashboard_domain_scope()
+        return jsonify(**service.get_options(audit_domain=scope), metrics=service.METRICS)
 
     @bp.get("/contralor/overview")
-    @permission_required("dashboard:contralor")
+    @permission_required("dashboard:contralor", "dashboard:executive", "audit:financial_review", "audit:systems_review")
     def contralor_overview():
         try:
-            filters = service.parse_filters(request.args)
+            filters = _dashboard_filters(request.args)
             return jsonify(service.get_dashboard_data(filters))
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
@@ -131,6 +161,84 @@ def register_contralor_routes(bp):
             filters = service.parse_filters(request.args)
             snapshot = service.create_dashboard_snapshot(filters, str(get_jwt_identity()), source="MANUAL")
             return jsonify(snapshot=snapshot), 201
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
+    @bp.get("/contralor/kpis/mine")
+    @permission_required("audit:financial_review", "audit:systems_review")
+    def contralor_list_my_kpis():
+        scope = _dashboard_domain_scope()
+        if not scope:
+            abort(403)
+        identity = str(get_jwt_identity())
+        metrics = {
+            code: metric for code, metric in service.METRICS.items()
+            if code not in {"INGESTION_AVG_SECONDS", "INGESTION_REJECTION_PCT"}
+        }
+        return jsonify(
+            kpis=service.list_kpis(
+                include_inactive=request.args.get("all") == "1",
+                owner_id=identity,
+                audit_domain=scope,
+            ),
+            metrics=metrics,
+            periodicities=sorted(service.PERIODICITIES),
+        )
+
+    @bp.post("/contralor/kpis/mine")
+    @permission_required("audit:financial_review", "audit:systems_review")
+    def contralor_create_my_kpi():
+        scope = _dashboard_domain_scope()
+        if not scope:
+            abort(403)
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="Se esperaba un objeto JSON."), 400
+        try:
+            created = service.create_kpi(payload, str(get_jwt_identity()), audit_domain=scope)
+            return jsonify(kpi=created), 201
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except IntegrityError:
+            from app.extensions import db
+            db.session.rollback()
+            return jsonify(error="No se pudo guardar el KPI. Verifique que el auditor exista y pertenezca a su dominio."), 400
+
+    @bp.patch("/contralor/kpis/mine/<uuid:kpi_id>")
+    @permission_required("audit:financial_review", "audit:systems_review")
+    def contralor_update_my_kpi(kpi_id):
+        scope = _dashboard_domain_scope()
+        if not scope:
+            abort(403)
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or not payload:
+            return jsonify(error="Se esperaba un objeto JSON con cambios."), 400
+        try:
+            updated = service.update_kpi(
+                str(kpi_id), payload, str(get_jwt_identity()), audit_domain=scope
+            )
+            return jsonify(kpi=updated)
+        except LookupError:
+            return jsonify(error="KPI no encontrado."), 404
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except IntegrityError:
+            from app.extensions import db
+            db.session.rollback()
+            return jsonify(error="No se pudo actualizar el KPI. Verifique el auditor seleccionado."), 400
+
+    @bp.get("/contralor/kpis/mine/<uuid:kpi_id>/history")
+    @permission_required("audit:financial_review", "audit:systems_review")
+    def contralor_my_kpi_history(kpi_id):
+        scope = _dashboard_domain_scope()
+        if not scope:
+            abort(403)
+        try:
+            service.assert_kpi_management_access(str(kpi_id), str(get_jwt_identity()), scope)
+            limit = int(request.args.get("limit", "24"))
+            return jsonify(measurements=service.get_kpi_measurement_history(str(kpi_id), limit))
+        except LookupError:
+            return jsonify(error="KPI no encontrado."), 404
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
 

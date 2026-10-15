@@ -155,7 +155,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     GERENCIA: {
         "finding:read_summary",
         "report:read_approved", "report:verify_signature",
-        "dashboard:executive", "kpi:export",
+        "dashboard:executive",
         "audit:read_final", "audit:sign_gerente", "audit:report_approve_gerente",
     },
     AUDITOR_FINANCIERO: {
