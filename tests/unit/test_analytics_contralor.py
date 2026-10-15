@@ -20,7 +20,7 @@ class ContralorDashboardUnitTests(unittest.TestCase):
                 self.assertNotIn("dashboard:contralor", permissions, role)
                 self.assertNotIn("kpi:manage", permissions, role)
         self.assertIn("dashboard:executive", P.ROLE_PERMISSIONS[P.GERENCIA])
-        self.assertIn("kpi:export", P.ROLE_PERMISSIONS[P.GERENCIA])
+        self.assertNotIn("kpi:export", P.ROLE_PERMISSIONS[P.GERENCIA])
 
     def test_date_filters_validate_order_and_range(self):
         good = parse_filters({"start_date": "2026-01-01", "end_date": "2026-01-31", "granularity": "MONTH"})

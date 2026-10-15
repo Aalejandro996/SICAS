@@ -6,6 +6,7 @@ from flask_jwt_extended import get_jwt_identity
 from app.core.audit.audit_service import audit
 from app.core.security.rbac import permission_required
 from app.modules.auth.password import Argon2Hasher
+from app.modules.notifications.service import notify_role_request_created, notify_role_request_decision
 
 from .repositories import SqlAdminRepo
 from .service import AdminError, UserAdminService
@@ -82,6 +83,7 @@ def _request_role_for_user(target_user_id: str):
         get_jwt_identity(), target_user_id, str(d.get("role", "")),
         str(d.get("action", "GRANT")).upper(), str(d.get("reason", ""))
     )
+    notify_role_request_created(str(rid), str(get_jwt_identity()), getattr(g, "request_id", None))
     return jsonify(request_id=rid, status="PENDING"), 201
 
 
@@ -114,6 +116,8 @@ def list_requests():
 def decide(rid):
     d = request.get_json(silent=True) or {}
     _svc().decide_role_request(get_jwt_identity(), g.claims.get("roles", []), str(rid), bool(d.get("approve")), str(d.get("note", "")))
+    notify_role_request_decision(str(rid), "APPROVED" if d.get("approve") else "REJECTED",
+                                 str(get_jwt_identity()), getattr(g, "request_id", None))
     return jsonify(status="APPROVED" if d.get("approve") else "REJECTED")
 
 

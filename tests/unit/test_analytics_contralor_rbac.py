@@ -2,10 +2,11 @@
 import unittest
 from unittest.mock import patch
 
-from flask import Flask, jsonify
+from flask import Blueprint, Flask, jsonify
 from flask_jwt_extended import JWTManager, create_access_token
 
 from app.core.security.rbac import permission_required
+from app.modules.analytics.contralor_api import register_contralor_routes
 
 
 class ContralorAuthorizationHttpTests(unittest.TestCase):
@@ -30,6 +31,9 @@ class ContralorAuthorizationHttpTests(unittest.TestCase):
         def create_kpi():
             return jsonify(ok=True), 201
 
+        analytics_bp = Blueprint('analytics_dashboard_tests', __name__)
+        register_contralor_routes(analytics_bp)
+        self.app.register_blueprint(analytics_bp, url_prefix='/analytics')
         self.client = self.app.test_client()
 
     def token(self, perms, mfa=True):
@@ -86,6 +90,59 @@ class ContralorAuthorizationHttpTests(unittest.TestCase):
             json={},
         )
         self.assertEqual(response.status_code, 201)
+
+
+    def test_financial_head_cannot_override_domain_in_query_string(self):
+        with patch(
+            "app.modules.analytics.contralor_api.service.get_dashboard_data",
+            return_value={"ok": True},
+        ) as get_data:
+            response = self.client.get(
+                "/analytics/contralor/overview?audit_domain=SISTEMAS",
+                headers=self.headers(["audit:financial_review"]),
+            )
+        self.assertEqual(response.status_code, 200)
+        filters = get_data.call_args.args[0]
+        self.assertEqual(filters["audit_domain"], "FINANCIERA")
+        self.assertTrue(filters["_domain_locked"])
+
+    def test_systems_head_cannot_override_domain_in_query_string(self):
+        with patch(
+            "app.modules.analytics.contralor_api.service.get_dashboard_data",
+            return_value={"ok": True},
+        ) as get_data:
+            response = self.client.get(
+                "/analytics/contralor/overview?audit_domain=FINANCIERA",
+                headers=self.headers(["audit:systems_review"]),
+            )
+        self.assertEqual(response.status_code, 200)
+        filters = get_data.call_args.args[0]
+        self.assertEqual(filters["audit_domain"], "SISTEMAS")
+        self.assertTrue(filters["_domain_locked"])
+
+    def test_gerencia_cannot_export_dashboard_even_if_token_has_export_permission(self):
+        with patch("app.core.audit.audit_service.audit"):
+            response = self.client.get(
+                "/analytics/contralor/export.xlsx",
+                headers=self.headers(["dashboard:executive", "kpi:export"]),
+            )
+        self.assertEqual(response.status_code, 403)
+
+    def test_head_cannot_export_dashboard_data(self):
+        with patch("app.core.audit.audit_service.audit"):
+            response = self.client.get(
+                "/analytics/contralor/export.pdf",
+                headers=self.headers(["audit:financial_review", "kpi:export"]),
+            )
+        self.assertEqual(response.status_code, 403)
+
+    def test_gerencia_cannot_open_printable_dashboard_report(self):
+        with patch("app.core.audit.audit_service.audit"):
+            response = self.client.get(
+                "/analytics/contralor/report",
+                headers=self.headers(["dashboard:executive"]),
+            )
+        self.assertEqual(response.status_code, 403)
 
 
 if __name__ == "__main__":

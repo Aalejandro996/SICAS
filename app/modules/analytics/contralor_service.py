@@ -235,6 +235,8 @@ def _get_domain_comparison(filters: dict[str, Any]) -> list[dict[str, Any]]:
     observaciones, por su propia fecha de creación. Los contadores se mantienen separados.
     """
     params = {k: filters[k] for k in ("start_at", "end_before", "unit_id", "auditor_id")}
+    domain_locked = bool(filters.get("_domain_locked"))
+    params.update({"audit_domain": filters.get("audit_domain"), "domain_locked": domain_locked})
     rows = _mappings(f"""
         WITH domain_list AS (
             SELECT 'FINANCIERA'::text AS audit_domain
@@ -245,6 +247,7 @@ def _get_domain_comparison(filters: dict[str, Any]) -> list[dict[str, Any]]:
             FROM engagement.audits a
             LEFT JOIN engagement.files f ON f.id = a.file_id
             WHERE upper(coalesce(a.audit_domain, '')) IN ('FINANCIERA', 'SISTEMAS')
+              AND (NOT :domain_locked OR upper(coalesce(a.audit_domain, '')) = CAST(:audit_domain AS text))
               AND (CAST(:unit_id AS integer) IS NULL OR f.unit_id = CAST(:unit_id AS integer))
               AND (CAST(:auditor_id AS uuid) IS NULL OR EXISTS (
                   SELECT 1 FROM engagement.team t
@@ -323,6 +326,8 @@ def _get_domain_comparison(filters: dict[str, Any]) -> list[dict[str, Any]]:
         row["high_risk_pct"] = _safe_pct(
             row["critical_observations"] + row["high_risk_observations"], row["observations_total"]
         )
+    if domain_locked:
+        rows = [row for row in rows if row["audit_domain"] == filters["audit_domain"]]
     return rows
 
 # El centro de control muestra estado actual; no queda recortado por la cohorte histórica.
@@ -1120,24 +1125,27 @@ def get_dashboard_data(filters: dict[str, Any]) -> dict[str, Any]:
     ORDER BY audits_total DESC, auditor_name
     """, params)
 
-    ingestion_params = {
-        "start_at": filters["start_at"],
-        "end_before": filters["end_before"],
-        "auditor_id": filters["auditor_id"],
-    }
-    ingestion = _one("""
-        SELECT count(*)::integer AS jobs_total,
-               (count(*) FILTER (WHERE upper(status)='FAILED'))::integer AS jobs_failed,
-               (count(*) FILTER (WHERE upper(status) IN ('QUEUED','PROCESSING','RUNNING')))::integer AS jobs_in_progress,
-               coalesce(sum(rows_total),0)::bigint AS rows_total,
-               coalesce(sum(rows_processed),0)::bigint AS rows_processed,
-               coalesce(sum(rows_rejected),0)::bigint AS rows_rejected,
-               round((avg(extract(epoch FROM (finished_at-created_at))) FILTER (WHERE finished_at IS NOT NULL AND finished_at >= created_at))::numeric, 2) AS average_seconds
-        FROM insurance.ingestion_jobs j
-        WHERE j.created_at >= :start_at AND j.created_at < :end_before
-          AND (CAST(:auditor_id AS uuid) IS NULL OR j.uploaded_by = CAST(:auditor_id AS uuid))
-    """, ingestion_params)
-    ingestion["rejection_pct"] = _safe_pct(ingestion["rows_rejected"], ingestion["rows_processed"] + ingestion["rows_rejected"])
+    if filters.get("_domain_locked"):
+        ingestion = None
+    else:
+        ingestion_params = {
+            "start_at": filters["start_at"],
+            "end_before": filters["end_before"],
+            "auditor_id": filters["auditor_id"],
+        }
+        ingestion = _one("""
+            SELECT count(*)::integer AS jobs_total,
+                   (count(*) FILTER (WHERE upper(status)='FAILED'))::integer AS jobs_failed,
+                   (count(*) FILTER (WHERE upper(status) IN ('QUEUED','PROCESSING','RUNNING')))::integer AS jobs_in_progress,
+                   coalesce(sum(rows_total),0)::bigint AS rows_total,
+                   coalesce(sum(rows_processed),0)::bigint AS rows_processed,
+                   coalesce(sum(rows_rejected),0)::bigint AS rows_rejected,
+                   round((avg(extract(epoch FROM (finished_at-created_at))) FILTER (WHERE finished_at IS NOT NULL AND finished_at >= created_at))::numeric, 2) AS average_seconds
+            FROM insurance.ingestion_jobs j
+            WHERE j.created_at >= :start_at AND j.created_at < :end_before
+              AND (CAST(:auditor_id AS uuid) IS NULL OR j.uploaded_by = CAST(:auditor_id AS uuid))
+        """, ingestion_params)
+        ingestion["rejection_pct"] = _safe_pct(ingestion["rows_rejected"], ingestion["rows_processed"] + ingestion["rows_rejected"])
 
     alerts = get_control_alerts(filters)
     data_quality = get_data_quality(filters)
@@ -1191,24 +1199,43 @@ def _safe_pct(numerator: int | float, denominator: int | float) -> float | None:
     return round((float(numerator) / float(denominator)) * 100.0, 2)
 
 
-def get_options() -> dict[str, Any]:
+def get_options(audit_domain: str | None = None) -> dict[str, Any]:
+    params = {"audit_domain": audit_domain}
     units = _mappings("""
-        SELECT id, code, name FROM engagement.units
-        WHERE active IS TRUE ORDER BY name
-    """, {})
+        SELECT DISTINCT u.id, u.code, u.name
+        FROM engagement.units u
+        WHERE u.active IS TRUE
+          AND (CAST(:audit_domain AS text) IS NULL OR EXISTS (
+              SELECT 1
+              FROM engagement.audits a
+              JOIN engagement.files f ON f.id = a.file_id
+              WHERE f.unit_id = u.id
+                AND upper(coalesce(a.audit_domain, '')) = CAST(:audit_domain AS text)
+          ))
+        ORDER BY u.name
+    """, params)
     auditors = _mappings("""
-        SELECT DISTINCT u.id::text AS id, coalesce(nullif(u.full_name,''),u.username) AS name
-        FROM engagement.team t JOIN iam.users u ON u.id=t.user_id
-        WHERE u.is_active IS TRUE ORDER BY name
-    """, {})
+        SELECT DISTINCT u.id::text AS id,
+               coalesce(nullif(u.full_name,''),u.username) AS name
+        FROM engagement.team t
+        JOIN iam.users u ON u.id = t.user_id
+        WHERE u.is_active IS TRUE
+          AND (CAST(:audit_domain AS text) IS NULL OR EXISTS (
+              SELECT 1
+              FROM engagement.audits a
+              WHERE a.id = t.audit_id
+                AND upper(coalesce(a.audit_domain, '')) = CAST(:audit_domain AS text)
+          ))
+        ORDER BY name
+    """, params)
     domains = [r["audit_domain"] for r in _mappings("""
         SELECT DISTINCT upper(audit_domain) AS audit_domain
-        FROM engagement.audits WHERE nullif(trim(audit_domain),'') IS NOT NULL
+        FROM engagement.audits
+        WHERE nullif(trim(audit_domain),'') IS NOT NULL
+          AND (CAST(:audit_domain AS text) IS NULL OR upper(audit_domain) = CAST(:audit_domain AS text))
         ORDER BY 1
-    """, {})]
+    """, params)]
     return {"units": units, "auditors": auditors, "domains": domains}
-
-
 def period_window(periodicity: str, today: date | None = None) -> tuple[date, date]:
     today = today or date.today()
     period = periodicity.upper()
@@ -1225,7 +1252,13 @@ def period_window(periodicity: str, today: date | None = None) -> tuple[date, da
     return start, today
 
 
-def _filter_for_period(start: date, end: date, unit_id: int | None = None, auditor_id: str | None = None) -> dict[str, Any]:
+def _filter_for_period(
+    start: date,
+    end: date,
+    unit_id: int | None = None,
+    auditor_id: str | None = None,
+    audit_domain: str | None = None,
+) -> dict[str, Any]:
     return {
         "start_date": start,
         "end_date": end,
@@ -1233,10 +1266,9 @@ def _filter_for_period(start: date, end: date, unit_id: int | None = None, audit
         "end_before": datetime.combine(end + timedelta(days=1), time.min, tzinfo=timezone.utc),
         "unit_id": unit_id,
         "auditor_id": auditor_id,
-        "audit_domain": None,
+        "audit_domain": audit_domain,
         "granularity": "MONTH",
     }
-
 
 def metric_value(metric_code: str, filters: dict[str, Any]) -> float | None:
     if metric_code not in METRICS:
@@ -1291,7 +1323,26 @@ def metric_value(metric_code: str, filters: dict[str, Any]) -> float | None:
     return round(result, 2) if isfinite(result) else None
 
 
-def _validate_kpi(payload: dict[str, Any]) -> dict[str, Any]:
+def _auditor_belongs_to_domain(auditor_id: str, audit_domain: str) -> bool:
+    domain = str(audit_domain or "").strip().upper()
+    if domain not in {"FINANCIERA", "SISTEMAS"}:
+        return False
+    try:
+        auditor_uuid = str(UUID(str(auditor_id)))
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return bool(db.session.execute(text("""
+        SELECT EXISTS (
+            SELECT 1
+            FROM engagement.team t
+            JOIN engagement.audits a ON a.id = t.audit_id
+            WHERE t.user_id = CAST(:auditor_id AS uuid)
+              AND upper(coalesce(a.audit_domain, '')) = CAST(:audit_domain AS text)
+        )
+    """), {"auditor_id": auditor_uuid, "audit_domain": domain}).scalar_one())
+
+
+def _validate_kpi(payload: dict[str, Any], audit_domain: str | None = None) -> dict[str, Any]:
     name = str(payload.get("name") or "").strip()
     if not name or len(name) > 120:
         raise ValueError("El nombre del KPI es obligatorio y debe tener máximo 120 caracteres.")
@@ -1313,18 +1364,25 @@ def _validate_kpi(payload: dict[str, Any]) -> dict[str, Any]:
 
     target_raw = payload.get("target_value")
     try:
-        if isinstance(target_raw, bool): raise ValueError
+        if isinstance(target_raw, bool):
+            raise ValueError
         target = float(target_raw)
-        if not isfinite(target) or target < 0: raise ValueError
-        if METRICS[metric_code]["unit"] == "%" and target > 100: raise ValueError
+        if not isfinite(target) or target < 0:
+            raise ValueError
+        if METRICS[metric_code]["unit"] == "%" and target > 100:
+            raise ValueError
     except (TypeError, ValueError) as exc:
         raise ValueError("La meta debe ser un número válido, no negativo y no mayor que 100 si es porcentaje.") from exc
+
     warning_raw = payload.get("warning_value")
     try:
-        if isinstance(warning_raw, bool): raise ValueError
+        if isinstance(warning_raw, bool):
+            raise ValueError
         warning = None if warning_raw in (None, "") else float(warning_raw)
-        if warning is not None and (not isfinite(warning) or warning < 0): raise ValueError
-        if warning is not None and METRICS[metric_code]["unit"] == "%" and warning > 100: raise ValueError
+        if warning is not None and (not isfinite(warning) or warning < 0):
+            raise ValueError
+        if warning is not None and METRICS[metric_code]["unit"] == "%" and warning > 100:
+            raise ValueError
     except (TypeError, ValueError) as exc:
         raise ValueError("El umbral debe ser no negativo y no mayor que 100 si es porcentaje.") from exc
     if warning is not None and ((direction == "AT_LEAST" and warning > target) or (direction == "AT_MOST" and warning < target)):
@@ -1347,25 +1405,38 @@ def _validate_kpi(payload: dict[str, Any]) -> dict[str, Any]:
             unit_id = int(unit_raw.strip())
         else:
             raise ValueError
-
         if unit_id is not None and unit_id < 1:
             raise ValueError
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("La unidad elegida no es válida.") from exc
 
     if auditor_id not in (None, ""):
-        try: auditor_id = str(UUID(str(auditor_id)))
-        except (TypeError, ValueError, AttributeError) as exc: raise ValueError("El auditor elegido no es válido.") from exc
+        try:
+            auditor_id = str(UUID(str(auditor_id)))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("El auditor elegido no es válido.") from exc
     else:
         auditor_id = None
+
     if (scope_type == "GENERAL" and (unit_id is not None or auditor_id is not None)) or (scope_type == "UNIDAD" and (unit_id is None or auditor_id is not None)) or (scope_type == "AUDITOR" and (auditor_id is None or unit_id is not None)):
         raise ValueError("Seleccione únicamente el alcance requerido: general, unidad o auditor.")
     if scope_type == "UNIDAD" and metric_code in {"INGESTION_AVG_SECONDS", "INGESTION_REJECTION_PCT"}:
         raise ValueError("Las tablas actuales de cargas no identifican una unidad; cree este KPI con alcance general o por auditor.")
+
+    if audit_domain is not None:
+        domain = str(audit_domain).strip().upper()
+        if domain not in {"FINANCIERA", "SISTEMAS"}:
+            raise ValueError("No se pudo determinar un único dominio de auditoría para este usuario.")
+        if scope_type != "AUDITOR" or unit_id is not None or auditor_id is None:
+            raise ValueError("Los jefes solo pueden crear KPI con alcance de auditor individual.")
+        if metric_code in {"INGESTION_AVG_SECONDS", "INGESTION_REJECTION_PCT"}:
+            raise ValueError("Esta métrica de cargas no está separada por dominio y no puede usarse en KPI de jefatura.")
+        if not _auditor_belongs_to_domain(auditor_id, domain):
+            raise ValueError("El auditor seleccionado no pertenece al dominio supervisado por este jefe.")
+
     return {"name": name, "description": description, "metric_code": metric_code, "target_value": target,
             "warning_value": warning, "direction": direction, "periodicity": periodicity,
             "scope_type": scope_type, "unit_id": unit_id, "auditor_id": auditor_id}
-
 
 def _kpi_status(actual: float | None, target: float, warning: float | None, direction: str) -> str:
     if actual is None: return "SIN_DATOS"
@@ -1377,8 +1448,33 @@ def _kpi_status(actual: float | None, target: float, warning: float | None, dire
     return "DESVIACION"
 
 
-def list_kpis(include_inactive: bool = False, as_of: date | None = None) -> list[dict[str, Any]]:
-    where = "" if include_inactive else "WHERE k.active IS TRUE"
+def list_kpis(
+    include_inactive: bool = False,
+    as_of: date | None = None,
+    owner_id: str | None = None,
+    audit_domain: str | None = None,
+) -> list[dict[str, Any]]:
+    conditions: list[str] = []
+    params: dict[str, Any] = {}
+    if not include_inactive:
+        conditions.append("k.active IS TRUE")
+    if owner_id is not None:
+        params["owner_id"] = str(UUID(str(owner_id)))
+        conditions.append("k.created_by = CAST(:owner_id AS uuid)")
+    if audit_domain is not None:
+        domain = str(audit_domain).strip().upper()
+        if domain not in {"FINANCIERA", "SISTEMAS"}:
+            raise ValueError("Dominio de auditoría no válido.")
+        params["audit_domain"] = domain
+        conditions.extend([
+            "k.scope_type = 'AUDITOR'",
+            "k.metric_code NOT IN ('INGESTION_AVG_SECONDS','INGESTION_REJECTION_PCT')",
+            "EXISTS (SELECT 1 FROM engagement.team kt "
+            "JOIN engagement.audits ka ON ka.id=kt.audit_id "
+            "WHERE kt.user_id=k.auditor_id "
+            "AND upper(coalesce(ka.audit_domain,''))=CAST(:audit_domain AS text))",
+        ])
+    where = "WHERE " + " AND ".join(conditions) if conditions else ""
     rows = _mappings(f"""
         SELECT k.id::text AS id, k.name, k.description, k.metric_code, k.target_value,
                k.warning_value, k.direction, k.periodicity, k.scope_type, k.unit_id,
@@ -1390,14 +1486,18 @@ def list_kpis(include_inactive: bool = False, as_of: date | None = None) -> list
         LEFT JOIN iam.users i ON i.id=k.auditor_id
         {where}
         ORDER BY k.active DESC, k.created_at DESC LIMIT 100
-    """, {})
-    active_count = sum(1 for row in rows if row["active"])
+    """, params)
     for row in rows:
         actual = None
         period_start, period_end = period_window(row["periodicity"], as_of)
         if row["active"]:
-            filters = _filter_for_period(period_start, period_end, row["unit_id"] if row["scope_type"] == "UNIDAD" else None,
-                                         row["auditor_id"] if row["scope_type"] == "AUDITOR" else None)
+            filters = _filter_for_period(
+                period_start,
+                period_end,
+                row["unit_id"] if row["scope_type"] == "UNIDAD" else None,
+                row["auditor_id"] if row["scope_type"] == "AUDITOR" else None,
+                audit_domain=audit_domain,
+            )
             actual = metric_value(row["metric_code"], filters)
         target = float(row["target_value"])
         warning = float(row["warning_value"]) if row["warning_value"] is not None else None
@@ -1409,7 +1509,6 @@ def list_kpis(include_inactive: bool = False, as_of: date | None = None) -> list
         row["status_result"] = _kpi_status(actual, target, warning, row["direction"]) if row["active"] else "INACTIVO"
         row["metric"] = METRICS[row["metric_code"]]
     return rows
-
 
 _KPI_AUDIT_FIELDS = (
     "name", "description", "metric_code", "target_value", "warning_value", "direction",
@@ -1445,11 +1544,34 @@ def _write_kpi_audit(action: str, kpi_id: str, before: Any = None, after: Any = 
         logging.getLogger("audit").exception("No se pudo registrar el evento de KPI %s", action)
 
 
-def create_kpi(payload: dict[str, Any], created_by: str) -> dict[str, Any]:
-    validated = _validate_kpi(payload)
-    count = int(db.session.execute(text("SELECT count(*) FROM analytics.kpi_definitions WHERE active IS TRUE")).scalar_one())
+def create_kpi(
+    payload: dict[str, Any],
+    created_by: str,
+    audit_domain: str | None = None,
+) -> dict[str, Any]:
+    creator = str(UUID(str(created_by)))
+    domain = str(audit_domain).strip().upper() if audit_domain is not None else None
+    validated = _validate_kpi(payload, audit_domain=domain)
+    if domain:
+        count = int(db.session.execute(text("""
+            SELECT count(*)
+            FROM analytics.kpi_definitions k
+            WHERE k.active IS TRUE
+              AND k.created_by = CAST(:created_by AS uuid)
+              AND k.scope_type = 'AUDITOR'
+              AND EXISTS (
+                  SELECT 1 FROM engagement.team t
+                  JOIN engagement.audits a ON a.id=t.audit_id
+                  WHERE t.user_id=k.auditor_id
+                    AND upper(coalesce(a.audit_domain,''))=CAST(:audit_domain AS text)
+              )
+        """), {"created_by": creator, "audit_domain": domain}).scalar_one())
+    else:
+        count = int(db.session.execute(text(
+            "SELECT count(*) FROM analytics.kpi_definitions WHERE active IS TRUE"
+        )).scalar_one())
     if count >= 25:
-        raise ValueError("Se alcanzó el máximo de 25 KPI activos. Desactive uno antes de crear otro.")
+        raise ValueError("Se alcanzó el máximo de 25 KPI activos para este alcance. Desactive uno antes de crear otro.")
     result = db.session.execute(text("""
         INSERT INTO analytics.kpi_definitions
           (name, description, metric_code, target_value, warning_value, direction, periodicity,
@@ -1457,40 +1579,90 @@ def create_kpi(payload: dict[str, Any], created_by: str) -> dict[str, Any]:
         VALUES (:name, :description, :metric_code, :target_value, :warning_value, :direction, :periodicity,
                 :scope_type, :unit_id, CAST(:auditor_id AS uuid), CAST(:created_by AS uuid), CAST(:created_by AS uuid))
         RETURNING id::text AS id
-    """), {**validated, "created_by": str(UUID(created_by))}).mappings().one()
+    """), {**validated, "created_by": creator}).mappings().one()
     db.session.commit()
     _write_kpi_audit("CONTRALOR_KPI_CREATED", result["id"], after={**validated, "active": True})
-    return next((k for k in list_kpis(include_inactive=True) if k["id"] == result["id"]), {"id": result["id"]})
+    visible = list_kpis(
+        include_inactive=True,
+        owner_id=creator if domain else None,
+        audit_domain=domain,
+    )
+    return next((k for k in visible if k["id"] == result["id"]), {"id": result["id"]})
+
+def assert_kpi_management_access(kpi_id: str, user_id: str, audit_domain: str) -> dict[str, Any]:
+    domain = str(audit_domain or "").strip().upper()
+    if domain not in {"FINANCIERA", "SISTEMAS"}:
+        raise LookupError("KPI no encontrado.")
+    owner = str(UUID(str(user_id)))
+    try:
+        kid = str(UUID(str(kpi_id)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise LookupError("KPI no encontrado.") from exc
+    current = db.session.execute(text("""
+        SELECT * FROM analytics.kpi_definitions WHERE id=CAST(:id AS uuid)
+    """), {"id": kid}).mappings().first()
+    if not current:
+        raise LookupError("KPI no encontrado.")
+    if str(current.get("created_by")) != owner or current.get("scope_type") != "AUDITOR":
+        raise LookupError("KPI no encontrado.")
+    if current.get("metric_code") in {"INGESTION_AVG_SECONDS", "INGESTION_REJECTION_PCT"}:
+        raise LookupError("KPI no encontrado.")
+    if not current.get("auditor_id") or not _auditor_belongs_to_domain(str(current["auditor_id"]), domain):
+        raise LookupError("KPI no encontrado.")
+    return dict(current)
 
 
-def update_kpi(kpi_id: str, payload: dict[str, Any], updated_by: str) -> dict[str, Any]:
+def update_kpi(
+    kpi_id: str,
+    payload: dict[str, Any],
+    updated_by: str,
+    audit_domain: str | None = None,
+) -> dict[str, Any]:
     allowed_fields = {"name", "description", "metric_code", "target_value", "warning_value", "direction", "periodicity", "scope_type", "unit_id", "auditor_id", "active"}
     unknown_fields = set(payload) - allowed_fields
     if unknown_fields:
         raise ValueError("Campos no admitidos: " + ", ".join(sorted(unknown_fields)))
-    current = db.session.execute(text("SELECT * FROM analytics.kpi_definitions WHERE id=CAST(:id AS uuid)"), {"id": kpi_id}).mappings().first()
-    if not current:
-        raise LookupError("KPI no encontrado.")
+
+    domain = str(audit_domain).strip().upper() if audit_domain is not None else None
+    if domain:
+        current = assert_kpi_management_access(kpi_id, updated_by, domain)
+    else:
+        current = db.session.execute(
+            text("SELECT * FROM analytics.kpi_definitions WHERE id=CAST(:id AS uuid)"),
+            {"id": kpi_id},
+        ).mappings().first()
+        if not current:
+            raise LookupError("KPI no encontrado.")
     before_snapshot = dict(current)
     merged = dict(current)
     merged.update({k: v for k, v in payload.items() if k in {"name", "description", "metric_code", "target_value", "warning_value", "direction", "periodicity", "scope_type", "unit_id", "auditor_id"}})
     if "active" in payload:
-        if not isinstance(payload["active"], bool): raise ValueError("El estado activo debe ser verdadero o falso.")
+        if not isinstance(payload["active"], bool):
+            raise ValueError("El estado activo debe ser verdadero o falso.")
         merged["active"] = payload["active"]
-    validated = _validate_kpi(merged)
-    db.session.execute(text("""
+    validated = _validate_kpi(merged, audit_domain=domain)
+    ownership_clause = " AND created_by=CAST(:updated_by AS uuid)" if domain else ""
+    result = db.session.execute(text(f"""
         UPDATE analytics.kpi_definitions SET
           name=:name, description=:description, metric_code=:metric_code, target_value=:target_value,
           warning_value=:warning_value, direction=:direction, periodicity=:periodicity,
           scope_type=:scope_type, unit_id=:unit_id, auditor_id=CAST(:auditor_id AS uuid),
           active=:active, updated_by=CAST(:updated_by AS uuid), updated_at=CURRENT_TIMESTAMP
-        WHERE id=CAST(:id AS uuid)
-    """), {**validated, "active": merged["active"], "updated_by": str(UUID(updated_by)), "id": kpi_id})
+        WHERE id=CAST(:id AS uuid){ownership_clause}
+    """), {**validated, "active": merged.get("active", current["active"]),
+           "updated_by": str(UUID(str(updated_by))), "id": str(UUID(str(kpi_id)))} )
+    if domain and result.rowcount != 1:
+        db.session.rollback()
+        raise LookupError("KPI no encontrado.")
     db.session.commit()
     _write_kpi_audit("CONTRALOR_KPI_UPDATED", kpi_id, before=before_snapshot,
-                     after={**validated, "active": merged["active"]})
-    return next((k for k in list_kpis(include_inactive=True) if k["id"] == kpi_id), {"id": kpi_id})
-
+                     after={**validated, "active": merged.get("active", current["active"])})
+    visible = list_kpis(
+        include_inactive=True,
+        owner_id=str(UUID(str(updated_by))) if domain else None,
+        audit_domain=domain,
+    )
+    return next((k for k in visible if k["id"] == str(kpi_id)), {"id": str(kpi_id)})
 
 def export_workbook(data: dict[str, Any], kpis: list[dict[str, Any]]) -> BytesIO:
     wb = Workbook()

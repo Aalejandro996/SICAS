@@ -18,6 +18,9 @@ from . import workflow as wf
 from .pac import build_pac
 from .report_builder import SIG_BOX_CONTRALOR, SIG_BOX_GERENTE, body_hash, build_pdf, initials_of
 from .templates import BRANCH_TO_LINE, KINDS, LINES, TEMPLATE_KEYS, branches_for_line, validate_criteria
+from app.modules.notifications.service import (
+    notify_report_submitted, notify_report_jefe_approved, notify_report_returned, notify_report_signed,
+)
 
 bp = Blueprint("engagement", __name__)
 EMAIL_RX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -1476,6 +1479,7 @@ def submit(rid):
         return err(str(ex), 409)
     repo.set_report_status(rid, "IN_REVIEW", submitted_at="now")
     log("AUDIT_REPORT_SUBMITTED", entity_type="audit_report", entity_id=str(rid), request_id=g.request_id)
+    notify_report_submitted(str(rid), a, str(me()), getattr(g, "request_id", None))
     return jsonify(status="IN_REVIEW")
 
 
@@ -1576,6 +1580,7 @@ def return_report(rid):
         "AUDIT_REPORT_RETURNED", entity_type="audit_report", entity_id=str(rid),
         metadata={"comment": t, "returned_from": stage}, request_id=g.request_id,
     )
+    notify_report_returned(str(rid), a, stage, t, str(me()), getattr(g, "request_id", None))
     return jsonify(status="RETURNED")
 
 
@@ -1605,6 +1610,7 @@ def approve_jefe(rid):
         entity_id=str(rid), after_data={"sha256": rep["body_sha256"]},
         request_id=g.request_id,
     )
+    notify_report_jefe_approved(str(rid), a, str(me()), getattr(g, "request_id", None))
     return jsonify(
         status="GERENCIA",
         note="Informe aprobado por el Jefe de Auditoría y enviado a Gerencia.",
@@ -1725,6 +1731,7 @@ def _sign(rid, role):
         },
         request_id=g.request_id,
     )
+    notify_report_signed(str(rid), a, role, new_status, str(me()), getattr(g, "request_id", None))
     return jsonify(
         status=new_status, signed_by=role,
         timestamp_embedded=signed.timestamp_embedded,
