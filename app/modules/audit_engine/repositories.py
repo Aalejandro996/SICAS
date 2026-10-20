@@ -23,16 +23,84 @@ def start_run(session, job_id: str | None, triggered_by: str | None, params_snap
 
 
 def save_findings(session, run_id: str, findings) -> int:
-    """Inserta con ON CONFLICT DO NOTHING sobre fingerprint: re-ejecutar no duplica hallazgos."""
+    """Deduplica el hallazgo principal y registra detecciones por ejecución.
+
+    Una reincidencia de un hallazgo cerrado como resuelto lo reabre.
+    Un falso positivo conserva su estado terminal para evitar alertas repetitivas.
+    """
     inserted = 0
+
     for f in findings:
-        res = session.execute(text(
-            "INSERT INTO engine.findings (run_id, rule_code, severity, entity_type, entity_id, score, message, evidence, fingerprint) "
-            "VALUES (CAST(:run AS uuid), :rc, :sev, :et, :eid, :score, :msg, CAST(:ev AS jsonb), :fp) "
-            "ON CONFLICT (fingerprint) DO NOTHING"),
-            {"run": run_id, "rc": f.rule_code, "sev": f.severity.value, "et": f.entity_type, "eid": f.entity_id,
-             "score": f.score, "msg": f.message, "ev": json.dumps(f.evidence, default=str), "fp": f.fingerprint})
-        inserted += res.rowcount
+        params = {
+            "run": run_id,
+            "rc": f.rule_code,
+            "sev": f.severity.value,
+            "et": f.entity_type,
+            "eid": f.entity_id,
+            "score": f.score,
+            "msg": f.message,
+            "ev": json.dumps(f.evidence, default=str),
+            "fp": f.fingerprint,
+        }
+
+        created = session.execute(text(
+            "INSERT INTO engine.findings "
+            "(run_id, rule_code, severity, entity_type, entity_id, score, message, evidence, fingerprint) "
+            "VALUES (CAST(:run AS uuid), :rc, :sev, :et, :eid, :score, :msg, "
+            "CAST(:ev AS jsonb), :fp) "
+            "ON CONFLICT (fingerprint) DO NOTHING RETURNING id"
+        ), params).first()
+
+        if created is not None:
+            finding_id = created.id
+            inserted += 1
+            is_alertable = True
+        else:
+            existing = session.execute(text(
+                "SELECT id, status FROM engine.findings "
+                "WHERE fingerprint=:fp FOR UPDATE"
+            ), {"fp": f.fingerprint}).first()
+
+            if existing is None:
+                raise RuntimeError(
+                    "No se pudo recuperar el hallazgo después del conflicto de fingerprint."
+                )
+
+            finding_id = existing.id
+            reopened = existing.status == "CLOSED_RESOLVED"
+            is_alertable = reopened
+
+            session.execute(text(
+                "UPDATE engine.findings SET "
+                "severity=:sev, score=:score, message=:msg, evidence=CAST(:ev AS jsonb), "
+                "status=CASE WHEN status='CLOSED_RESOLVED' THEN 'OPEN' ELSE status END, "
+                "closed_by=CASE WHEN status='CLOSED_RESOLVED' THEN NULL ELSE closed_by END, "
+                "closed_reason=CASE WHEN status='CLOSED_RESOLVED' THEN NULL ELSE closed_reason END "
+                "WHERE id=:id"
+            ), {
+                "sev": params["sev"],
+                "score": params["score"],
+                "msg": params["msg"],
+                "ev": params["ev"],
+                "id": finding_id,
+            })
+
+        session.execute(text(
+            "INSERT INTO engine.finding_occurrences "
+            "(run_id, finding_id, severity, score, message, evidence, is_new) "
+            "VALUES (CAST(:run AS uuid), :fid, :sev, :score, :msg, "
+            "CAST(:ev AS jsonb), :new) "
+            "ON CONFLICT (run_id, finding_id) DO NOTHING"
+        ), {
+            "run": run_id,
+            "fid": finding_id,
+            "sev": params["sev"],
+            "score": params["score"],
+            "msg": params["msg"],
+            "ev": params["ev"],
+            "new": is_alertable,
+        })
+
     return inserted
 
 

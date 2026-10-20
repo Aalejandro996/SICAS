@@ -40,6 +40,8 @@ class RbacTest(unittest.TestCase):
         self.assertIn("audit:sign_gerente", perms)
 
         for forbidden in (
+            "audit:read",
+            "kpi:export",
             "audit:manage",
             "audit:rate",
             "audit:report_draft",
@@ -48,6 +50,33 @@ class RbacTest(unittest.TestCase):
             "audit:unit_manage",
         ):
             self.assertNotIn(forbidden, perms)
+    def test_systems_audit_roles_are_isolated_from_insurance_engine(self):
+        forbidden = {
+            "ingestion:upload", "ingestion:read",
+            "ingestion:review_rejects", "ingestion:cancel",
+            "rule:read", "rule:execute",
+            "finding:read", "finding:triage", "finding:escalate",
+        }
+        roles = (P.AUDITOR_SISTEMAS, P.JEFE_AUDITORIA_SISTEMAS)
+
+        for role in roles:
+            with self.subTest(role=role):
+                perms = P.permissions_for_roles([role])
+                self.assertTrue(
+                    forbidden.isdisjoint(perms),
+                    f"{role} tiene permisos del motor de seguros: "
+                    f"{sorted(forbidden & perms)}",
+                )
+
+        self.assertIn(
+            "audit:systems_execute",
+            P.permissions_for_roles([P.AUDITOR_SISTEMAS]),
+        )
+        self.assertIn(
+            "audit:systems_review",
+            P.permissions_for_roles([P.JEFE_AUDITORIA_SISTEMAS]),
+        )
+
     def test_only_contralor_signs_and_approves(self):
         for perm in ("report:sign", "report:approve"):
             holders = [r for r, ps in P.ROLE_PERMISSIONS.items() if perm in ps]

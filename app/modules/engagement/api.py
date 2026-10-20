@@ -1265,7 +1265,13 @@ def get_rep(rid, write=False, final_viewer=False):
             or "audit:report_approve" in pset
         )
     )
-    if final_viewer and rep["kind"] == "FINAL" and (stage_view or final_view):
+    if (
+        a is not None
+        and final_viewer
+        and rep["kind"] == "FINAL"
+        and (stage_view or final_view)
+        and allowed_domain(a.get("audit_domain", "GENERAL"))
+    ):
         return rep, a, _team_info(a["id"]), None
     if a is None or not visible(a):
         return None, None, None, err("No encontrado", 404)

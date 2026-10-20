@@ -175,16 +175,12 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "audit:financial_read", "audit:financial_manage", "audit:financial_review", "audit:report_approve_jefe",
     },
     AUDITOR_SISTEMAS: {
-        "ingestion:upload", "ingestion:read", "ingestion:review_rejects", "ingestion:cancel",
-        "rule:read", "rule:execute", "finding:read", "finding:triage", "finding:escalate",
         "report:draft", "report:read", "report:submit", "report:read_approved", "report:verify_signature", "report:export",
         "dashboard:operational",
         "audit:read", "audit:manage", "audit:rate", "audit:report_draft", "audit:report_submit", "audit:initial", "audit:pac_send", "audit:read_final",
         "audit:systems_read", "audit:systems_manage", "audit:systems_execute",
     },
     JEFE_AUDITORIA_SISTEMAS: {
-        "ingestion:read", "ingestion:review_rejects", "rule:read", "rule:execute",
-        "finding:read", "finding:triage", "finding:escalate",
         "report:draft", "report:read", "report:submit", "report:read_approved", "report:verify_signature", "report:export",
         "dashboard:operational",
         "audit:read", "audit:manage", "audit:rate", "audit:report_draft", "audit:report_submit", "audit:initial", "audit:pac_send", "audit:read_final",

@@ -26,8 +26,12 @@ ROUTING = {
 @shared_task(bind=True, autoretry_for=(OSError,), retry_backoff=True, max_retries=3)
 def notify_findings(self, run_id: str):
     rows = db.session.execute(text(
-        "SELECT rule_code, severity, count(*) n FROM engine.findings "
-        "WHERE run_id=CAST(:r AS uuid) AND severity IN ('HIGH','CRITICAL') GROUP BY 1,2"), {"r": run_id}).all()
+        "SELECT f.rule_code, o.severity, count(*) n "
+        "FROM engine.finding_occurrences o "
+        "JOIN engine.findings f ON f.id=o.finding_id "
+        "WHERE o.run_id=CAST(:r AS uuid) "
+        "AND o.severity IN ('HIGH','CRITICAL') AND o.is_new "
+        "GROUP BY f.rule_code, o.severity"), {"r": run_id}).all()
     by_rule: dict[str, list] = {}
     for r in rows:
         by_rule.setdefault(r.rule_code, []).append(f"{r.severity}: {r.n}")

@@ -48,3 +48,11 @@ logs/
 *.swp
 *.swo
 ~$*.xls*
+
+# Datos locales y documentos de auditoría que no se publican
+/data/
+/backups/
+/docs/Informes/
+/docs/Cuestionario*.xlsx
+/tmp/
+~$*.docx

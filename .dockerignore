@@ -13,3 +13,25 @@ backups/
 .venv/
 **/__pycache__/
 *.py[cod]
+
+# Credenciales, claves y certificados: nunca incluir en COPY . .
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*.keystore
+**/*.crt
+**/*.pass
+# Bases de datos, archivos de ejecución y evidencias locales
+**/*.dump
+**/*.backup
+**/*.bak
+**/*.sql.gz
+**/*.log
+data/
+tmp/
+# Informes de auditoría y cuestionarios con información del proyecto
+docs/Informes/
+docs/Cuestionario*.xlsx
+**/~$*

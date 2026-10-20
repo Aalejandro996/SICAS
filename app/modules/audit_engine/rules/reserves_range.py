@@ -44,10 +44,46 @@ class ReserveRangeRule(Rule):
         groups: dict[tuple, list[dict]] = defaultdict(list)
         for i, r in enumerate(ctx.reserves()):
             r = dict(r)
-            r["_id"] = r.get("claim_number") or r.get("policy_number") or f"row{i}"
-            amount = float(r["amount"])
+            # SqlContext entrega la clave primaria real como _id.
+            # Solo usar una alternativa para contextos en memoria sin ID.
+            if r.get("_id") is None:
+                r["_id"] = (
+                    r.get("claim_number")
+                    or r.get("policy_number")
+                    or f"row{i}"
+                )
             rtype, branch = r["reserve_type"], r["branch"]
-            base = {"tipo": rtype, "ramo": branch, "periodo": str(r["period"]), "monto": amount}
+            raw_amount = r.get("amount")
+
+            try:
+                amount = float(raw_amount)
+            except (TypeError, ValueError, OverflowError):
+                amount = math.nan
+
+            if not math.isfinite(amount):
+                yield Finding(
+                    self.code, Severity.HIGH, "reserve", str(r["_id"]), 85,
+                    "Reserva con monto inválido (no numérico o no finito).",
+                    {
+                        "tipo": rtype,
+                        "ramo": branch,
+                        "periodo": str(r.get("period")),
+                        "monto_original": str(raw_amount),
+                    },
+                    {
+                        "control": "INVALID_AMOUNT",
+                        "periodo": str(r.get("period")),
+                        "tipo": rtype,
+                    },
+                )
+                continue
+
+            base = {
+                "tipo": rtype,
+                "ramo": branch,
+                "periodo": str(r["period"]),
+                "monto": amount,
+            }
 
             if amount < 0:
                 yield Finding(self.code, Severity.HIGH, "reserve", str(r["_id"]), 85,

@@ -76,13 +76,48 @@ class OverlappingPoliciesRule(Rule):
                               {"tipo": "EXACTO", "ocurrencias": n}, {"tipo": "EXACTO", "n": n})
 
         for key, rows in groups.items():
-            rows.sort(key=lambda r: _d(r["start_date"]))
-            for a, b in zip(rows, rows[1:]):
-                if a["policy_number"] != b["policy_number"] and _d(b["start_date"]) <= _d(a["end_date"]):
-                    pair = sorted([str(a["policy_number"]), str(b["policy_number"])])
-                    yield Finding(self.code, Severity.MEDIUM, "policy", pair[0], 65,
-                                  "Vigencias solapadas para el mismo asegurado, riesgo y ramo.",
-                                  {"asegurado": key[0], "riesgo": key[1], "ramo": key[2], "polizas": pair,
-                                   "vigencia_a": [str(a["start_date"]), str(a["end_date"])],
-                                   "vigencia_b": [str(b["start_date"]), str(b["end_date"])]},
-                                  {"polizas": pair})
+            rows.sort(key=lambda r: (
+                _d(r["start_date"]),
+                _d(r["end_date"]),
+                str(r["policy_number"]).strip().upper(),
+            ))
+
+            # Detectar todos los pares con vigencias que se solapan.
+            # La búsqueda termina cuando el siguiente inicio supera
+            # el fin de la póliza actual.
+            for i, a in enumerate(rows):
+                end_a = _d(a["end_date"])
+                policy_a = str(a["policy_number"]).strip().upper()
+
+                for b in rows[i + 1:]:
+                    start_b = _d(b["start_date"])
+                    if start_b > end_a:
+                        break
+
+                    policy_b = str(b["policy_number"]).strip().upper()
+                    if policy_a == policy_b:
+                        continue
+
+                    pair = sorted([policy_a, policy_b])
+                    yield Finding(
+                        self.code, Severity.MEDIUM, "policy", pair[0], 65,
+                        "Vigencias solapadas para el mismo asegurado, riesgo y ramo.",
+                        {
+                            "asegurado": key[0],
+                            "riesgo": key[1],
+                            "ramo": key[2],
+                            "polizas": pair,
+                            "vigencia_a": [
+                                str(a["start_date"]), str(a["end_date"])
+                            ],
+                            "vigencia_b": [
+                                str(b["start_date"]), str(b["end_date"])
+                            ],
+                        },
+                        {
+                            "polizas": pair,
+                            "asegurado": key[0],
+                            "riesgo": key[1],
+                            "ramo": key[2],
+                        },
+                    )

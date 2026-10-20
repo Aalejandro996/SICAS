@@ -6,7 +6,9 @@ from datetime import date, timedelta
 from app.modules.audit_engine.context import InMemoryContext
 from app.modules.audit_engine.engine import run_engine
 from app.modules.audit_engine.models import Severity
-from app.modules.audit_engine.rules.benford import BenfordRule, benford_stats, mad_conformity
+from app.modules.audit_engine.rules.benford import (
+    BenfordRule, benford_stats, first_digit, mad_conformity,
+)
 from app.modules.audit_engine.rules.duplicates import DuplicateClaimsRule, OverlappingPoliciesRule
 from app.modules.audit_engine.rules.early_claims import EarlyClaimRule
 from app.modules.audit_engine.rules.reserves_range import ReserveRangeRule, modified_z_scores
@@ -37,6 +39,38 @@ class DuplicatesTest(unittest.TestCase):
         f = list(OverlappingPoliciesRule().run(ctx))
         self.assertEqual(len(f), 1)
         self.assertEqual(f[0].evidence["polizas"], ["A", "B"])
+
+
+    def test_overlaps_for_different_risks_remain_distinct(self):
+        def pol(number, start, end, insured, risk):
+            return {
+                "policy_number": number,
+                "insured_id": insured,
+                "risk_id": risk,
+                "branch": "AUTO",
+                "start_date": start,
+                "end_date": end,
+                "sum_insured": 1,
+            }
+
+        ctx = InMemoryContext(policies=[
+            pol("A", "2026-01-01", "2026-12-31", "V111", "R1"),
+            pol("B", "2026-02-01", "2026-03-31", "V111", "R1"),
+            pol("A", "2026-01-01", "2026-12-31", "V222", "R2"),
+            pol("B", "2026-02-01", "2026-03-31", "V222", "R2"),
+        ])
+
+        result = run_engine(ctx, enabled={"DUP-POLICY"})
+        overlaps = [
+            f for f in result.findings
+            if "polizas" in f.evidence
+        ]
+
+        self.assertEqual(len(overlaps), 2)
+        self.assertEqual(
+            {f.evidence["riesgo"] for f in overlaps},
+            {"R1", "R2"},
+        )
 
 
 class EarlyClaimTest(unittest.TestCase):
@@ -75,6 +109,75 @@ class ReserveRangeTest(unittest.TestCase):
     def test_modified_z_constant_group(self):
         self.assertEqual(modified_z_scores([5, 5, 5, 5]), [0.0] * 4)
 
+    def test_invalid_reserve_amount_does_not_abort_other_reserves(self):
+        reserves = [
+            {
+                "_id": 901,
+                "reserve_type": "CLAIM",
+                "branch": "AUTO",
+                "claim_number": "BAD",
+                "period": "2026-09-01",
+                "amount": float("nan"),
+                "sum_insured": 1000,
+            },
+            {
+                "_id": 902,
+                "reserve_type": "CLAIM",
+                "branch": "AUTO",
+                "claim_number": "NEG",
+                "period": "2026-09-01",
+                "amount": -5,
+                "sum_insured": 1000,
+            },
+        ]
+
+        findings = list(ReserveRangeRule().run(InMemoryContext(reserves=reserves)))
+
+        self.assertTrue(any(
+            f.entity_id == "901" and "monto inválido" in f.message
+            for f in findings
+        ))
+        self.assertTrue(any(
+            f.entity_id == "902" and f.message == "Reserva con monto negativo."
+            for f in findings
+        ))
+
+    def test_persisted_reserve_ids_distinguish_different_rows(self):
+        reserves = [
+            {
+                "_id": 101,
+                "reserve_type": "CLAIM",
+                "branch": "AUTO",
+                "claim_number": "SAME-CLAIM",
+                "period": "2026-09-01",
+                "amount": -5,
+                "sum_insured": 1000,
+            },
+            {
+                "_id": 102,
+                "reserve_type": "CLAIM",
+                "branch": "AUTO",
+                "claim_number": "SAME-CLAIM",
+                "period": "2026-09-01",
+                "amount": -10,
+                "sum_insured": 1000,
+            },
+        ]
+
+        result = run_engine(
+            InMemoryContext(reserves=reserves),
+            enabled={"RESERVE-RANGE"},
+        )
+        negative_findings = [
+            f for f in result.findings
+            if f.message == "Reserva con monto negativo."
+        ]
+
+        self.assertEqual(
+            {f.entity_id for f in negative_findings},
+            {"101", "102"},
+        )
+
 
 class BenfordTest(unittest.TestCase):
     @staticmethod
@@ -102,6 +205,44 @@ class BenfordTest(unittest.TestCase):
         rule = BenfordRule({"sources": [{"dataset": "claims", "field": "claimed_amount", "group_by": "branch"}]})
         self.assertEqual(list(rule.run(InMemoryContext(claims=claims))), [])
         self.assertTrue(rule.skipped)
+
+    def test_first_digit_and_stats_ignore_non_finite_values(self):
+        self.assertIsNone(first_digit(math.nan, 10.0))
+        self.assertIsNone(first_digit(math.inf, 10.0))
+        self.assertIsNone(first_digit(-math.inf, 10.0))
+
+        stats = benford_stats([100.0, math.nan, math.inf, -math.inf], 10.0)
+        self.assertEqual(stats["n"], 1)
+
+    def test_rule_skips_invalid_amounts_without_aborting_valid_group(self):
+        claims = [
+            {"claimed_amount": 10.0, "branch": "AUTO"},
+            {"claimed_amount": 100.0, "branch": "AUTO"},
+            {"claimed_amount": 1000.0, "branch": "AUTO"},
+            {"claimed_amount": math.nan, "branch": "AUTO"},
+            {"claimed_amount": math.inf, "branch": "AUTO"},
+            {"claimed_amount": None, "branch": "AUTO"},
+        ]
+
+        rule = BenfordRule({
+            "sources": [{
+                "dataset": "claims",
+                "field": "claimed_amount",
+                "group_by": "branch",
+            }],
+            "min_sample": 3,
+            "min_value": 10.0,
+            "min_magnitude_ratio": 100,
+        })
+
+        list(rule.run(InMemoryContext(claims=claims)))
+
+        invalid = [
+            entry for entry in rule.skipped
+            if "no numérico(s) o no finito(s)" in entry["motivo"]
+        ]
+        self.assertEqual(len(invalid), 1)
+        self.assertIn("3 importe(s)", invalid[0]["motivo"])
 
     def test_expected_first_digit_probability(self):
         self.assertAlmostEqual(math.log10(2), 0.30103, places=4)
