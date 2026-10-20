@@ -88,7 +88,7 @@ Leyenda: ● permitido · (vacío) denegado.
 | `dashboard:executive` | Ver dashboards ejecutivos/KPIs |  |  | ● | ● |
 | `dashboard:contralor` | Acceso exclusivo al dashboard agregado de Contraloría |  |  | ● |  |
 | `kpi:manage` | Crear, modificar y desactivar KPI del dashboard de Contraloría |  |  | ● |  |
-| `kpi:export` | Exportar KPIs |  |  | ● | ● |
+| `kpi:export` | Exportar KPIs |  |  | ● |  |
 
 ## Auditorías (expedientes, cédulas, informes)
 

@@ -9,6 +9,13 @@
 - **Aislamiento de fallos**: si una regla falla, las demás continúan y el error queda en el resultado de la corrida.
 - **Severidad y puntaje**: `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`, más un puntaje 0-100 para priorizar la revisión.
 
+## Alcance de ejecución
+
+- La ejecución manual global requiere enviar `{"scope":"GLOBAL"}`. La interfaz pide confirmación antes de analizar todas las cargas disponibles de pólizas, siniestros, reservas y pagos.
+- La ejecución manual por carga requiere `{"scope":"JOB","job_id":"<UUID>"}` y solo se admite si la carga existe y está en estado `COMPLETED`.
+- Una petición vacía no activa una ejecución global de forma implícita.
+- La ejecución automática disparada al completar una ingesta sigue recibiendo el `job_id` de esa carga; este contrato manual no modifica ese flujo.
+
 ## Catálogo de reglas
 
 | Código | Qué detecta | Parámetros por defecto (punto de partida) | Severidad |

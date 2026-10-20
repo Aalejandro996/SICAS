@@ -12,6 +12,14 @@ CHI2_CRIT_8DF = {0.05: 15.507, 0.01: 20.090}   # gl = 8 (9 dígitos - 1)
 
 
 def first_digit(x: float, min_value: float) -> int | None:
+    try:
+        x = float(x)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    if not math.isfinite(x):
+        return None
+
     x = abs(x)
     if x < min_value or x == 0:
         return None
@@ -19,7 +27,10 @@ def first_digit(x: float, min_value: float) -> int | None:
 
 
 def benford_stats(values: list[float], min_value: float = 10.0) -> dict | None:
-    digits = [d for d in (first_digit(v, min_value) for v in values) if d]
+    digits = [
+        d for d in (first_digit(v, min_value) for v in values)
+        if d is not None
+    ]
     n = len(digits)
     if n == 0:
         return None
@@ -70,24 +81,60 @@ class BenfordRule(Rule):
     def run(self, ctx) -> Iterator[Finding]:
         self.skipped = []
         p = self.params
+        min_sample = int(p["min_sample"])
+        min_value = float(p["min_value"])
+        min_ratio = float(p["min_magnitude_ratio"])
+
+        if min_sample < 1 or not math.isfinite(min_value) or min_value < 0:
+            raise ValueError("Parámetros Benford inválidos: min_sample/min_value.")
+        if not math.isfinite(min_ratio) or min_ratio <= 0:
+            raise ValueError("Parámetro Benford inválido: min_magnitude_ratio.")
+
         for src in p["sources"]:
             rows = getattr(ctx, src["dataset"])()
             groups: dict[str, list[float]] = defaultdict(list)
+            invalid_counts: dict[str, int] = defaultdict(int)
+
             for r in rows:
                 g = str(r.get(src["group_by"], "TODOS")) if src.get("group_by") else "TODOS"
                 if r.get("currency"):
-                    g += "/" + str(r["currency"])           # nunca mezclar monedas en la misma distribución
-                groups[g].append(float(r[src["field"]]))
+                    g += "/" + str(r["currency"])
+
+                try:
+                    value = float(r.get(src["field"]))
+                except (TypeError, ValueError, OverflowError):
+                    invalid_counts[g] += 1
+                    continue
+
+                if not math.isfinite(value):
+                    invalid_counts[g] += 1
+                    continue
+
+                groups[g].append(value)
+
+            for group, invalid_count in invalid_counts.items():
+                label = f"{src['dataset']}.{src['field']}[{group}]"
+                self.skipped.append({
+                    "grupo": label,
+                    "motivo": (
+                        f"se omitieron {invalid_count} importe(s) "
+                        "no numérico(s) o no finito(s)"
+                    ),
+                })
+
             for group, values in groups.items():
                 label = f"{src['dataset']}.{src['field']}[{group}]"
-                positives = [abs(v) for v in values if abs(v) >= p["min_value"]]
-                if len(positives) < p["min_sample"]:
+                positives = [
+                    abs(v) for v in values
+                    if v != 0 and abs(v) >= min_value
+                ]
+                if len(positives) < min_sample:
                     self.skipped.append({"grupo": label, "motivo": f"muestra insuficiente ({len(positives)} < {p['min_sample']})"})
                     continue
-                if max(positives) / min(positives) < p["min_magnitude_ratio"]:
+                if max(positives) / min(positives) < min_ratio:
                     self.skipped.append({"grupo": label, "motivo": "rango dinámico insuficiente para Benford"})
                     continue
-                st = benford_stats(values, p["min_value"])
+                st = benford_stats(values, min_value)
                 level = mad_conformity(st["mad"])
                 if level in ("CONFORME", "ACEPTABLE") or st["chi2"] < p["min_chi2"]:
                     continue

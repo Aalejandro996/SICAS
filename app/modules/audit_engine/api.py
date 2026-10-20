@@ -45,13 +45,75 @@ def configure_rule(code):
     return jsonify(status="OK")
 
 
+def _manual_run_scope(payload):
+    """Exige que la ejecución manual indique explícitamente su alcance."""
+    if not isinstance(payload, dict):
+        return None, ("Cuerpo JSON inválido", 400)
+
+    scope = payload.get("scope")
+    raw_job = payload.get("job_id")
+
+    if scope == "GLOBAL":
+        if raw_job not in (None, ""):
+            return None, ("No combine scope=GLOBAL con job_id", 400)
+        return None, None
+
+    if scope != "JOB":
+        return None, ("Indique scope=GLOBAL o scope=JOB con job_id", 400)
+
+    if not raw_job:
+        return None, ("job_id es obligatorio para scope=JOB", 400)
+
+    try:
+        job_id = str(uuid.UUID(str(raw_job)))
+    except (ValueError, TypeError, AttributeError):
+        return None, ("job_id no es un UUID válido", 400)
+
+    return job_id, None
+
+
+def _job_status_error(job_row):
+    if job_row is None:
+        return ("La carga no existe", 404)
+    if job_row.status != "COMPLETED":
+        return ("La carga debe estar completada antes de ejecutar el motor", 409)
+    return None
+
+
 @bp.post("/runs")
 @permission_required("rule:execute")
 def run_rules():
+    job, error = _manual_run_scope(request.get_json(silent=True))
+    if error:
+        return jsonify(error=error[0]), error[1]
+
+    if job is not None:
+        job_row = db.session.execute(
+            text(
+                "SELECT status FROM insurance.ingestion_jobs "
+                "WHERE id = CAST(:id AS uuid)"
+            ),
+            {"id": job},
+        ).first()
+        error = _job_status_error(job_row)
+        if error:
+            return jsonify(error=error[0]), error[1]
+
     from app.tasks.audit_tasks import run_anomaly_rules
-    job = (request.get_json(silent=True) or {}).get("job_id")
-    t = run_anomaly_rules.apply_async(args=[job, get_jwt_identity()], queue="ingestion")
-    audit("ENGINE_RUN_REQUESTED", entity_type="engine_run", entity_id=t.id, request_id=g.request_id)
+    t = run_anomaly_rules.apply_async(
+        args=[job, get_jwt_identity()],
+        queue="ingestion",
+    )
+    audit(
+        "ENGINE_RUN_REQUESTED",
+        entity_type="engine_run",
+        entity_id=t.id,
+        metadata={
+            "scope": "GLOBAL" if job is None else "JOB",
+            "job_id": job,
+        },
+        request_id=g.request_id,
+    )
     return jsonify(task_id=t.id), 202
 
 
@@ -116,7 +178,10 @@ def close(fid):
 def list_runs():
     rows = db.session.execute(text(
         "SELECT r.id::text, r.started_at, r.finished_at, r.status, r.job_id::text, "
-        "(SELECT count(*) FROM engine.findings f WHERE f.run_id = r.id) AS new_findings "
+        "(SELECT count(*) FROM engine.finding_occurrences o "
+        "WHERE o.run_id = r.id AND o.is_new) AS new_findings, "
+        "(SELECT count(*) FROM engine.finding_occurrences o "
+        "WHERE o.run_id = r.id) AS observed_findings "
         "FROM engine.runs r ORDER BY r.started_at DESC LIMIT 20")).all()
     return jsonify(runs=[dict(r._mapping) for r in rows])
 

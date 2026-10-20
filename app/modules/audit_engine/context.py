@@ -59,11 +59,13 @@ class SqlContext:
                             "c.claimed_amount, c.currency, p.start_date AS policy_start, p.end_date AS policy_end, "
                             "p.branch, p.sum_insured FROM insurance.claims c "
                             "LEFT JOIN LATERAL (SELECT start_date, end_date, branch, sum_insured FROM insurance.policies x "
-                            "WHERE x.policy_number = c.policy_number ORDER BY x.id LIMIT 1) p ON TRUE "
+                            "WHERE x.policy_number = c.policy_number "
+                            "ORDER BY CASE WHEN c.occurrence_date BETWEEN x.start_date AND x.end_date "
+                            "THEN 0 ELSE 1 END, x.id DESC LIMIT 1) p ON TRUE "
                             "WHERE (CAST(:job_id AS uuid) IS NULL OR c.job_id = CAST(:job_id AS uuid))")
 
     def reserves(self):
-        return self._stream("SELECT reserve_type, branch, policy_number, claim_number, period, amount, sum_insured, currency "
+        return self._stream("SELECT id AS _id, reserve_type, branch, policy_number, claim_number, period, amount, sum_insured, currency "
                             "FROM insurance.reserves WHERE (CAST(:job_id AS uuid) IS NULL OR job_id = CAST(:job_id AS uuid))")
 
     def payments(self):

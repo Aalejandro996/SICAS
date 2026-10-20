@@ -52,7 +52,10 @@
     const sv = h('select', null, h('option', { value: '' }, '(todas)'), ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((x) => h('option', { value: x }, S.label(x))));
     const out = h('div');
     const bar = h('div', { class: 'toolbar' }, h('label', null, 'Estado', st), h('label', null, 'Severidad', sv), h('button', { onclick: () => load() }, 'Buscar'));
-    if (can('rule:execute')) bar.append(h('button', { class: 'secondary', onclick: async () => { if (await S.send('/engine/runs', 'POST', {})) S.say('Motor en ejecución. Actualice en unos segundos.', true); } }, 'Ejecutar motor'));
+    if (can('rule:execute')) bar.append(h('button', { class: 'secondary', onclick: async () => {
+      if (!window.confirm('La ejecución global analizará todas las cargas disponibles de pólizas, siniestros, reservas y pagos. ¿Desea continuar?')) return;
+      if (await S.send('/engine/runs', 'POST', { scope: 'GLOBAL' })) S.say('Motor global en ejecución. Actualice en unos segundos.', true);
+    } }, 'Ejecutar motor global'));
     el.append(bar, out);
     const load = async () => {
       const d = await S.get(`/engine/findings?status=${st.value}` + (sv.value ? '&severity=' + sv.value : ''));
