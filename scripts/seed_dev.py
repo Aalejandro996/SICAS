@@ -18,7 +18,9 @@ UNITS = [("SUC-CENTRO", "Sucursal Centro", "SUCURSAL"), ("SUC-ESTE", "Sucursal E
 load_dotenv_file()
 import psycopg  # noqa: E402
 
-url = os.environ.get("DATABASE_URL", "").replace("postgresql+psycopg://", "postgresql://")
+url = os.environ.get("DATABASE_URL", "").replace("postgresql+psycopg://", "postgresql://", 1)
+if url.startswith("postgres://"):
+    url = "postgresql://" + url[len("postgres://"):]
 if not url:
     sys.exit("Falta DATABASE_URL")
 with psycopg.connect(url) as cx:

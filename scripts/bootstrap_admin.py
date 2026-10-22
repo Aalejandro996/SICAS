@@ -48,7 +48,12 @@ def main():
     if not a.db_url:
         sys.exit("Falta DATABASE_URL (en .env o con --db-url). Use un usuario con permisos de escritura sobre el esquema iam.")
 
-    engine = create_engine(a.db_url)
+    db_url = a.db_url.strip()
+    if db_url.startswith("postgres://"):
+        db_url = "postgresql+psycopg://" + db_url[len("postgres://"):]
+    elif db_url.startswith("postgresql://"):
+        db_url = "postgresql+psycopg://" + db_url[len("postgresql://"):]
+    engine = create_engine(db_url)
     with engine.begin() as cx:
         # Se bloquea la tabla de usuarios para evitar que dos bootstraps simultáneos creen dos primeros usuarios
         cx.execute(text("LOCK TABLE iam.user_roles IN SHARE ROW EXCLUSIVE MODE"))

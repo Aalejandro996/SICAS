@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 FROM python:3.12-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN useradd --create-home --uid 10001 app
+RUN useradd --create-home --uid 10001 app \
+    && (getent group 1000 >/dev/null || groupadd --gid 1000 rendersecrets) \
+    && usermod --append --groups "$(getent group 1000 | cut -d: -f1)" app
 WORKDIR /srv
 COPY requirements/base.txt requirements/base.txt
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \

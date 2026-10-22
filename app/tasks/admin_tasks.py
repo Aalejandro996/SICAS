@@ -28,7 +28,9 @@ def run_backup(backup_id: str):
     exe = shutil.which("pg_dump")
     if not exe:
         return finish("FAILED", error="pg_dump no está disponible en este equipo (instale el cliente de PostgreSQL)")
-    url = os.environ.get("DATABASE_URL", "").replace("postgresql+psycopg://", "postgresql://")
+    url = os.environ.get("DATABASE_URL", "").replace("postgresql+psycopg://", "postgresql://", 1)
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     path = BACKUP_DIR / f"sicas_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.dump"
     try:

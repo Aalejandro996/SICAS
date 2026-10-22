@@ -1689,7 +1689,7 @@ def _sign(rid, role):
             signer_name=g.claims.get("username", me()),
             field_name=field, box=box, tsa_url=cfg.get("TSA_URL"),
         )
-        key = f"reports/{rid}/v{version}.pdf"
+        key = f"reports/{rid}/v{version}/{uuid.uuid4()}.pdf"
         storage.put(key, signed.pdf_bytes)
     except Exception as ex:  # noqa: BLE001
         log(
@@ -1704,7 +1704,23 @@ def _sign(rid, role):
             500,
         )
 
-    repo.add_signed_doc(rid, role, version, signed, key, me())
+    try:
+        repo.add_signed_doc(rid, role, version, signed, key, me())
+    except Exception as ex:  # noqa: BLE001
+        repo.db.session.rollback()
+        log(
+            "AUDIT_REPORT_SIGN_REGISTRATION_FAILED",
+            outcome="FAILURE",
+            entity_type="audit_report",
+            entity_id=str(rid),
+            metadata={"role": role, "error": type(ex).__name__, "object_key": key},
+            request_id=g.request_id,
+        )
+        return err(
+            "El documento firmado se almacenó, pero no pudo registrarse. "
+            "Requiere revisión antes de reintentar.",
+            500,
+        )
     st.signed_roles[role] = me()
 
     if role == "GERENTE_CI":

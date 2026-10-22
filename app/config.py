@@ -12,13 +12,22 @@ def _env(name: str, dev_default: str | None = None) -> str:
         return dev_default
     raise RuntimeError(f"Variable de entorno obligatoria no definida: {name}")
 
+def normalize_sqlalchemy_url(url: str) -> str:
+    """Admite las URLs PostgreSQL habituales de proveedores gestionados."""
+    url = url.strip()
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
 
 class BaseConfig:
     ENV = ENV
     SECRET_KEY = _env("SECRET_KEY")
     JWT_SECRET_KEY = _env("JWT_SECRET_KEY")
-    SQLALCHEMY_DATABASE_URI = _env("DATABASE_URL", "postgresql+psycopg://app_rw:dev@localhost:5432/contraloria")
-    SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True, "pool_size": 20, "max_overflow": 10}
+    SQLALCHEMY_DATABASE_URI = normalize_sqlalchemy_url(_env("DATABASE_URL", "postgresql+psycopg://app_rw:dev@localhost:5432/contraloria"))
+    SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True, "pool_size": int(os.environ.get("DB_POOL_SIZE", "20")), "max_overflow": int(os.environ.get("DB_MAX_OVERFLOW", "10"))}
 
     # HTTPS y cookies seguras: obligatorios fuera de desarrollo
     FORCE_HTTPS = ENV != "dev"

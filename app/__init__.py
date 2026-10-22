@@ -1,3 +1,4 @@
+import os
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
@@ -40,6 +41,11 @@ def create_app(config=None) -> Flask:
     app = Flask(__name__, static_folder="static", static_url_path="/static")
     app.json = SicasJSON(app)
     app.config.from_object(config)
+
+    # Solo confiar en los encabezados del proxy cuando el despliegue lo habilite.
+    if os.environ.get("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes"}:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
     from .core.logging_redaction import install_redaction_filter
     install_redaction_filter(app=app)
 
