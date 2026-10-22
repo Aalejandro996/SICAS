@@ -26,7 +26,6 @@ def put_signed(key: str, data: bytes) -> None:
         Bucket=os.environ["S3_SIGNED_BUCKET"],
         Key=key,
         Body=data,
-        ServerSideEncryption="aws:kms",
         IfNoneMatch="*",
     )
 

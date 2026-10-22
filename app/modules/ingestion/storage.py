@@ -33,7 +33,6 @@ def save_encrypted(stream, job_id) -> str:
         Bucket=os.environ["S3_BUCKET"],
         Key=key,
         Body=stream,
-        ServerSideEncryption="aws:kms",
         IfNoneMatch="*",
     )
     return key
