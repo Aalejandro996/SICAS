@@ -82,7 +82,12 @@ def create_app(config=None) -> Flask:
     def _extra_headers(resp):
         resp.headers["X-Request-ID"] = g.request_id
         resp.headers["X-Content-Type-Options"] = "nosniff"
-        resp.headers["Cache-Control"] = "no-store"
+        if request.endpoint == "static" and resp.status_code in (200, 304):
+            # Los recursos estáticos se pueden reutilizar durante 24 horas.
+            resp.headers["Cache-Control"] = "public, max-age=86400"
+        else:
+            # HTML, API y respuestas sensibles siguen sin caché.
+            resp.headers["Cache-Control"] = "no-store"
         resp.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
         return resp
 
