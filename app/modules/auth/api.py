@@ -1,4 +1,6 @@
 """Endpoints de autenticación: contraseña -> (cambio de clave | alta de MFA | MFA) -> sesión por cookies HttpOnly."""
+import base64
+import io
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -99,6 +101,25 @@ def change_password():
     return jsonify(status=step, challenge=_challenge(user, step))
 
 
+def _qr_png_data_uri(uri: str) -> str:
+    """Genera un QR PNG localmente; no envía el secreto a terceros."""
+    import qrcode
+
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=7,
+        border=4,
+    )
+    qr.add_data(uri)
+    qr.make(fit=True)
+    image = qr.make_image(fill_color="black", back_color="white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return "data:image/png;base64," + encoded
+
+
+
 @bp.post("/mfa/enroll")
 @limiter.limit("5/minute")
 def mfa_enroll():
@@ -107,7 +128,16 @@ def mfa_enroll():
         secret, uri = _service().begin_mfa_enrollment(user)
     except AuthError as e:
         return _fail(e)
-    return jsonify(secret=secret, otpauth_uri=uri, challenge=_challenge(user, "MFA_ENROLL_REQUIRED"))
+    qr_data_uri = _qr_png_data_uri(uri)
+    response = jsonify(
+        secret=secret,
+        otpauth_uri=uri,
+        qr_data_uri=qr_data_uri,
+        challenge=_challenge(user, "MFA_ENROLL_REQUIRED"),
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @bp.post("/mfa/confirm")
