@@ -16,12 +16,12 @@ class FakeS3:
         return {"ETag": '"test"'}
 
 
-def assert_conditional_kms_write(client, bucket, key):
+def assert_conditional_write(client, bucket, key):
     assert len(client.calls) == 1
     call = client.calls[0]
     assert call["Bucket"] == bucket
     assert call["Key"] == key
-    assert call["ServerSideEncryption"] == "aws:kms"
+    assert "ServerSideEncryption" not in call
     assert call["IfNoneMatch"] == "*"
 
 
@@ -36,7 +36,7 @@ def test_ingestion_write_is_conditional(monkeypatch):
 
     assert key == "ingestion/job-test.csv"
     assert client.calls[0]["Body"] is stream
-    assert_conditional_kms_write(client, "test-ingestion", key)
+    assert_conditional_write(client, "test-ingestion", key)
 
 
 def test_engagement_write_is_conditional(monkeypatch):
@@ -47,7 +47,7 @@ def test_engagement_write_is_conditional(monkeypatch):
 
     engagement_storage.put("audit/evidence.pdf", b"pdf")
 
-    assert_conditional_kms_write(
+    assert_conditional_write(
         client, "test-engagement", "audit/evidence.pdf"
     )
 
@@ -60,6 +60,6 @@ def test_signed_report_write_is_conditional(monkeypatch):
 
     reporting_storage.put_signed("audit/report.pdf", b"signed pdf")
 
-    assert_conditional_kms_write(
+    assert_conditional_write(
         client, "test-signed", "audit/report.pdf"
     )

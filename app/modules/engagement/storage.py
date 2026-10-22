@@ -33,7 +33,6 @@ def put(key: str, data: bytes) -> None:
         Bucket=os.environ["S3_ENGAGEMENT_BUCKET"],
         Key=key,
         Body=data,
-        ServerSideEncryption="aws:kms",
         IfNoneMatch="*",
     )
 
