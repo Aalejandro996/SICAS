@@ -112,7 +112,7 @@ services:
     dockerfilePath: infra/docker/Dockerfile
     dockerContext: .
     dockerCommand: >-
-      sh -lc 'until [ -r /etc/secrets/checkpoint_private.pem ] &&
+      /bin/sh -c 'until [ -r /etc/secrets/checkpoint_private.pem ] &&
       [ -r /etc/secrets/checkpoint_public.pem ]; do sleep 10; done;
       exec celery -A celery_worker.celery worker -Q ingestion,reports,alerts -c 2 --loglevel=INFO'
     autoDeployTrigger: "off"
@@ -161,7 +161,7 @@ services:
     dockerfilePath: infra/docker/Dockerfile
     dockerContext: .
     dockerCommand: >-
-      sh -lc 'until [ -r /etc/secrets/checkpoint_private.pem ] &&
+      /bin/sh -c 'until [ -r /etc/secrets/checkpoint_private.pem ] &&
       [ -r /etc/secrets/checkpoint_public.pem ]; do sleep 10; done;
       exec celery -A celery_worker.celery beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule'
     autoDeployTrigger: "off"
