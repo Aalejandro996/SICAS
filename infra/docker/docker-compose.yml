@@ -3,7 +3,7 @@ services:
   db:
     image: postgres:16
     environment: {POSTGRES_DB: contraloria, POSTGRES_USER: postgres, POSTGRES_PASSWORD_FILE: /run/secrets/pg_pass}
-    volumes: [pgdata:/var/lib/postgresql/data, ../../sql:/docker-entrypoint-initdb.d:ro]
+    volumes: [pgdata:/var/lib/postgresql/data]
     secrets: [pg_pass]
   redis:
     image: redis:7
@@ -43,6 +43,9 @@ services:
     build: {context: ../.., dockerfile: infra/docker/Dockerfile}
     command: celery -A celery_worker.celery beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
     env_file: ../../.env
+    environment:
+      SICAS_CHECKPOINT_KEY_PEM: /srv/secrets/checkpoint_private.pem
+      SICAS_CHECKPOINT_PUB_PEM: /srv/secrets/checkpoint_public.pem
     depends_on: [redis]
     volumes:
     - ../../secrets:/srv/secrets:ro
