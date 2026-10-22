@@ -192,14 +192,29 @@ def sign(report_id):
         signed = signing.sign_pdf(pdf, signing.load_signer(cfg), reason="Dictamen de Contraloría",
                                   location=cfg.get("SIGNING_LOCATION", "Venezuela"), signer_name=g.claims.get("username", actor),
                                   tsa_url=cfg.get("TSA_URL"))
-        object_key = f"signed/{report_id}/v1.pdf"
+        object_key = f"signed/{report_id}/v1/{uuid.uuid4()}.pdf"
         storage.put_signed(object_key, signed.pdf_bytes)           # primero se guarda; solo entonces se registra
     except Exception as e:  # noqa: BLE001
         audit("REPORT_SIGN_FAILED", outcome="FAILURE", entity_type="report", entity_id=str(report_id),
               metadata={"error": type(e).__name__}, request_id=g.request_id)
         detail = f" ({e})" if cfg.get("ENV") == "dev" else ""
         return jsonify(error="No fue posible firmar el documento" + detail), 500
-    doc_id = repo.register_signed(report_id, actor, signed, object_key)
+    try:
+        doc_id = repo.register_signed(report_id, actor, signed, object_key)
+    except Exception as e:  # noqa: BLE001
+        repo.db.session.rollback()
+        audit(
+            "REPORT_SIGN_REGISTRATION_FAILED",
+            outcome="FAILURE",
+            entity_type="report",
+            entity_id=str(report_id),
+            metadata={"error": type(e).__name__, "object_key": object_key},
+            request_id=g.request_id,
+        )
+        return jsonify(
+            error="El documento firmado se almacenó, pero no pudo registrarse. "
+                  "Requiere revisión antes de reintentar."
+        ), 500
     audit("REPORT_SIGNED", entity_type="report", entity_id=str(report_id),
           after_data={"signed_document_id": doc_id, "sha256_signed": signed.sha256_signed, "cert_serial": signed.cert_serial,
                       "timestamp": signed.timestamp_embedded}, request_id=g.request_id)

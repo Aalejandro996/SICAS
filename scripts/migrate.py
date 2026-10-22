@@ -18,7 +18,9 @@ def main():
     load_dotenv_file()
     import psycopg
 
-    url = os.environ.get("DATABASE_URL", "").replace("postgresql+psycopg://", "postgresql://")
+    url = os.environ.get("DATABASE_URL", "").replace("postgresql+psycopg://", "postgresql://", 1)
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
     if not url:
         sys.exit("Falta DATABASE_URL (ejecute primero scripts/init_env.py)")
     files = sorted((ROOT / "sql").glob("[0-9][0-9][0-9]_*.sql"))

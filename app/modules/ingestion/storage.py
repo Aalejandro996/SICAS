@@ -29,7 +29,13 @@ def save_encrypted(stream, job_id) -> str:
                 fh.write(chunk)
         return f"local:{job_id}.csv"
     key = f"ingestion/{job_id}.csv"
-    _client().upload_fileobj(stream, os.environ["S3_BUCKET"], key, ExtraArgs={"ServerSideEncryption": "aws:kms"})
+    _client().put_object(
+        Bucket=os.environ["S3_BUCKET"],
+        Key=key,
+        Body=stream,
+        ServerSideEncryption="aws:kms",
+        IfNoneMatch="*",
+    )
     return key
 
 

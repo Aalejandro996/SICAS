@@ -1,0 +1,198 @@
+previews:
+  generation: "off"
+
+# Valores compartidos. No incluye contraseñas, claves privadas ni credenciales AWS.
+envVarGroups:
+  - name: sicas-runtime
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: SICAS_ENV
+        value: "prod"
+      - key: SICAS_CELERY_EAGER
+        value: "0"
+      - key: TRUST_PROXY_HEADERS
+        value: "1"
+      - key: DB_POOL_SIZE
+        value: "3"
+      - key: DB_MAX_OVERFLOW
+        value: "2"
+      - key: SICAS_ACTIVE_KEY
+        value: "k1"
+      - key: SICAS_COMPANY
+        value: "Aseguradora"
+      - key: CORS_ORIGINS
+        value: "https://sicas-api.onrender.com"
+      - key: SIGNING_MODE
+        value: "pkcs12"
+      - key: SICAS_CHECKPOINT_KEY_PEM
+        value: "/etc/secrets/checkpoint_private.pem"
+      - key: SICAS_CHECKPOINT_PUB_PEM
+        value: "/etc/secrets/checkpoint_public.pem"
+      - key: SIGNING_PKCS12_PATH
+        value: "/etc/secrets/sicas_contralor.p12"
+      - key: SIGNING_PKCS12_PASSPHRASE_FILE
+        value: "/etc/secrets/sicas_contralor.pass"
+      - key: SIGNING_PKCS12_PATH_GERENTE
+        value: "/etc/secrets/sicas_gerente_ci.p12"
+      - key: SIGNING_PKCS12_PASSPHRASE_FILE_GERENTE
+        value: "/etc/secrets/sicas_gerente_ci.pass"
+      - key: SIGNING_TRUST_ROOTS_PEM
+        value: "/etc/secrets/sicas_trust_roots.pem"
+
+
+services:
+  - type: keyvalue
+    name: sicas-kv
+    region: virginia
+    plan: 256mb
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+    persistenceMode: journal-snapshot
+
+  - type: web
+    name: sicas-api
+    runtime: docker
+    region: virginia
+    plan: 0.5c-512mb
+    dockerfilePath: infra/docker/Dockerfile
+    dockerContext: .
+    dockerCommand: "gunicorn -w 1 -b 0.0.0.0:8000 --access-logfile - wsgi:app"
+    autoDeployTrigger: "off"
+    preDeployCommand: python scripts/migrate.py
+    healthCheckPath: /api/v1/health/ready
+    maxShutdownDelaySeconds: 60
+    maintenanceMode:
+      enabled: true
+    envVars:
+      - fromGroup: sicas-runtime
+      - key: SICAS_KEYS
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_DEFAULT_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENGAGEMENT_BUCKET
+        sync: false
+      - key: S3_SIGNED_BUCKET
+        sync: false
+      - key: PORT
+        value: "8000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sicas-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: sicas-kv
+          type: keyvalue
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: sicas-kv
+          type: keyvalue
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          name: sicas-kv
+          type: keyvalue
+          property: connectionString
+
+  - type: worker
+    name: sicas-worker
+    runtime: docker
+    region: virginia
+    plan: 0.5c-512mb
+    dockerfilePath: infra/docker/Dockerfile
+    dockerContext: .
+    dockerCommand: >-
+      sh -lc 'until [ -r /etc/secrets/checkpoint_private.pem ] &&
+      [ -r /etc/secrets/checkpoint_public.pem ]; do sleep 10; done;
+      exec celery -A celery_worker.celery worker -Q ingestion,reports,alerts -c 2 --loglevel=INFO'
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - fromGroup: sicas-runtime
+      - key: SICAS_KEYS
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_DEFAULT_REGION
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENGAGEMENT_BUCKET
+        sync: false
+      - key: S3_SIGNED_BUCKET
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sicas-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: sicas-kv
+          type: keyvalue
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: sicas-kv
+          type: keyvalue
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          name: sicas-kv
+          type: keyvalue
+          property: connectionString
+
+  - type: worker
+    name: sicas-beat
+    runtime: docker
+    region: virginia
+    plan: 0.5c-512mb
+    dockerfilePath: infra/docker/Dockerfile
+    dockerContext: .
+    dockerCommand: >-
+      sh -lc 'until [ -r /etc/secrets/checkpoint_private.pem ] &&
+      [ -r /etc/secrets/checkpoint_public.pem ]; do sleep 10; done;
+      exec celery -A celery_worker.celery beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule'
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - fromGroup: sicas-runtime
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sicas-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: sicas-kv
+          type: keyvalue
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: sicas-kv
+          type: keyvalue
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          name: sicas-kv
+          type: keyvalue
+          property: connectionString
+
+databases:
+  - name: sicas-db
+    databaseName: contraloria
+    region: virginia
+    plan: 0.1c-256mb
+    diskSizeGB: 1
+    postgresMajorVersion: "16"
+    ipAllowList: []

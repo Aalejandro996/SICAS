@@ -23,7 +23,12 @@ def put_signed(key: str, data: bytes) -> None:
         return
     import boto3
     boto3.client("s3", endpoint_url=os.environ.get("S3_ENDPOINT") or None).put_object(
-        Bucket=os.environ["S3_SIGNED_BUCKET"], Key=key, Body=data, ServerSideEncryption="aws:kms")
+        Bucket=os.environ["S3_SIGNED_BUCKET"],
+        Key=key,
+        Body=data,
+        ServerSideEncryption="aws:kms",
+        IfNoneMatch="*",
+    )
 
 
 def get_signed(key: str) -> bytes:

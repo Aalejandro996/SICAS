@@ -29,7 +29,13 @@ def put(key: str, data: bytes) -> None:
             raise FileExistsError("El objeto ya existe")
         path.write_bytes(data)
         return
-    _s3().put_object(Bucket=os.environ["S3_ENGAGEMENT_BUCKET"], Key=key, Body=data, ServerSideEncryption="aws:kms")
+    _s3().put_object(
+        Bucket=os.environ["S3_ENGAGEMENT_BUCKET"],
+        Key=key,
+        Body=data,
+        ServerSideEncryption="aws:kms",
+        IfNoneMatch="*",
+    )
 
 
 def get(key: str) -> bytes:
