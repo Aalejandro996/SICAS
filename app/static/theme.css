@@ -973,3 +973,43 @@ textarea {
     padding: 9px;
   }
 }
+
+/* SICAS-MFA-QR-20261022 */
+#view-enroll .mfa-qr-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  margin: .9rem auto 1rem;
+  padding: .65rem;
+  background: #fff;
+  border: 1px solid var(--cc-border, #d9e1ea);
+  border-radius: 14px;
+}
+#view-enroll #mfa-qr {
+  display: block;
+  width: min(240px, 68vw);
+  height: auto;
+  background: #fff;
+  image-rendering: pixelated;
+}
+#view-enroll .mfa-manual-setup {
+  margin: .8rem 0 1rem;
+  text-align: left;
+}
+#view-enroll .mfa-manual-setup summary {
+  cursor: pointer;
+  padding: .4rem 0;
+  font-weight: 600;
+}
+#view-enroll #mfa-secret {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+#view-enroll #mfa-uri {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

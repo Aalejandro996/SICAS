@@ -29,6 +29,23 @@
     challenge = r.data.challenge;
     $('mfa-secret').textContent = r.data.secret;
     $('mfa-uri').textContent = r.data.otpauth_uri;
+
+    const qrImage = $('mfa-qr');
+    qrImage.onerror = () => {
+      qrImage.classList.add('hidden');
+      $('mfa-manual-setup').open = true;
+      S.say('No se pudo mostrar el QR. Use la alternativa manual.');
+    };
+    if (typeof r.data.qr_data_uri === 'string' &&
+        r.data.qr_data_uri.startsWith('data:image/png;base64,')) {
+      qrImage.src = r.data.qr_data_uri;
+      qrImage.classList.remove('hidden');
+    } else {
+      qrImage.removeAttribute('src');
+      qrImage.classList.add('hidden');
+      $('mfa-manual-setup').open = true;
+      S.say('No se pudo mostrar el QR. Puede usar la clave manual.');
+    }
   }
   function enter(user) {
     S.user = user;

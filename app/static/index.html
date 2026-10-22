@@ -8,7 +8,7 @@
   <link rel="icon" type="image/png" sizes="64x64" href="/static/branding/sicas-favicon.png?v=20261004">
   <link rel="apple-touch-icon" sizes="64x64" href="/static/branding/sicas-favicon.png?v=20261004">
   <link rel="stylesheet" href="/static/style.css?v=20261014-ux1">
-  <link rel="stylesheet" href="/static/theme.css?v=20261014-safe-visual1">
+  <link rel="stylesheet" href="/static/theme.css?v=20261022-mfa-qr1">
   <link rel="stylesheet" href="/static/visual_refinements.css?v=20261015-account-menu-polish2">
 </head>
 <body>
@@ -31,10 +31,23 @@
 
     <section id="view-enroll" class="card hidden">
       <h2>Configurar verificación en dos pasos</h2>
-      <p>Agregue esta cuenta en su aplicación autenticadora (Google Authenticator, Microsoft Authenticator, Aegis…) con la clave:</p>
-      <pre id="mfa-secret"></pre>
-      <p class="hint">También puede abrir el enlace <code>otpauth://</code> en su dispositivo: <span id="mfa-uri"></span></p>
-      <label>Código de 6 dígitos <input id="enroll-code" inputmode="numeric" maxlength="6"></label>
+      <p>1. Abre tu aplicación autenticadora y elige la opción para escanear un código QR.</p>
+      <div class="mfa-qr-frame">
+        <img id="mfa-qr" class="hidden"
+             alt="Código QR de configuración MFA de SICAS"
+             width="240" height="240">
+      </div>
+      <p>2. Escanea el código e introduce el código de seis dígitos de tu aplicación.</p>
+      <details id="mfa-manual-setup" class="mfa-manual-setup">
+        <summary>No puedo escanear el código QR</summary>
+        <p>Introduce manualmente esta clave en la aplicación autenticadora:</p>
+        <pre id="mfa-secret"></pre>
+        <p class="hint">URI de configuración: <span id="mfa-uri"></span></p>
+      </details>
+      <label>Código de 6 dígitos
+        <input id="enroll-code" inputmode="numeric" maxlength="6"
+               autocomplete="one-time-code">
+      </label>
       <button id="btn-confirm">Confirmar e ingresar</button>
     </section>
 
@@ -57,6 +70,6 @@
   <script src="/static/pages_contralor.js?v=20261014-dashboard-role-matrix1"></script>
 <script src="/static/pages_activity.js?v=20261014-full2"></script>
   <script src="/static/pages_notifications.js?v=20261014-notifications1"></script>
-  <script src="/static/app.js?v=20261015-account-menu-polish2"></script>
+  <script src="/static/app.js?v=20261022-mfa-qr1"></script>
 </body>
 </html>
