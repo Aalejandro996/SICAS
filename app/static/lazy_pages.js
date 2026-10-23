@@ -41,7 +41,7 @@
     },
 
     audit: {
-      src: '/static/pages_audit.js?v=20261014-display-names1',
+      src: '/static/pages_audit.js?v=20261023-phase-snapshots1',
       pages: [
         {
           id: 'audits',
