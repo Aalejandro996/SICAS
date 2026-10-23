@@ -12,6 +12,7 @@ from app.core.audit.audit_service import audit as log
 from app.core.security.rbac import permission_required
 
 from . import assemble as asm
+from . import score_snapshots
 from . import evidence_rules, offline, scoring, storage, system_questionnaire
 from . import repositories as repo
 from . import workflow as wf
@@ -115,6 +116,22 @@ def load(aid, write=False, phases=None):
 
 def thresholds():
     return repo.thresholds() or scoring.DEFAULT_THRESHOLDS
+
+
+def _phase_snapshot(a, trigger_action, report=None):
+    """Prepara una instantánea para insertarla en la transacción del evento."""
+    return {
+        "audit_id": str(a["id"]),
+        "phase": a["phase"],
+        "trigger_action": trigger_action,
+        "captured_by": str(me()),
+        "captured_username": (getattr(g, "claims", {}) or {}).get("username"),
+        "report_id": str(report["id"]) if report else None,
+        "report_version": report.get("version") if report else None,
+        "scorecard": score_snapshots.build_scorecard(
+            a, repo.worksheets_with_items(a["id"]), thresholds()
+        ),
+    }
 
 
 # ------------------------------------------------------------------ catálogos y expedientes
@@ -304,7 +321,8 @@ def audit_overview(a):
     overall = scoring.audit_summary([s for _, s in pairs], a.get("manual_score"), th)
     reps = repo.reports(a["id"])
     obs = repo.observations(a["id"])
-    return {"audit": a, "team": repo.team(a["id"]), "phase_log": repo.phase_log(a["id"]), "overall": overall, "thresholds": th,
+    return {"audit": a, "team": repo.team(a["id"]), "phase_log": repo.phase_log(a["id"]),
+            "phase_snapshots": repo.phase_snapshots(a["id"]), "overall": overall, "thresholds": th,
             "sheets": [{"id": ws["id"], "kind": ws["kind"], "line": ws["line"], "title": ws["title"], "criteria_count": len(ws["criteria"]),
                         "items": s.items, "scored": s.scored, "exceptions": s.exceptions, "auto": s.auto, "final": s.final,
                         "manual_override": s.manual_override, "rating": s.rating,
@@ -341,7 +359,7 @@ def phase(aid):
             return err("Para pasar a Informe, cada cédula debe tener al menos un ítem calificado" + (": " + ", ".join(empty) if empty else ""))
     if PHASES.index(to) < cur and not note:
         return err("Para retroceder de fase indique el motivo")
-    repo.change_phase(a["id"], a["phase"], to, me(), note)
+    repo.change_phase(a["id"], a["phase"], to, me(), note, phase_snapshot=_phase_snapshot(a, "PHASE_CHANGE"))
     log("AUDIT_PHASE_CHANGED", entity_type="audit", entity_id=a["id"], before_data={"phase": a["phase"]}, after_data={"phase": to, "note": note}, request_id=g.request_id)
     return jsonify(phase=to)
 
@@ -354,15 +372,36 @@ def audit_rating(aid):
         return e
     d = request.get_json(silent=True) or {}
     if d.get("clear"):
+        before = {
+            "manual": float(a["manual_score"]) if a.get("manual_score") is not None else None,
+            "reason": a.get("manual_reason"),
+        }
         repo.set_audit_manual(a["id"], None, None, me())
-        log("AUDIT_RATING_CLEARED", entity_type="audit", entity_id=a["id"], request_id=g.request_id)
+        log(
+            "AUDIT_RATING_CLEARED",
+            entity_type="audit",
+            entity_id=a["id"],
+            before_data=before,
+            after_data={"manual": None, "reason": None},
+            request_id=g.request_id,
+        )
         return jsonify(status="OK")
     try:
         score, reason = scoring.validate_manual(d.get("score"), d.get("reason"))
     except scoring.ScoreError as ex:
         return err(str(ex))
     repo.set_audit_manual(a["id"], score, reason, me())
-    log("AUDIT_RATING_OVERRIDDEN", entity_type="audit", entity_id=a["id"], before_data={"manual": a["manual_score"]}, after_data={"manual": score, "reason": reason}, request_id=g.request_id)
+    log(
+        "AUDIT_RATING_OVERRIDDEN",
+        entity_type="audit",
+        entity_id=a["id"],
+        before_data={
+            "manual": float(a["manual_score"]) if a.get("manual_score") is not None else None,
+            "reason": a.get("manual_reason"),
+        },
+        after_data={"manual": score, "reason": reason},
+        request_id=g.request_id,
+    )
     return jsonify(status="OK")
 
 
@@ -963,23 +1002,58 @@ def update_item(iid):
     if "EXCEPCION" in results.values() and not exc:
         return err("Marcó EXCEPCION: describa la información no recibida en el campo de excepción")
     repo.update_item(iid, results, obs, exc, scoring.item_score(ws["criteria"], results), me())
-    log("ITEM_UPDATED", entity_type="item", entity_id=str(iid), metadata={"ref": it["ref"]}, request_id=g.request_id)
+    log(
+        "ITEM_UPDATED",
+        entity_type="item",
+        entity_id=str(iid),
+        before_data={
+            "results": it.get("results") or {},
+            "observation": it.get("observation"),
+            "info_exception": it.get("info_exception"),
+            "auto_score": float(it["auto_score"]) if it.get("auto_score") is not None else None,
+        },
+        after_data={
+            "results": results,
+            "observation": obs,
+            "info_exception": exc,
+            "auto_score": scoring.item_score(ws["criteria"], results),
+        },
+        metadata={"ref": it["ref"], "source": "ONLINE"},
+        request_id=g.request_id,
+    )
     return jsonify(auto_score=scoring.item_score(ws["criteria"], results))
 
 
-def _rate(kind_label, entity_id, current, setter, a_id):
+def _rate(kind_label, entity_id, current, current_reason, setter, a_id):
     d = request.get_json(silent=True) or {}
+    before = {
+        "manual": float(current) if current is not None else None,
+        "reason": current_reason,
+    }
     if d.get("clear"):
         setter(None, None)
-        log(kind_label + "_RATING_CLEARED", entity_type=kind_label.lower(), entity_id=entity_id, request_id=g.request_id)
+        log(
+            kind_label + "_RATING_CLEARED",
+            entity_type=kind_label.lower(),
+            entity_id=entity_id,
+            before_data=before,
+            after_data={"manual": None, "reason": None},
+            request_id=g.request_id,
+        )
         return jsonify(status="OK")
     try:
         score, reason = scoring.validate_manual(d.get("score"), d.get("reason"))
     except scoring.ScoreError as ex:
         return err(str(ex))
     setter(score, reason)
-    log(kind_label + "_RATING_OVERRIDDEN", entity_type=kind_label.lower(), entity_id=entity_id,
-        before_data={"manual": current}, after_data={"manual": score, "reason": reason}, request_id=g.request_id)
+    log(
+        kind_label + "_RATING_OVERRIDDEN",
+        entity_type=kind_label.lower(),
+        entity_id=entity_id,
+        before_data=before,
+        after_data={"manual": score, "reason": reason},
+        request_id=g.request_id,
+    )
     return jsonify(status="OK")
 
 
@@ -990,14 +1064,14 @@ def item_rating(iid):
     if it is None:
         return err("No encontrado", 404)
     ws, a, e = ws_for(it["worksheet_id"], write=True)
-    return e or _rate("ITEM", str(iid), it["manual_score"], lambda s, r: repo.set_item_manual(iid, s, r, me()), a["id"])
+    return e or _rate("ITEM", str(iid), it["manual_score"], it.get("manual_reason"), lambda s, r: repo.set_item_manual(iid, s, r, me()), a["id"])
 
 
 @bp.put("/worksheets/<uuid:wid>/rating")
 @permission_required("audit:rate")
 def sheet_rating(wid):
     ws, a, e = ws_for(wid, write=True)
-    return e or _rate("WORKSHEET", ws["id"], ws["manual_score"], lambda s, r: repo.set_ws_manual(wid, s, r, me()), a["id"])
+    return e or _rate("WORKSHEET", ws["id"], ws["manual_score"], ws.get("manual_reason"), lambda s, r: repo.set_ws_manual(wid, s, r, me()), a["id"])
 
 
 # ------------------------------------------------------------------ observaciones
@@ -1050,7 +1124,7 @@ def new_observation(aid):
             return err("El ítem asociado debe pertenecer a la misma auditoría.", 400)
         fields["item_id"] = normalized_item_id
     oid, seq = repo.add_observation(a["id"], fields, me())
-    log("OBSERVATION_CREATED", entity_type="observation", entity_id=oid, after_data={"seq": seq, "risk": fields["risk"]}, request_id=g.request_id)
+    log("OBSERVATION_CREATED", entity_type="observation", entity_id=oid, after_data={"seq": seq, **fields}, request_id=g.request_id)
     return jsonify(id=oid, seq=seq), 201
 
 
@@ -1082,7 +1156,15 @@ def edit_observation(oid):
     except ValueError as ex:
         return err(str(ex))
     repo.update_observation(oid, upd)
-    log("OBSERVATION_UPDATED", entity_type="observation", entity_id=str(oid), metadata={"campos": sorted(upd)}, request_id=g.request_id)
+    log(
+        "OBSERVATION_UPDATED",
+        entity_type="observation",
+        entity_id=str(oid),
+        before_data={key: o.get(key) for key in upd},
+        after_data=upd,
+        metadata={"campos": sorted(upd)},
+        request_id=g.request_id,
+    )
     return jsonify(status="OK")
 
 
@@ -1483,7 +1565,14 @@ def submit(rid):
         wf.can_submit_final(_state(rep, team), me())
     except wf.WorkflowError as ex:
         return err(str(ex), 409)
-    repo.set_report_status(rid, "IN_REVIEW", submitted_at="now")
+    snapshot = (
+        _phase_snapshot(a, "FINAL_REPORT_SUBMITTED", report=rep)
+        if rep.get("kind") == "FINAL"
+        else None
+    )
+    repo.set_report_status(
+        rid, "IN_REVIEW", submitted_at="now", phase_snapshot=snapshot
+    )
     log("AUDIT_REPORT_SUBMITTED", entity_type="audit_report", entity_id=str(rid), request_id=g.request_id)
     notify_report_submitted(str(rid), a, str(me()), getattr(g, "request_id", None))
     return jsonify(status="IN_REVIEW")
@@ -1810,6 +1899,18 @@ def pac_send(aid):
     a, e = load(aid)
     if e:
         return e
+
+    # El informe firmado debe seguir siendo elegible para enviar el PAC.
+    # Se bloquea la auditoría sin aplicar la restricción genérica de escritura.
+    if repo.lock_audit(a["id"]) is None:
+        return err("No encontrada", 404)
+
+    # Releer tras el bloqueo: otra petición pudo cerrar la auditoría mientras
+    # esta petición esperaba adquirir la fila.
+    a = repo.get_audit(a["id"])
+    if a is None or not visible(a):
+        return err("No encontrada", 404)
+
     if not repo.is_member(a["id"], me()):
         return err("Solo el equipo auditor envía el PAC", 403)
     if a["status"] != "IN_PROGRESS":
@@ -1833,7 +1934,7 @@ def pac_send(aid):
         pdf = storage.get(docs[-1]["object_key"]) if docs else b""
         emailed = try_email(email, f"Informe final y PAC — auditoría {a['code']}", "Se adjuntan el informe final firmado y el Plan de Acción Correctiva (PAC) para su diligenciamiento.",
                             [(f"{a['code']}_informe_final.pdf", pdf, "application/pdf"), (f"PAC_{a['code']}.xlsx", pac, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")])
-    repo.mark_pac_sent(a["id"], to, me())
+    repo.mark_pac_sent(a["id"], to, me(), phase_snapshot=_phase_snapshot(a, "PAC_SENT", report=final))
     log("PAC_SENT", entity_type="audit", entity_id=a["id"], after_data={"to": to, "emailed": emailed}, request_id=g.request_id)
     return jsonify(status="CLOSED", emailed=emailed, note=None if emailed else "Registrado como enviado y auditoría cerrada. Entregue el informe firmado y el PAC a la unidad (el correo automático no está configurado).")
 

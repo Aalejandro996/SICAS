@@ -172,16 +172,69 @@ def create_audit(code, file_id, d, members, user):
     return aid
 
 
-def change_phase(audit_id, from_phase, to_phase, user, note):
-    x("UPDATE engagement.audits SET phase=:t WHERE id = CAST(:a AS uuid)", t=to_phase, a=str(audit_id))
-    x("INSERT INTO engagement.phase_log (audit_id, from_phase, to_phase, changed_by, note) VALUES (CAST(:a AS uuid), :f, :t, CAST(:u AS uuid), :n)",
-      a=str(audit_id), f=from_phase, t=to_phase, u=user, n=note)
+def _insert_phase_score_snapshot(snapshot):
+    x(
+        "INSERT INTO engagement.phase_score_snapshots "
+        "(audit_id, phase_log_id, report_id, report_version, phase, trigger_action, "
+        "captured_by, captured_username, scorecard) "
+        "VALUES (CAST(:a AS uuid), CAST(:pl AS bigint), CAST(:rid AS uuid), "
+        "CAST(:rv AS integer), :phase, :action, CAST(:u AS uuid), :username, "
+        "CAST(:scorecard AS jsonb))",
+        a=str(snapshot["audit_id"]),
+        pl=snapshot.get("phase_log_id"),
+        rid=snapshot.get("report_id"),
+        rv=snapshot.get("report_version"),
+        phase=snapshot["phase"],
+        action=snapshot["trigger_action"],
+        u=str(snapshot["captured_by"]),
+        username=snapshot.get("captured_username"),
+        scorecard=json.dumps(snapshot["scorecard"], ensure_ascii=False, default=str),
+    )
+
+
+def change_phase(audit_id, from_phase, to_phase, user, note, phase_snapshot=None):
+    x("UPDATE engagement.audits SET phase=:t WHERE id = CAST(:a AS uuid)",
+      t=to_phase, a=str(audit_id))
+    phase_log_id = x(
+        "INSERT INTO engagement.phase_log "
+        "(audit_id, from_phase, to_phase, changed_by, note) "
+        "VALUES (CAST(:a AS uuid), :f, :t, CAST(:u AS uuid), :n) RETURNING id",
+        a=str(audit_id), f=from_phase, t=to_phase, u=user, n=note,
+    ).scalar_one()
+    if phase_snapshot:
+        snapshot = dict(phase_snapshot)
+        snapshot["phase_log_id"] = phase_log_id
+        _insert_phase_score_snapshot(snapshot)
     db.session.commit()
 
 
 def phase_log(audit_id):
     return q("SELECT l.from_phase, l.to_phase, l.changed_at, u.username, l.note FROM engagement.phase_log l JOIN iam.users u ON u.id = l.changed_by "
              "WHERE l.audit_id = CAST(:a AS uuid) ORDER BY l.id", a=str(audit_id))
+
+
+def phase_snapshots(audit_id):
+    rows = q(
+        "SELECT id::text, audit_id::text, phase_log_id, report_id::text, "
+        "report_version, phase, trigger_action, captured_at, captured_by::text, "
+        "captured_username, scorecard FROM engagement.phase_score_snapshots "
+        "WHERE audit_id = CAST(:a AS uuid) ORDER BY captured_at, id",
+        a=str(audit_id),
+    )
+    # El detalle de respuestas y criterios permanece guardado en la instantánea,
+    # pero el resumen solo entrega los indicadores necesarios para comparar.
+    for row in rows:
+        card = dict(row.get("scorecard") or {})
+        card["worksheets"] = [
+            {
+                key: value
+                for key, value in sheet.items()
+                if key not in ("criteria", "items_detail")
+            }
+            for sheet in card.get("worksheets", [])
+        ]
+        row["scorecard"] = card
+    return rows
 
 
 def set_audit_manual(audit_id, score, reason, user):
@@ -726,7 +779,7 @@ def replace_body(rid, body, sha):
     db.session.commit()
 
 
-def set_report_status(rid, status, **kw):
+def set_report_status(rid, status, phase_snapshot=None, **kw):
     sets, params = ["status = :s", "updated_at = now()"], {"s": status, "i": str(rid)}
     allowed = {
         "submitted_at", "approved_by", "approved_at", "approved_body_sha256",
@@ -748,6 +801,8 @@ def set_report_status(rid, status, **kw):
             sets.append(f"{col} = {expression}")
             params[col] = val
     x("UPDATE engagement.reports SET " + ", ".join(sets) + " WHERE id = CAST(:i AS uuid)", **params)
+    if phase_snapshot:
+        _insert_phase_score_snapshot(phase_snapshot)
     db.session.commit()
 
 
@@ -784,10 +839,12 @@ def signed_docs(rid):
              "FROM engagement.signed_documents WHERE report_id = CAST(:r AS uuid) ORDER BY version", r=str(rid))
 
 
-def mark_pac_sent(audit_id, to, user):
+def mark_pac_sent(audit_id, to, user, phase_snapshot=None):
     x("UPDATE engagement.audits SET pac_sent_at = now(), pac_sent_to = :t, pac_sent_by = CAST(:u AS uuid), status = 'CLOSED' WHERE id = CAST(:a AS uuid)", t=to, u=user, a=str(audit_id))
     x("UPDATE engagement.files SET status = 'CLOSED' WHERE id = (SELECT file_id FROM engagement.audits WHERE id = CAST(:a AS uuid)) "
       "AND NOT EXISTS (SELECT 1 FROM engagement.audits o WHERE o.file_id = engagement.files.id AND o.status <> 'CLOSED')", a=str(audit_id))
+    if phase_snapshot:
+        _insert_phase_score_snapshot(phase_snapshot)
     db.session.commit()
 
 

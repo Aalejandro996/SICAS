@@ -386,6 +386,63 @@
       resultCards
     );
 
+    const phaseSnapshots = Array.isArray(d.phase_snapshots) ? d.phase_snapshots : [];
+    const triggerNames = {
+      PHASE_CHANGE: 'Cierre por cambio de fase',
+      FINAL_REPORT_SUBMITTED: 'Envío del informe final',
+      PAC_SENT: 'Cierre por envío del PAC'
+    };
+    const snapshotRows = phaseSnapshots.map((snapshot) => {
+      const overall = snapshot.scorecard?.overall || {};
+      return [
+        fmt(snapshot.captured_at),
+        S.label2(snapshot.phase),
+        triggerNames[snapshot.trigger_action] || snapshot.trigger_action,
+        scoreText(overall.auto),
+        scoreText(overall.final),
+        `${Number(overall.scored || 0)} / ${Number(overall.items || 0)}`,
+        String(Number(overall.exceptions || 0)),
+        snapshot.captured_username || '—'
+      ];
+    });
+    const phaseSnapshotPanel = h('section', { class: 'panel audit-summary-panel' },
+      h('h3', null, 'Comparación histórica por fase'),
+      h('p', { class: 'muted' },
+        'Se conservan las puntuaciones capturadas al cambiar de fase, presentar el informe final y cerrar por PAC. ' +
+        'La captura histórica comienza con la activación de esta funcionalidad; no se reconstruyen puntuaciones antiguas.'
+      ),
+      phaseSnapshots.length
+        ? tbl(
+            ['Fecha', 'Fase capturada', 'Evento', 'Automática', 'Final', 'Ítems calificados', 'Excepciones', 'Usuario'],
+            snapshotRows
+          )
+        : h('p', { class: 'muted' }, 'Todavía no hay instantáneas históricas. Se crearán en los próximos eventos de fase o cierre.')
+    );
+
+    const worksheetSnapshotRows = phaseSnapshots.flatMap((snapshot) => {
+      const worksheets = Array.isArray(snapshot.scorecard?.worksheets)
+        ? snapshot.scorecard.worksheets
+        : [];
+      return worksheets.map((sheet) => [
+        fmt(snapshot.captured_at),
+        S.label2(snapshot.phase),
+        sheet.title || 'Cédula',
+        scoreText(sheet.auto),
+        scoreText(sheet.final),
+        `${Number(sheet.scored || 0)} / ${Number(sheet.items || 0)}`,
+        String(Number(sheet.exceptions || 0))
+      ]);
+    });
+    const worksheetSnapshotPanel = h('section', { class: 'panel audit-summary-panel' },
+      h('h3', null, 'Evolución de calificaciones por cédula'),
+      worksheetSnapshotRows.length
+        ? tbl(
+            ['Fecha', 'Fase', 'Cédula', 'Automática', 'Final', 'Ítems calificados', 'Excepciones'],
+            worksheetSnapshotRows
+          )
+        : h('p', { class: 'muted' }, 'La comparación por cédula aparecerá después de la primera instantánea.')
+    );
+
     const history = h('details', { class: 'audit-history-details' },
       h('summary', null, `Historial de fases (${phaseLog.length})`),
       tbl(
@@ -405,6 +462,8 @@
       h('div', { class: 'audit-summary-layout' }, dataPanel, teamPanel),
       ratingPanel,
       resultsPanel,
+      phaseSnapshotPanel,
+      worksheetSnapshotPanel,
       history
     );
 
