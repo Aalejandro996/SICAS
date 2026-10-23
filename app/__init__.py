@@ -80,7 +80,13 @@ def create_app(config=None) -> Flask:
 
     @app.after_request
     def _extra_headers(resp):
-        resp.headers["X-Request-ID"] = g.request_id
+        # Algunas respuestas de error pueden llegar aquí sin request_id.
+        # La cabecera nunca debe convertir la respuesta original en un 500.
+        request_id = getattr(g, "request_id", None)
+        if not request_id:
+            request_id = str(uuid.uuid4())
+            g.request_id = request_id
+        resp.headers["X-Request-ID"] = request_id
         resp.headers["X-Content-Type-Options"] = "nosniff"
         if request.endpoint == "static" and resp.status_code in (200, 304):
             # Los recursos estáticos se pueden reutilizar durante 24 horas.
