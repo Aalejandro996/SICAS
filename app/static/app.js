@@ -298,8 +298,11 @@
 
     nav.replaceChildren(toggle, ...buttons);
   }
+  let navigationToken = 0;
+  S.isNavigationCurrent = (token) => Boolean(S.user) && token === navigationToken;
   async function navigate() {
     if (!S.user) return;
+    const currentNavigation = ++navigationToken;
     if (S.onLeave) { S.onLeave(); S.onLeave = null; }
 
     let [id, ...args] = (location.hash.replace(/^#\/?/, '') || 'home').split('/');
@@ -326,10 +329,12 @@
     const holder = S.h('div');
 
     try {
-      await page.render(holder, args);
+      await page.render(holder, args, currentNavigation);
+      if (currentNavigation !== navigationToken) return;
       el.replaceChildren(holder);
       classifyPage();
     } catch (e) {
+      if (currentNavigation !== navigationToken) return;
       console.error(e);
       el.replaceChildren(
         S.h('div', { class: 'warn' }, 'No se pudo mostrar esta pantalla: ' + e.message)
