@@ -1291,6 +1291,25 @@ def _make_body(a, kind, version, conclusion):
         thresholds=thresholds(), company=repo.company() or current_app.config["COMPANY_NAME"], version=version, today=date.today(), conclusion=conclusion)
 
 
+def _transition(rep, status, action, **kw):
+    """Aplica la transición validada sobre el estado y contenido leídos; None si se aplicó, o la respuesta 409."""
+    claims = getattr(g, "claims", {}) or {}
+    try:
+        repo.transition_report(
+            rep["id"], expected_status=rep["status"], expected_sha256=rep["body_sha256"],
+            status=status, action=action, actor=me(), report_version=rep["version"],
+            actor_username=claims.get("username"), actor_roles=claims.get("roles", []), **kw,
+        )
+    except repo.StaleReportState as ex:
+        log(
+            "AUDIT_REPORT_TRANSITION_CONFLICT", outcome="DENIED", entity_type="audit_report",
+            entity_id=str(rep["id"]), metadata={"action": action, "expected_status": rep["status"], "to": status},
+            request_id=g.request_id,
+        )
+        return err(str(ex), 409)
+    return None
+
+
 def _state(rep, team):
     sos = repo.signoffs(rep["id"])
     docs = repo.signed_docs(rep["id"])
@@ -1484,6 +1503,7 @@ def report_detail(rid):
 
     return jsonify(
         report=rep, team=team, comments=repo.comments(rid),
+        transitions=repo.report_transitions(rid),
         signoffs=sos, signatures=visible_signatures,
         missing_initials=missing, is_member=member,
         can={
@@ -1570,9 +1590,11 @@ def submit(rid):
         if rep.get("kind") == "FINAL"
         else None
     )
-    repo.set_report_status(
-        rid, "IN_REVIEW", submitted_at="now", phase_snapshot=snapshot
+    conflict = _transition(
+        rep, "IN_REVIEW", "SUBMIT", submitted_at="now", phase_snapshot=snapshot
     )
+    if conflict:
+        return conflict
     log("AUDIT_REPORT_SUBMITTED", entity_type="audit_report", entity_id=str(rid), request_id=g.request_id)
     notify_report_submitted(str(rid), a, str(me()), getattr(g, "request_id", None))
     return jsonify(status="IN_REVIEW")
@@ -1600,7 +1622,9 @@ def send_previo(rid):
         return err("Indique el destinatario en la unidad")
     emailed = bool(email) and try_email(email, f"Informe previo de auditoría {a['code']}", "Se adjunta el informe previo de auditoría para su revisión y respuesta.",
                                         [(f"{a['code']}_informe_previo.pdf", _pdf_for(rep, team), "application/pdf")])
-    repo.set_report_status(rid, "SENT", sent_to=f"{to_name}" + (f" <{email}>" if email else ""), sent_at="now", sent_by=me())
+    conflict = _transition(rep, "SENT", "SEND_PREVIO", sent_to=f"{to_name}" + (f" <{email}>" if email else ""), sent_at="now", sent_by=me())
+    if conflict:
+        return conflict
     log("PREVIO_SENT", entity_type="audit_report", entity_id=str(rid), after_data={"to": to_name, "emailed": emailed}, request_id=g.request_id)
     return jsonify(status="SENT", emailed=emailed, note=None if emailed else "Registrado como enviado. Entregue el PDF a la unidad (el correo automático no está configurado o no se indicó correo).")
 
@@ -1661,16 +1685,18 @@ def return_report(rid):
     if len(t) < 10:
         return err("Indique qué debe corregirse (mínimo 10 caracteres)")
 
-    repo.add_comment(rid, me(), "DEVOLUCION", t)
     # Una devolución invalida las aprobaciones anteriores del contenido.
-    # Los PDF firmados históricos se conservan, pero no se presentan como actuales.
-    repo.set_report_status(
-        rid, "RETURNED",
+    # Los PDF firmados históricos se conservan, pero no se presentan como actuales;
+    # las aprobaciones invalidadas siguen constando en report_transitions.
+    conflict = _transition(
+        rep, "RETURNED", "RETURN", comment=t, comment_kind="DEVOLUCION",
         approved_by=None, approved_at=None, approved_body_sha256=None,
         jefe_approved_by=None, jefe_approved_at=None, jefe_approved_body_sha256=None,
         gerente_approved_by=None, gerente_approved_at=None, gerente_approved_body_sha256=None,
         contralor_approved_by=None, contralor_approved_at=None, contralor_approved_body_sha256=None,
     )
+    if conflict:
+        return conflict
     log(
         "AUDIT_REPORT_RETURNED", entity_type="audit_report", entity_id=str(rid),
         metadata={"comment": t, "returned_from": stage}, request_id=g.request_id,
@@ -1694,12 +1720,14 @@ def approve_jefe(rid):
     except wf.WorkflowError as ex:
         return err(str(ex), 409)
 
-    repo.set_report_status(
-        rid, "GERENCIA",
+    conflict = _transition(
+        rep, "GERENCIA", "APPROVE_JEFE",
         approved_by=None, approved_at=None, approved_body_sha256=None,
         jefe_approved_by=me(), jefe_approved_at="now",
         jefe_approved_body_sha256=rep["body_sha256"],
     )
+    if conflict:
+        return conflict
     log(
         "AUDIT_REPORT_JEFE_APPROVED", entity_type="audit_report",
         entity_id=str(rid), after_data={"sha256": rep["body_sha256"]},
@@ -1793,10 +1821,31 @@ def _sign(rid, role):
             500,
         )
 
+    if role == "GERENTE_CI":
+        # Aprobar y firmar en una sola transición. El paso siguiente es Contraloría.
+        new_status, action = "CONTRALOR", "APPROVE_SIGN_GERENTE"
+        approval = dict(
+            gerente_approved_by=me(), gerente_approved_at="now",
+            gerente_approved_body_sha256=rep["body_sha256"],
+        )
+    else:
+        new_status, action = "SIGNED", "APPROVE_SIGN_CONTRALOR"
+        approval = dict(
+            contralor_approved_by=me(), contralor_approved_at="now",
+            contralor_approved_body_sha256=rep["body_sha256"],
+            approved_by=me(), approved_at="now",
+            approved_body_sha256=rep["body_sha256"],
+        )
+
+    # El registro del PDF firmado y el cambio de estado se confirman juntos:
+    # si el informe cambió mientras se firmaba, no queda ninguno de los dos.
     try:
-        repo.add_signed_doc(rid, role, version, signed, key, me())
+        conflict = _transition(
+            rep, new_status, action,
+            signed_doc={"role": role, "version": version, "signed": signed, "key": key},
+            **approval,
+        )
     except Exception as ex:  # noqa: BLE001
-        repo.db.session.rollback()
         log(
             "AUDIT_REPORT_SIGN_REGISTRATION_FAILED",
             outcome="FAILURE",
@@ -1810,27 +1859,15 @@ def _sign(rid, role):
             "Requiere revisión antes de reintentar.",
             500,
         )
-    st.signed_roles[role] = me()
-
-    if role == "GERENTE_CI":
-        # Aprobar y firmar en una sola transición. El paso siguiente es Contraloría.
-        repo.set_report_status(
-            rid, "CONTRALOR",
-            gerente_approved_by=me(), gerente_approved_at="now",
-            gerente_approved_body_sha256=rep["body_sha256"],
+    if conflict:
+        # El PDF ya está en el almacenamiento inmutable; se deja constancia para conciliarlo.
+        log(
+            "AUDIT_REPORT_SIGNED_PDF_UNREGISTERED", outcome="FAILURE",
+            entity_type="audit_report", entity_id=str(rid),
+            metadata={"role": role, "object_key": key, "reason": "STALE_REPORT_STATE"},
+            request_id=g.request_id,
         )
-        new_status = "CONTRALOR"
-    else:
-        if not wf.is_fully_signed(st):
-            return err("No se pudo confirmar que ambas firmas finales estén registradas", 409)
-        repo.set_report_status(
-            rid, "SIGNED",
-            contralor_approved_by=me(), contralor_approved_at="now",
-            contralor_approved_body_sha256=rep["body_sha256"],
-            approved_by=me(), approved_at="now",
-            approved_body_sha256=rep["body_sha256"],
-        )
-        new_status = "SIGNED"
+        return conflict
 
     log(
         "AUDIT_REPORT_SIGNED", entity_type="audit_report",

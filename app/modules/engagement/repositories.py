@@ -779,8 +779,22 @@ def replace_body(rid, body, sha):
     db.session.commit()
 
 
-def set_report_status(rid, status, phase_snapshot=None, **kw):
-    sets, params = ["status = :s", "updated_at = now()"], {"s": status, "i": str(rid)}
+class StaleReportState(Exception):
+    """El informe cambió de estado o de contenido entre la validación y la escritura."""
+
+
+def transition_report(rid, *, expected_status, expected_sha256, status, action, actor, report_version,
+                      actor_username=None, actor_roles=(), comment=None, comment_kind=None,
+                      signed_doc=None, phase_snapshot=None, **kw):
+    """Cambia el estado del informe con compare-and-set y registra la transición.
+
+    El UPDATE solo se aplica si el informe sigue en `expected_status` con el contenido
+    `expected_sha256` que se validó; si no, se revierte todo y se lanza StaleReportState.
+    El comentario, el documento firmado, la instantánea y la fila de report_transitions
+    se confirman en la misma transacción que el cambio de estado.
+    """
+    sets = ["status = :s", "updated_at = now()"]
+    params = {"s": status, "i": str(rid), "expected": expected_status, "sha": expected_sha256}
     allowed = {
         "submitted_at", "approved_by", "approved_at", "approved_body_sha256",
         "sent_to", "sent_at", "sent_by",
@@ -800,14 +814,47 @@ def set_report_status(rid, status, phase_snapshot=None, **kw):
             expression = f"CAST(:{col} AS uuid)" if col in uuid_cols else f":{col}"
             sets.append(f"{col} = {expression}")
             params[col] = val
-    x("UPDATE engagement.reports SET " + ", ".join(sets) + " WHERE id = CAST(:i AS uuid)", **params)
-    if phase_snapshot:
-        _insert_phase_score_snapshot(phase_snapshot)
-    db.session.commit()
+    updated = x(
+        "UPDATE engagement.reports SET " + ", ".join(sets)
+        + " WHERE id = CAST(:i AS uuid) AND status = :expected AND body_sha256 = :sha RETURNING id",
+        **params,
+    ).first()
+    if updated is None:
+        db.session.rollback()
+        raise StaleReportState("El informe cambió de estado o de contenido; recargue e intente de nuevo")
+    try:
+        if comment_kind:
+            _insert_comment(rid, actor, comment_kind, comment)
+        if signed_doc:
+            _insert_signed_doc(rid, user=actor, **signed_doc)
+        x(
+            "INSERT INTO engagement.report_transitions "
+            "(report_id, report_version, action, from_status, to_status, body_sha256, "
+            "actor_id, actor_username, actor_roles, comment) "
+            "VALUES (CAST(:r AS uuid), :v, :action, :f, :t, :h, CAST(:u AS uuid), :un, :roles, :c)",
+            r=str(rid), v=report_version, action=action, f=expected_status, t=status,
+            h=expected_sha256, u=actor, un=actor_username, roles=list(actor_roles or ()), c=comment,
+        )
+        if phase_snapshot:
+            _insert_phase_score_snapshot(phase_snapshot)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def report_transitions(rid):
+    return q("SELECT t.id, t.report_version, t.action, t.from_status, t.to_status, t.body_sha256, "
+             "t.actor_id::text AS actor_id, t.actor_username, t.actor_roles, t.comment, t.created_at "
+             "FROM engagement.report_transitions t WHERE t.report_id = CAST(:r AS uuid) ORDER BY t.id", r=str(rid))
+
+
+def _insert_comment(rid, user, kind, text_):
+    x("INSERT INTO engagement.report_comments (report_id, author, kind, text) VALUES (CAST(:r AS uuid), CAST(:u AS uuid), :k, :t)", r=str(rid), u=user, k=kind, t=text_)
 
 
 def add_comment(rid, user, kind, text_):
-    x("INSERT INTO engagement.report_comments (report_id, author, kind, text) VALUES (CAST(:r AS uuid), CAST(:u AS uuid), :k, :t)", r=str(rid), u=user, k=kind, t=text_)
+    _insert_comment(rid, user, kind, text_)
     db.session.commit()
 
 
@@ -826,12 +873,11 @@ def signoffs(rid):
     return q("SELECT signer_type, user_id::text, display, body_sha256, signed_at, physical, note FROM engagement.signoffs WHERE report_id = CAST(:r AS uuid) ORDER BY id", r=str(rid))
 
 
-def add_signed_doc(rid, role, version, signed, key, user):
+def _insert_signed_doc(rid, *, role, version, signed, key, user):
     x("INSERT INTO engagement.signed_documents (id, report_id, signer_role, version, sha256_unsigned, sha256_signed, object_key, signer_user_id, signer_subject, cert_serial, cert_sha256, signed_at, tsa_url, timestamp_embedded) "
       "VALUES (CAST(:i AS uuid), CAST(:r AS uuid), :ro, :v, :hu, :hs, :k, CAST(:u AS uuid), :sub, :ser, :cs, :at, :tsa, :ts)",
       i=str(uuid.uuid4()), r=str(rid), ro=role, v=version, hu=signed.sha256_unsigned, hs=signed.sha256_signed, k=key, u=user, sub=signed.signer_subject,
       ser=signed.cert_serial, cs=signed.cert_sha256, at=signed.signed_at, tsa=signed.tsa_url, ts=signed.timestamp_embedded)
-    db.session.commit()
 
 
 def signed_docs(rid):
