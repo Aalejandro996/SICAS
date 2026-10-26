@@ -11,6 +11,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     && python -m pip install --retries 10 --timeout 300 -r requirements/base.txt boto3
 COPY --chown=app:app . .
 RUN mkdir -p /srv/data/engagement \
-    && chown -R app:app /srv/data
+    && chown -R app:app /srv/data \
+    && python scripts/render_legacy_commands.py /srv
 USER app
 CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8000", "--access-logfile", "-", "wsgi:app"]
