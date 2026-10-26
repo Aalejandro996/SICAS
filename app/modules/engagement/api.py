@@ -1129,11 +1129,17 @@ def _auto_observations(a, ws):
     rows = []
     for it in ws["items"]:
         crit = criteria.get(it["ref"])
-        result = (it.get("results") or {}).get(it["ref"])
+        # Las observaciones salen del Levantamiento: si esa fase ya se cerró, se usan sus respuestas.
+        closed = ((it.get("phase_results") or {}).get("LEVANTAMIENTO") or {}).get("results") or {}
+        result = closed.get(it["ref"]) if it["ref"] in closed else (it.get("results") or {}).get(it["ref"])
         if crit is None or not isinstance(result, dict) or it["id"] in covered:
             continue
         rows.append((crit, result, it.get("observation"), it["id"]))
     drafts = observation_rules.consolidate(rows)
+    # Un control que queda solo en su dominio y ya tiene su observación automática no se rehace:
+    # solo se reemplazan las individuales que efectivamente se agrupan con otras.
+    replaceable_items = {i for o in replaceable for i in (o["covered"] or [])}
+    drafts = [d for d in drafts if not (len(d["covered_items"]) == 1 and d["covered_items"][0] in replaceable_items)]
     if not drafts:
         return 0
     item_ids = {i for d in drafts for i in d["covered_items"]}
@@ -1166,17 +1172,22 @@ def _auto_observations(a, ws):
 @bp.post("/worksheets/<uuid:wid>/auto-observations")
 @permission_required("audit:manage")
 def auto_observations(wid):
-    """Genera las observaciones de las brechas de una cédula de Sistemas ya cargada (fase de Levantamiento)."""
-    ws, a, e = ws_for(wid, write=True)
+    """Genera o consolida las observaciones de las brechas del Levantamiento de una cédula de Sistemas.
+
+    En la fase 1 redacta las de las brechas nuevas; en las fases 2 y 3 consolida por dominio las
+    observaciones automáticas que nadie editó, con las respuestas con que se cerró el Levantamiento.
+    """
+    ws, a, e = ws_for(wid)
+    if e:
+        return e
+    a, e = load(a["id"], write=True, phases=scoring.SYSTEM_SCORED_PHASES)
     if e:
         return e
     if ws["kind"] != "SISTEMAS" or not is_systems(a):
         return err("Disponible solo para cédulas de Auditoría de Sistemas", 400)
-    if a["phase"] != "LEVANTAMIENTO":
-        return err("Las observaciones automáticas se generan en la fase de Levantamiento de información", 409)
     n = _auto_observations(a, ws)
-    return jsonify(created=n, note=f"Se crearon {n} observación(es). Revíselas y ajústelas antes del informe." if n
-                   else "No hay brechas nuevas sin observación.")
+    return jsonify(created=n, note=f"Se crearon {n} observación(es) agrupadas por dominio. Revíselas y ajústelas antes del informe." if n
+                   else "No hay brechas nuevas ni observaciones automáticas por consolidar.")
 
 
 def _systems_document(aid, kind):

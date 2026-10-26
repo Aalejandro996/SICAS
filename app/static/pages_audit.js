@@ -261,11 +261,11 @@
         a.phase === 'INFORME' ? S.ratingBadge(d.overall.rating) : h('span', { class: 'muted' }, 'Se calcula en la fase Informe'));
       const actions = h('div', { class: 'row' });
       const sysSheet = sheets.find((x) => x.kind === 'SISTEMAS');
-      if (ctx.canWrite && a.phase === 'LEVANTAMIENTO' && sysSheet) {
+      if (ctx.canWrite && ['LEVANTAMIENTO', 'DOCUMENTACION', 'PRUEBAS_CAMPO'].includes(a.phase) && sysSheet) {
         actions.append(h('button', { class: 'sm', onclick: async () => {
           const r = await S.send(`${A}/worksheets/${sysSheet.id}/auto-observations`, 'POST', {});
           if (r) { S.say(r.note, true); reload(); }
-        } }, 'Generar observaciones de las brechas'));
+        } }, a.phase === 'LEVANTAMIENTO' ? 'Generar observaciones de las brechas' : 'Consolidar observaciones automáticas'));
       }
       if (['DOCUMENTACION', 'PRUEBAS_CAMPO', 'INFORME'].includes(a.phase)) {
         actions.append(h('button', { class: 'sm secondary', onclick: async () => {
