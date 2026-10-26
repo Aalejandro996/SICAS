@@ -81,7 +81,7 @@
         'El flujo no cambia: cada decisión queda registrada como tomada por el suplente en nombre del titular, y el suplente firma con su propio certificado.'),
       d.needs_certificate ? h('div', { class: d.my_certificate ? 'okbox' : 'warn' }, d.my_certificate
         ? `Su certificado de firma: ${d.my_certificate.subject} (vence ${S.date(d.my_certificate.not_after)}).`
-        : 'Es suplente de una etapa con firma: suba su certificado (.p12/.pfx) antes de firmar.') : null,
+        : 'Usted firma informes: registre su propio certificado (.p12/.pfx). Nadie firma con el certificado de otra persona.') : null,
       tbl(['Etapa', 'Titular', 'Suplente', 'Desde', 'Hasta', 'Motivo', 'Autorizó', 'Estado', ''], d.delegations.map((x) => [
         x.stage_label + (x.audit_domain ? ' · ' + (x.audit_domain === 'SISTEMAS' ? 'Sistemas' : 'Operativa') : ''), x.titular_name, x.delegate_name,
         S.date(x.starts_on), S.date(x.ends_on), x.reason, x.authorized_by_name, state(x),
@@ -94,7 +94,7 @@
       if (v && await S.send(`${A}/delegations/${x.id}/revoke`, 'POST', v)) { S.say('Suplencia revocada.', true); reload(); }
     };
     if (d.can_authorize.length) m.footer.append(h('button', { onclick: async () => { if (await newDelegation(d.can_authorize)) reload(); } }, 'Nueva suplencia'));
-    if (d.needs_certificate) m.footer.append(h('button', { class: 'secondary', onclick: async () => { if (await uploadCertificate()) reload(); } }, 'Mi certificado'));
+    if (d.needs_certificate) m.footer.append(h('button', { class: 'secondary', onclick: async () => { if (await uploadCertificate()) reload(); } }, 'Mi certificado de firma'));
     m.footer.append(closeBtn(m));
   }
 
@@ -140,7 +140,7 @@
     const v = await S.ask('Mi certificado de firma', [
       { name: 'file', label: 'Certificado (.p12 / .pfx, máximo 200 KB)', type: 'file', required: true },
       { name: 'passphrase', label: 'Contraseña del certificado', type: 'password' }], 'Guardar',
-      'Como suplente firma con su propio certificado. Se guarda cifrado en el servidor y solo se usa cuando usted firma un informe en su suplencia.');
+      'Cada firmante usa su propio certificado. Se guarda cifrado en el servidor y solo se usa cuando usted firma un informe.');
     if (!v) return false;
     const form = new FormData(); form.append('file', v.file); form.append('passphrase', v.passphrase || '');
     const r = await S.upload(A + '/signing-certificate', form);
@@ -1129,7 +1129,7 @@
         h('b', null, 'Limitaciones al alcance'), String((b.limitations || []).length), h('b', null, 'Ajustes manuales'), String((b.adjustments || []).length), r.sent_to ? [h('b', null, 'Enviado a'), r.sent_to] : null),
       r.status === 'RETURNED' ? h('div', { class: 'warn' }, 'Informe devuelto: atienda los puntos indicados, regenere y vuelva a enviar.') : null,
       d.acting_for ? h('div', { class: 'warn' }, `Usted actúa como suplente de ${d.acting_for.titular} (${d.acting_for.stage}) hasta el ${S.date(d.acting_for.ends_on)}: sus decisiones quedan registradas en su nombre.` +
-        (d.acting_for.needs_certificate ? ' Para firmar debe subir su certificado en «Suplencias › Mi certificado».' : '')) : null,
+        (d.acting_for.needs_certificate ? ' Para firmar debe subir su certificado en «Suplencias › Mi certificado de firma».' : '')) : null,
       d.reopening ? h('div', { class: 'warn' }, `Reapertura autorizada el ${fmt(d.reopening.authorized_at)} por ${d.reopening.username || '—'}: ${d.reopening.reason}`) : null,
       reviewPointsBlock(d, rid, () => { done(); reopen(holder.m); }),
       (d.transitions || []).length ? h('details', null, h('summary', null, `Historial de decisiones (${d.transitions.length})`),

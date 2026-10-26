@@ -88,9 +88,29 @@ def certificate_info(signer) -> dict:
     }
 
 
+def _signature_background(png: bytes):
+    """Imagen de la firma escaneada para el sello visible (fondo blanco si el PNG es transparente)."""
+    from PIL import Image
+    from pyhanko.pdf_utils import images
+
+    img = Image.open(io.BytesIO(png))
+    img.load()
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        flat = Image.new("RGB", img.size, (255, 255, 255))
+        flat.paste(img, mask=img.split()[-1])
+        img = flat
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    return images.PdfImage(img)
+
+
 def sign_pdf(pdf_bytes: bytes, signer, *, reason: str, location: str, signer_name: str,
              field_name: str = "FirmaContralor", tsa_url: str | None = None,
-             box: tuple[int, int, int, int] = (57, 62, 312, 130), page: int = -1) -> SignedPdf:
+             box: tuple[int, int, int, int] = (57, 62, 312, 130), page: int = -1,
+             signature_image: bytes | None = None) -> SignedPdf:
+    """Firma PAdES. Con signature_image, el sello visible muestra la firma escaneada del firmante y, al lado, los datos de la firma."""
+    from pyhanko.pdf_utils import layout, text
     from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
     from pyhanko.sign import fields, timestamps
     from pyhanko.sign.signers.pdf_signer import PdfSignatureMetadata, PdfSigner
@@ -100,8 +120,20 @@ def sign_pdf(pdf_bytes: bytes, signer, *, reason: str, location: str, signer_nam
     meta = PdfSignatureMetadata(field_name=field_name, md_algorithm="sha256", reason=reason, location=location,
                                 name=signer_name, subfilter=fields.SigSeedSubFilter.PADES,
                                 embed_validation_info=False)
-    stamp = TextStampStyle(stamp_text="Firmado electrónicamente por:\n%(signer)s\nFecha/hora: %(ts)s\n"
-                                      + reason, border_width=1)
+    stamp_text = "Firmado electrónicamente por:\n%(signer)s\nFecha/hora: %(ts)s\n" + reason
+    if signature_image:
+        # Firma escaneada arriba y, debajo, los datos de la firma electrónica (sin superponerse).
+        stamp = TextStampStyle(
+            stamp_text=stamp_text, border_width=1, background=_signature_background(signature_image), background_opacity=1,
+            background_layout=layout.SimpleBoxLayoutRule(x_align=layout.AxisAlignment.ALIGN_MID,
+                                                         y_align=layout.AxisAlignment.ALIGN_MAX,
+                                                         margins=layout.Margins(4, 4, 4, 34)),
+            inner_content_layout=layout.SimpleBoxLayoutRule(x_align=layout.AxisAlignment.ALIGN_MIN,
+                                                            y_align=layout.AxisAlignment.ALIGN_MIN,
+                                                            margins=layout.Margins(4, 4, 2, 3)),
+            text_box_style=text.TextBoxStyle(font_size=6))
+    else:
+        stamp = TextStampStyle(stamp_text=stamp_text, border_width=1)
     pdf_signer = PdfSigner(meta, signer=signer, timestamper=timestamper, stamp_style=stamp,
                            new_field_spec=fields.SigFieldSpec(field_name, on_page=page, box=box))
     try:

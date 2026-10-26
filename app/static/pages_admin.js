@@ -727,7 +727,35 @@
           can('user:unlock') ? h('button', { class: 'secondary', onclick: () => act(u, 'unlock', 'Desbloquear a ' + u.username) }, 'Desbloquear') : null,
           can('user:reset_mfa') ? h('button', { class: 'secondary', onclick: () => act(u, 'reset-mfa', 'Restablecer el MFA de ' + u.username) }, 'Reset MFA') : null,
           can('user:deactivate') ? h('button', { class: u.is_active ? 'danger' : 'ok', onclick: () => act(u, u.is_active ? 'deactivate' : 'activate', (u.is_active ? 'Desactivar a ' : 'Activar a ') + u.username) }, u.is_active ? 'Desactivar' : 'Activar') : null,
+          can('user:read') ? h('button', { class: 'secondary', title: 'Firmas escaneadas (Jefe que aprueba, Gerencia y Contralor)', onclick: () => signatures(u) }, 'Firmas…') : null,
           can('user:deactivate') ? h('button', { class: 'danger', title: 'Baja definitiva (requiere aprobación del Contralor)', onclick: () => removal(u) }, 'Baja…') : null)])));
+    };
+    const signatures = async (u) => {
+      const d = await S.get(`/admin/users/${u.id}/signatures`);
+      if (!d) return;
+      const TYPES = { COMPLETA: 'Firma completa', MEDIA: 'Media firma' };
+      const body = h('div', null,
+        h('p', { class: 'muted' }, 'La firma escaneada aparece en el informe final de quien lo aprueba o firma: Jefe de Auditoría, Gerencia y Contralor. ' +
+          'Los auditores del equipo solo estampan sus iniciales. Al reemplazar una firma, la anterior queda inactiva y se conserva.'),
+        tbl(['Tipo', 'Firma', 'Archivo', 'Tamaño', 'Estado', 'Cargó', 'Fecha', ''], d.signatures.map((x) => [TYPES[x.signature_type] || x.signature_type,
+          x.preview ? h('img', { src: x.preview, alt: 'Firma de ' + u.full_name, class: 'sig-preview' }) : '—',
+          x.original_filename, `${x.width_px}×${x.height_px}`, S.badge(x.active ? 'ACTIVE' : 'INACTIVE'), x.created_by || '—', fmt(x.created_at),
+          x.active && can('user:update') ? h('button', { class: 'sm danger', onclick: async () => {
+            if (!confirm('¿Desactivar esta firma?')) return;
+            if (await S.send(`/admin/users/${u.id}/signatures/${x.id}/deactivate`, 'POST')) { m.close(); signatures(u); }
+          } }, 'Desactivar') : ''])));
+      const m = S.modal('Firmas escaneadas: ' + u.full_name, body);
+      if (can('user:update')) m.footer.append(h('button', { onclick: async () => {
+        const v = await S.ask('Cargar firma escaneada', [
+          { name: 'type', label: 'Tipo', type: 'select', options: [['COMPLETA', 'Firma completa'], ['MEDIA', 'Media firma']] },
+          { name: 'file', label: 'Imagen PNG (fondo blanco o transparente, hasta 1 MB)', type: 'file', required: true }], 'Cargar');
+        if (!v) return;
+        const form = new FormData(); form.append('type', v.type); form.append('file', v.file);
+        const r = await S.upload(`/admin/users/${u.id}/signatures`, form);
+        if (!r.ok) return S.say(S.err(r));
+        S.say('Firma registrada.', true); m.close(); signatures(u);
+      } }, 'Cargar firma'));
+      m.footer.append(h('button', { class: 'secondary', onclick: () => m.close() }, 'Cerrar'));
     };
     const removal = async (u) => {
       const v = await S.ask('Baja definitiva: ' + u.username, [

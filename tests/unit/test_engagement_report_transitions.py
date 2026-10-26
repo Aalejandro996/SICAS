@@ -133,6 +133,7 @@ class ReportTransitionApiTests(unittest.TestCase):
             g.request_id = "00000000-0000-0000-0000-0000000000ff"
 
         self.client = self.app.test_client()
+        self.scanned = {JEFE: {"id": "s1", "content": b"png", "sha256": "0" * 64, "full_name": "Jefe de Prueba"}}
         self.report = {
             "id": REPORT_ID, "audit_id": AUDIT_ID, "kind": "FINAL", "version": 1,
             "status": "IN_REVIEW", "body": {}, "body_sha256": SHA, "created_by": AUDITOR,
@@ -156,6 +157,7 @@ class ReportTransitionApiTests(unittest.TestCase):
                 {"signer_type": "AUDITOR_INICIALES", "user_id": AUDITOR, "body_sha256": SHA, "display": "AU"},
             ]),
             patch.object(engagement_api.repo, "signed_docs", return_value=[]),
+            patch.object(engagement_api.repo, "active_signature", side_effect=lambda uid, kind="COMPLETA": self.scanned.get(uid)),
             patch.object(engagement_api.repo, "review_points", side_effect=lambda rid: list(self.points)),
             patch.object(engagement_api.repo, "worksheets_with_items", side_effect=lambda aid: list(self.sheets)),
             patch.object(engagement_api.repo, "observations", side_effect=lambda aid: list(self.observations)),
@@ -207,6 +209,13 @@ class ReportTransitionApiTests(unittest.TestCase):
         self.assertEqual(kwargs["actor"], JEFE)
         self.assertEqual(kwargs["actor_roles"], ["JEFE_AUDITORIA_SISTEMAS"])
         self.assertEqual(kwargs["jefe_approved_body_sha256"], SHA)
+
+    def test_jefe_without_scanned_signature_cannot_approve(self):
+        self.scanned.pop(JEFE)
+        response = self.post("approve/jefe", JEFE, JEFE_PERMS, roles=["JEFE_AUDITORIA_SISTEMAS"])
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("firma escaneada", response.get_json()["error"])
+        self.transition.assert_not_called()
 
     def test_concurrent_change_returns_conflict_without_side_effects(self):
         self.transition.side_effect = repo.StaleReportState("El informe cambió de estado")

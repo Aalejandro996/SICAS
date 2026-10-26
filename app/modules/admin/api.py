@@ -151,6 +151,68 @@ def decide_removal(rid):
     return jsonify(status="APPROVED" if d.get("approve") else "REJECTED")
 
 
+# ------------------------------------------------------------------ firmas escaneadas
+# Las usan el Jefe de Auditoría que aprueba, Gerencia y el Contralor; los auditores del equipo solo estampan iniciales.
+SIGNATURE_TYPES = ("COMPLETA", "MEDIA")
+MAX_SIGNATURE_BYTES = 1024 * 1024
+
+
+@bp.get("/users/<uuid:uid>/signatures")
+@permission_required("user:read")
+def list_signatures(uid):
+    import base64
+    repo = SqlAdminRepo()
+    rows = repo.list_signatures(str(uid))
+    for r in rows:
+        if r["active"]:
+            r["preview"] = "data:image/png;base64," + base64.b64encode(bytes(repo.signature_content(str(uid), r["id"]))).decode()
+    return jsonify(signatures=rows)
+
+
+@bp.post("/users/<uuid:uid>/signatures")
+@permission_required("user:update", step_up=True)
+def upload_signature(uid):
+    import hashlib
+    import io
+
+    repo = SqlAdminRepo()
+    target = repo.get_user(str(uid))
+    if target is None or repo.is_removed(str(uid)):
+        return jsonify(error="Usuario inexistente o dado de baja"), 404
+    kind = str(request.form.get("type") or "COMPLETA").upper()
+    if kind not in SIGNATURE_TYPES:
+        return jsonify(error="Tipo de firma: COMPLETA o MEDIA"), 400
+    f = request.files.get("file")
+    if f is None:
+        return jsonify(error="Adjunte la firma escaneada en PNG"), 400
+    data = f.read(MAX_SIGNATURE_BYTES + 1)
+    if not data or len(data) > MAX_SIGNATURE_BYTES or data[:8] != b"\x89PNG\r\n\x1a\n":
+        return jsonify(error="La firma debe ser un PNG de hasta 1 MB"), 400
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(data))
+        img.verify()
+        width, height = img.size
+    except Exception:  # noqa: BLE001 - archivo dañado o no es imagen
+        return jsonify(error="El archivo no es un PNG válido"), 400
+    if not (100 <= width <= 4000 and 30 <= height <= 3000):
+        return jsonify(error="Dimensiones fuera de rango (ancho 100-4000 px, alto 30-3000 px)"), 400
+    sha = hashlib.sha256(data).hexdigest()
+    sid = repo.save_signature(str(uid), kind, (f.filename or "firma.png")[:200], data, width, height, sha, get_jwt_identity())
+    audit("SIGNATURE_ASSET_UPLOADED", entity_type="user", entity_id=str(uid),
+          after_data={"signature": sid, "type": kind, "sha256": sha, "width": width, "height": height}, request_id=g.request_id)
+    return jsonify(id=sid, status="ACTIVE"), 201
+
+
+@bp.post("/users/<uuid:uid>/signatures/<uuid:sid>/deactivate")
+@permission_required("user:update", step_up=True)
+def deactivate_signature(uid, sid):
+    if not SqlAdminRepo().deactivate_signature(str(uid), str(sid)):
+        return jsonify(error="Firma inexistente o ya inactiva"), 409
+    audit("SIGNATURE_ASSET_DEACTIVATED", entity_type="user", entity_id=str(uid), after_data={"signature": str(sid)}, request_id=g.request_id)
+    return jsonify(status="INACTIVE")
+
+
 # ------------------------------------------------------------------ roles, parámetros, respaldos, salud
 import json as _json
 import os as _os

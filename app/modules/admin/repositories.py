@@ -129,6 +129,8 @@ class SqlAdminRepo:
 
     def remove_user(self, user_id, removed_by, reason):
         db.session.execute(text("DELETE FROM iam.user_roles WHERE user_id=CAST(:u AS uuid)"), {"u": user_id})
+        # Sus firmas escaneadas dejan de estar disponibles para documentos nuevos.
+        db.session.execute(text("UPDATE engagement.signature_assets SET active=false WHERE user_id=CAST(:u AS uuid) AND active"), {"u": user_id})
         db.session.execute(text("UPDATE iam.users SET is_active=false, removed_at=now(), removed_by=CAST(:b AS uuid), "
                                 "removal_reason=:r WHERE id=CAST(:u AS uuid)"), {"u": user_id, "b": removed_by, "r": reason})
 
@@ -136,3 +138,33 @@ class SqlAdminRepo:
         db.session.execute(text("UPDATE iam.user_removal_requests SET status=:s, decided_by=CAST(:d AS uuid), decided_at=now(), "
                                 "decision_note=:n WHERE id=CAST(:i AS uuid)"), {"s": status, "d": decided_by, "n": note, "i": request_id})
         db.session.commit()                     # confirma también remove_user/revoke_sessions de la misma transacción
+
+    # ---- firmas escaneadas ----
+    def list_signatures(self, user_id):
+        rows = db.session.execute(text(
+            "SELECT s.id::text, s.signature_type, s.original_filename, s.size_bytes, s.width_px, s.height_px, s.sha256, s.active, "
+            "s.created_at, c.username AS created_by FROM engagement.signature_assets s LEFT JOIN iam.users c ON c.id = s.created_by "
+            "WHERE s.user_id = CAST(:u AS uuid) ORDER BY s.active DESC, s.created_at DESC LIMIT 20"), {"u": user_id}).all()
+        return [dict(r._mapping) for r in rows]
+
+    def signature_content(self, user_id, signature_id):
+        return db.session.execute(text("SELECT content FROM engagement.signature_assets WHERE id = CAST(:i AS uuid) "
+                                       "AND user_id = CAST(:u AS uuid)"), {"i": signature_id, "u": user_id}).scalar()
+
+    def save_signature(self, user_id, kind, filename, data, width, height, sha256, by):
+        db.session.execute(text("UPDATE engagement.signature_assets SET active = false WHERE user_id = CAST(:u AS uuid) "
+                                "AND signature_type = :t AND active"), {"u": user_id, "t": kind})
+        sid = str(uuid.uuid4())
+        db.session.execute(text(
+            "INSERT INTO engagement.signature_assets (id, user_id, signature_type, original_filename, mime_type, size_bytes, width_px, "
+            "height_px, sha256, content, active, created_by) VALUES (CAST(:i AS uuid), CAST(:u AS uuid), :t, :f, 'image/png', :n, :w, :h, "
+            ":sha, :c, true, CAST(:b AS uuid))"),
+            {"i": sid, "u": user_id, "t": kind, "f": filename, "n": len(data), "w": width, "h": height, "sha": sha256, "c": data, "b": by})
+        db.session.commit()
+        return sid
+
+    def deactivate_signature(self, user_id, signature_id):
+        r = db.session.execute(text("UPDATE engagement.signature_assets SET active = false WHERE id = CAST(:i AS uuid) "
+                                    "AND user_id = CAST(:u AS uuid) AND active RETURNING id"), {"i": signature_id, "u": user_id}).first()
+        db.session.commit()
+        return r is not None

@@ -1977,9 +1977,24 @@ def _pdf_for(rep, team):
         "GERENCIA", "CONTRALOR", "APPROVED", "SIGNED"
     )
     return build_pdf(rep["body"], {"final": final, "initials": {t["name"]: valid.get(t["user_id"]) for t in team}, "collaborator": collab,
+                                   "jefe_signature": _jefe_signature(rep),
                                    "transitions": repo.report_transitions(rep["id"]), "body_sha256": rep["body_sha256"],
                                    "review_points": [p for r in repo.reports(rep["audit_id"]) if r["kind"] == "FINAL"
                                                      for p in repo.review_points(r["id"])]})
+
+
+def _jefe_signature(rep):
+    """Firma escaneada del Jefe de Auditoría que aprobó el contenido vigente (los auditores del equipo solo estampan iniciales)."""
+    if rep.get("kind") != "FINAL" or not rep.get("jefe_approved_by") or rep.get("jefe_approved_body_sha256") != rep["body_sha256"]:
+        return None
+    approval = next((t for t in reversed(repo.report_transitions(rep["id"]))
+                     if t["action"] == "APPROVE_JEFE" and t["body_sha256"] == rep["body_sha256"]), None)
+    sig = repo.active_signature(rep["jefe_approved_by"])
+    if sig is None:
+        return None
+    return {"name": sig["full_name"], "image": sig["content"],
+            "on_behalf_of": approval.get("on_behalf_of") if approval else None,
+            "date": str(approval["created_at"])[:10] if approval else None}
 
 
 def get_rep(rid, write=False, final_viewer=False):
@@ -2520,6 +2535,9 @@ def approve_jefe(rid):
         wf.can_jefe_review(_state(rep, team), me())
     except wf.WorkflowError as ex:
         return err(str(ex), 409)
+    if repo.active_signature(me()) is None:
+        return err("No tiene firma escaneada registrada: el Administrador del Sistema debe cargarla en «Usuarios › Firmas» "
+                   "antes de que usted apruebe el informe", 409)
 
     conflict = _transition(
         rep, "GERENCIA", "APPROVE_JEFE", delegation=acting_delegation("JEFE", a.get("audit_domain", "GENERAL")),
@@ -2600,18 +2618,30 @@ def _sign(rid, role):
 
     cfg = current_app.config
     delegation = acting_delegation("GERENCIA" if role == "GERENTE_CI" else "CONTRALOR")
-    signer_name = g.claims.get("username", me())
-    reason = f"Informe de auditoría {a['code']} — {label}"
+    signer_name = (repo.user_brief(me()) or {}).get("name") or g.claims.get("username", me())
+    reason = f"Informe de auditoría {a['code']} - {label}"   # guion simple: la fuente del sello no tiene «—»
     try:
         if delegation:
             # El suplente firma con su propio certificado, en nombre del titular.
-            signer = _delegate_signer()
+            signer = _personal_signer(required=True)
             signer_name = f"{signer_name} (suplente de {delegation['titular_name']})"
-            reason += f" — por suplencia de {delegation['titular_name']}"
+            reason += f" - por suplencia de {delegation['titular_name']}"
         else:
-            signer = signing.load_signer(cfg, role)
-    except DelegateCertificateError as ex:
+            # Quien tiene certificado propio firma con él; si no, con el institucional del rol,
+            # siempre que no esté a nombre de otra persona (p. ej. un Gerente que ya se retiró).
+            signer = _personal_signer(required=False) or _role_signer(cfg, role, label)
+        scanned = repo.active_signature(me())
+        if scanned is None:
+            raise SignerCertificateError("No tiene firma escaneada registrada: el Administrador del Sistema debe cargarla "
+                                         "en «Usuarios › Firmas» antes de que usted firme")
+    except SignerCertificateError as ex:
+        log("AUDIT_REPORT_SIGN_REJECTED", outcome="DENIED", entity_type="audit_report", entity_id=str(rid),
+            metadata={"role": role, "reason": str(ex)}, request_id=g.request_id)
         return err(str(ex), 409)
+    except Exception as ex:  # noqa: BLE001 - certificado institucional ausente o ilegible
+        log("AUDIT_REPORT_SIGN_FAILED", outcome="FAILURE", entity_type="audit_report", entity_id=str(rid),
+            metadata={"role": role, "error": type(ex).__name__}, request_id=g.request_id)
+        return err("No fue posible cargar el certificado de firma" + (f" ({ex})" if cfg.get("ENV") == "dev" else ""), 500)
     try:
         signed = signing.sign_pdf(
             base, signer,
@@ -2619,6 +2649,7 @@ def _sign(rid, role):
             location=cfg.get("SIGNING_LOCATION", "Venezuela"),
             signer_name=signer_name,
             field_name=field, box=box, tsa_url=cfg.get("TSA_URL"),
+            signature_image=scanned["content"],
         )
         key = f"reports/{rid}/v{version}/{uuid.uuid4()}.pdf"
         storage.put(key, signed.pdf_bytes)
@@ -2702,20 +2733,28 @@ def _sign(rid, role):
     )
 
 
-class DelegateCertificateError(Exception):
+class SignerCertificateError(Exception):
     pass
 
 
-def _delegate_signer():
-    """Firmante con el certificado propio del suplente, descifrado con el anillo de claves (aad = id del usuario)."""
+def _norm_name(value):
+    import unicodedata
+    value = unicodedata.normalize("NFKD", str(value or ""))
+    return " ".join("".join(ch for ch in value if not unicodedata.combining(ch)).casefold().split())
+
+
+def _personal_signer(required):
+    """Firmante con el certificado propio del usuario, descifrado con el anillo de claves (aad = id del usuario)."""
     from app.core.security.crypto import CryptoError, KeyRing
     from app.modules.reporting.signing import service as signing
 
     cert = repo.signing_certificate(me())
     if cert is None:
-        raise DelegateCertificateError("Como suplente debe firmar con su propio certificado: súbalo en «Suplencias › Mi certificado»")
+        if required:
+            raise SignerCertificateError("Como suplente debe firmar con su propio certificado: súbalo en «Suplencias › Mi certificado de firma»")
+        return None
     if cert.get("not_after") and cert["not_after"] < datetime.now(timezone.utc):
-        raise DelegateCertificateError("Su certificado de firma está vencido; suba uno vigente")
+        raise SignerCertificateError("Su certificado de firma está vencido; suba uno vigente en «Suplencias › Mi certificado de firma»")
     try:
         ring = KeyRing.from_env()
         aad = str(me()).encode()
@@ -2723,8 +2762,28 @@ def _delegate_signer():
         passphrase = ring.decrypt(cert["passphrase_encrypted"], aad=aad)
         return signing.load_signer_from_pkcs12(p12, passphrase)
     except (CryptoError, signing.SigningError, KeyError) as ex:
-        current_app.logger.warning("No se pudo cargar el certificado del suplente: %s", type(ex).__name__)
-        raise DelegateCertificateError("No se pudo usar su certificado de firma; vuelva a subirlo") from ex
+        current_app.logger.warning("No se pudo cargar el certificado personal: %s", type(ex).__name__)
+        raise SignerCertificateError("No se pudo usar su certificado de firma; vuelva a subirlo") from ex
+
+
+def _role_signer(cfg, role, label):
+    """Certificado institucional del rol, salvo que pertenezca a otra persona registrada en SICAS.
+
+    Nadie firma con el certificado de otro: si el titular del certificado es otro usuario (activo o
+    dado de baja), quien firma debe registrar su certificado propio.
+    """
+    from app.modules.reporting.signing import service as signing
+
+    signer = signing.load_signer(cfg, role)
+    holder = _norm_name(signer.signing_cert.subject.native.get("common_name"))
+    if holder:
+        owner = next((u for u in repo.q("SELECT id::text, full_name FROM iam.users")
+                      if _norm_name(u["full_name"]) == holder), None)
+        if owner and owner["id"] != str(me()):
+            raise SignerCertificateError(
+                f"El certificado institucional de {label} está a nombre de {owner['full_name']}. Cada firmante usa su "
+                "propio certificado: súbalo en «Suplencias › Mi certificado de firma» antes de firmar.")
+    return signer
 
 
 @bp.post("/reports/<uuid:rid>/sign/contralor")
@@ -2920,7 +2979,7 @@ def delegations():
         delegations=[_delegation_view(d) for d in rows],
         can_authorize=sorted(st for st, p in STAGE_AUTHORIZER.items() if p in own_perms()),
         my_certificate=({k: cert[k] for k in ("subject", "serial", "not_after", "uploaded_at")} if cert else None),
-        needs_certificate=any(d["delegate_id"] == me() and d["stage"] in ("GERENCIA", "CONTRALOR") for d in rows),
+        needs_certificate=_can_sign_reports(),
     )
 
 
@@ -3048,6 +3107,13 @@ def revoke_delegation(did):
 MAX_CERT_BYTES = 200 * 1024
 
 
+def _can_sign_reports():
+    """Firma informes por su rol o tiene una suplencia (vigente o programada) de Gerencia o del Contralor."""
+    if {"audit:sign_gerente", "audit:sign_contralor"} & own_perms():
+        return True
+    return any(dl["delegate_id"] == me() and dl["stage"] in ("GERENCIA", "CONTRALOR") for dl in repo.list_delegations(me()))
+
+
 @bp.post("/signing-certificate")
 @stage_required("audit:read", "audit:read_final", step_up=True)
 def upload_signing_certificate():
@@ -3055,9 +3121,8 @@ def upload_signing_certificate():
     from app.core.security.crypto import CryptoError, KeyRing
     from app.modules.reporting.signing import service as signing
 
-    mine = [dl for dl in repo.list_delegations(me()) if dl["delegate_id"] == me() and dl["stage"] in ("GERENCIA", "CONTRALOR")]
-    if not mine:
-        return err("Solo los suplentes de Gerencia o del Contralor registran su certificado de firma", 403)
+    if not _can_sign_reports():
+        return err("Solo quienes firman informes (Gerencia, Contralor o sus suplentes) registran su certificado de firma", 403)
     f = request.files.get("file")
     passphrase = (request.form.get("passphrase") or "").encode()
     if f is None or not (f.filename or "").lower().endswith((".p12", ".pfx")):

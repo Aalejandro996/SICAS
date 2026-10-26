@@ -22,6 +22,7 @@ from .templates import KINDS, LINES
 # Cajas de firma electrónica (PAdES) en la última página: (x1, y1, x2, y2) en puntos, origen abajo-izquierda
 SIG_BOX_CONTRALOR = (57, 250, 285, 340)
 SIG_BOX_GERENTE = (327, 250, 555, 340)
+SIG_BOX_JEFE = (327, 372, 555, 440)
 NAVY = colors.HexColor("#1F3864")
 RISK_COLOR = {"ALTO": "#B00020", "MEDIO": "#B8860B", "BAJO": "#4A6FA5"}
 
@@ -216,6 +217,21 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
         canvas.drawString(57, cy - 29, f"Cargo: {collab.get('role') or body['contact']['role'] or '______________________________'}")
         canvas.line(57, cy - 70, 300, cy - 70); canvas.setFont("Helvetica", 7.5); canvas.drawString(57, cy - 80, "Firma del colaborador")
         canvas.line(330, cy - 70, 450, cy - 70); canvas.drawString(330, cy - 80, "Fecha")
+        jefe = state.get("jefe_signature")
+        if jefe:
+            # Revisión del Jefe de Auditoría: su firma escaneada (los auditores del equipo solo estampan iniciales).
+            x1, y1, x2, y2 = SIG_BOX_JEFE
+            canvas.setStrokeColor(colors.grey); canvas.rect(x1, y1, x2 - x1, y2 - y1)
+            try:
+                canvas.drawImage(ImageReader(io.BytesIO(jefe["image"])), x1 + 4, y1 + 4, x2 - x1 - 8, y2 - y1 - 8,
+                                 preserveAspectRatio=True, anchor="c", mask="auto")
+            except Exception:  # noqa: BLE001 - imagen dañada: se deja el recuadro con el nombre
+                pass
+            canvas.setFont("Helvetica-Bold", 9); canvas.setFillColor(colors.black)
+            canvas.drawString(x1, y1 - 12, f"Jefe de Auditoría: {jefe['name']}")
+            canvas.setFont("Helvetica", 7.5)
+            canvas.drawString(x1, y1 - 22, "Revisado y aprobado" + (f" el {jefe['date']}" if jefe.get("date") else "")
+                              + (f" (suplente de {jefe['on_behalf_of']})" if jefe.get("on_behalf_of") else ""))
         for (x1, y1, x2, y2), label, key in ((SIG_BOX_CONTRALOR, "Contralor", "CONTRALOR"), (SIG_BOX_GERENTE, "Gerente de Control Interno", "GERENTE_CI")):
             canvas.setStrokeColor(colors.grey); canvas.rect(x1, y1, x2 - x1, y2 - y1)
             canvas.setFont("Helvetica-Bold", 9); canvas.setFillColor(colors.black)

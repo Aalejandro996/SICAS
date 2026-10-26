@@ -1302,3 +1302,14 @@ def save_signing_certificate(user_id, p12_encrypted, passphrase_encrypted, info)
 def signing_certificate(user_id):
     return q1("SELECT user_id::text, p12_encrypted, passphrase_encrypted, subject, serial, not_after, uploaded_at "
               "FROM engagement.signing_certificates WHERE user_id = CAST(:u AS uuid)", u=str(user_id))
+
+
+# ------------------------------------------------------------------ firmas escaneadas
+def active_signature(user_id, kind="COMPLETA"):
+    """Firma escaneada vigente del usuario (PNG), o None. Los auditores del equipo solo estampan iniciales."""
+    r = q1("SELECT s.id::text, s.content, s.sha256, u.full_name FROM engagement.signature_assets s JOIN iam.users u ON u.id = s.user_id "
+           "WHERE s.user_id = CAST(:u AS uuid) AND s.signature_type = :t AND s.active AND u.removed_at IS NULL",
+           u=str(user_id), t=kind)
+    if r:
+        r["content"] = bytes(r["content"])
+    return r
