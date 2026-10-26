@@ -166,7 +166,8 @@
     const tabs = [['resumen', 'Resumen'], ['cedulas', 'Cédulas'], ['observaciones', 'Observaciones'], ['evidencias', 'Evidencias'], ['sinconexion', 'Sin conexión'], ['informes', 'Informes y PAC'], ['bitacora', 'Bitácora']];
     el.replaceChildren(h('div', { class: 'row' }, h('a', { href: '#/audits' }, '← Auditorías')),
       h('h2', null, `${a.code} — ${a.unit_name}`),
-      h('div', { class: 'row' }, S.badge(a.status), h('span', null, `${a.modality} · ${a.file_code} · ${S.date(a.period_from)} → ${S.date(a.period_to)} · `), S.ratingBadge(d.overall.rating),
+      h('div', { class: 'row' }, h('span', { class: 'badge ' + a.status }, ({ IN_PROGRESS: 'En curso', CLOSED: 'Cerrada' })[a.status] || a.status),
+        h('span', null, `${a.modality === 'PRESENCIAL' ? 'Presencial' : 'Remota'} · ${a.file_code} · ${S.date(a.period_from)} → ${S.date(a.period_to)} · `), S.ratingBadge(d.overall.rating),
         d.overall.final != null ? h('b', null, ' ' + S.score(d.overall.final) + '%') : null, d.locked ? h('span', { class: 'badge PENDING' }, 'Bloqueada: informe en revisión/aprobado') : null),
       h('div', { class: 'tabs' }, tabs.map(([id, t]) => h('button', { class: id === ctx.tab ? 'active' : '', onclick: () => { location.hash = `#/audits/${aid}/${id}`; } }, t))), body);
     ({ resumen, cedulas, observaciones, evidencias, sinconexion, informes, bitacora })[ctx.tab](body);
@@ -181,319 +182,142 @@
     const idx = phasePos < 0 ? 0 : phasePos;
     const phaseLog = Array.isArray(d.phase_log) ? d.phase_log : [];
     const team = Array.isArray(d.team) ? d.team : [];
-
-    const totalItems = sheets.reduce((n, s) => n + Number(s.items || 0), 0);
-    const scoredItems = sheets.reduce((n, s) => n + Number(s.scored || 0), 0);
-    const exceptions = Number(
-      d.overall.exceptions ??
-      sheets.reduce((n, s) => n + Number(s.exceptions || 0), 0)
-    );
-    const completion = totalItems
-      ? Math.min(100, Math.round(scoredItems / totalItems * 100))
-      : 0;
+    const indicators = d.indicators || { overall: {}, worksheets: [] };
 
     const scoreText = (v) => v == null ? 'Pendiente' : `${S.score(v)}%`;
     const signed = (v) => v == null ? '—' : (v > 0 ? '+' : '') + S.score(v);
-    const scorePct = (v) => v == null
-      ? 0
-      : Math.min(100, Math.max(0, Number(v) || 0));
-
-    const makeProgress = (value) => {
+    const pct = (v) => Math.min(100, Math.max(0, Number(v) || 0));
+    const progress = (value) => {
       const track = h('div', { class: 'audit-progress' });
       const fill = h('span', { class: 'audit-progress-fill' });
-      fill.style.width = `${scorePct(value)}%`;
+      fill.style.width = `${pct(value)}%`;
       track.append(fill);
       return track;
     };
+    const section = (title, subtitle, ...children) => h('section', { class: 'panel audit-summary-panel' },
+      h('div', { class: 'audit-section-head' }, h('h3', null, title), subtitle ? h('p', { class: 'muted' }, subtitle) : null), ...children);
 
-    const metric = (label, value, note, tone) =>
-      h('div', { class: `audit-kpi ${tone}` },
-        h('div', { class: 'audit-kpi-label' }, label),
-        h('div', { class: 'audit-kpi-value' }, value),
-        h('div', { class: 'audit-kpi-note' }, note)
-      );
-
+    // ---- fases
     const stepper = h('div', { class: 'stepper audit-phase-stepper' },
-      PHASES.map((p, i) => h('div', {
-        class: 'step ' + (i < idx ? 'done' : i === idx ? 'cur' : '')
-      }, `${i + 1}. ${S.label2(p)}`))
-    );
-
+      PHASES.map((p, i) => h('div', { class: 'step ' + (i < idx ? 'done' : i === idx ? 'cur' : '') }, `${i + 1}. ${S.label2(p)}`)));
     const phaseBtns = h('div', { class: 'row audit-phase-actions' });
     if (ctx.canWrite) {
-      if (idx < 2) {
-        phaseBtns.append(h('button', {
-          onclick: () => movePhase(PHASES[idx + 1])
-        }, 'Avanzar a ' + S.label2(PHASES[idx + 1])));
-      }
-      if (idx > 0) {
-        phaseBtns.append(h('button', {
-          class: 'secondary',
-          onclick: () => movePhase(PHASES[idx - 1])
-        }, 'Volver a ' + S.label2(PHASES[idx - 1])));
-      }
+      if (idx < 2) phaseBtns.append(h('button', { onclick: () => movePhase(PHASES[idx + 1]) }, 'Avanzar a ' + S.label2(PHASES[idx + 1])));
+      if (idx > 0) phaseBtns.append(h('button', { class: 'secondary', onclick: () => movePhase(PHASES[idx - 1]) }, 'Volver a ' + S.label2(PHASES[idx - 1])));
     }
 
-    const kpis = h('div', { class: 'audit-kpi-grid' });
-    kpis.append(
-      metric(
-        'Calificación final',
-        scoreText(d.overall.final),
-        d.overall.rating ? S.label2(d.overall.rating) : 'Sin calificación calculada',
-        'audit-kpi-blue'
-      )
-    );
+    // ---- resultado de la evaluación
+    const totalItems = sheets.reduce((n, s) => n + Number(s.items || 0), 0);
+    const scoredItems = sheets.reduce((n, s) => n + Number(s.scored || 0), 0);
+    const completion = totalItems ? Math.min(100, Math.round(scoredItems / totalItems * 100)) : 0;
+    const exceptions = Number(d.overall.exceptions ?? sheets.reduce((n, s) => n + Number(s.exceptions || 0), 0));
+    const excellent = d.thresholds?.excelente ?? 90;
+    const hero = h('section', { class: 'panel audit-hero' },
+      h('div', { class: 'audit-hero-main' },
+        h('span', { class: 'audit-hero-label' }, 'Calificación final'),
+        h('div', { class: 'audit-hero-score' }, scoreText(d.overall.final)),
+        S.ratingBadge(d.overall.rating),
+        h('div', { class: 'audit-hero-note' }, `${totalItems} controles · ${scoredItems} calificados · ${completion}% completado`),
+        progress(completion)),
+      h('div', { class: 'audit-hero-side' },
+        h('div', { class: 'audit-hero-metric' }, h('span', null, 'Automática'), h('strong', null, scoreText(d.overall.auto))),
+        h('div', { class: 'audit-hero-metric' }, h('span', null, 'Ajuste manual'), h('strong', null, a.manual_score != null ? scoreText(a.manual_score) : 'No')),
+        h('div', { class: 'audit-hero-metric' }, h('span', null, 'Observaciones'), h('strong', null, String(d.observations ?? 0))),
+        h('div', { class: 'audit-hero-metric' }, h('span', null, 'Evidencias'), h('strong', null, String(d.evidence ?? 0))),
+        h('div', { class: 'audit-hero-metric' }, h('span', null, 'Excepciones'), h('strong', null, String(exceptions))),
+        h('div', { class: 'audit-hero-metric' }, h('span', null, 'Cédulas'), h('strong', null, String(sheets.length)))),
+      h('div', { class: 'audit-hero-foot' },
+        h('span', { class: 'muted' }, `Escala: Excelente > ${excellent}; Satisfactorio 70–90; Aceptable 60–69; Necesita mejoras 50–59; No satisfactoria ≤ 49`),
+        a.manual_reason ? h('span', { class: 'audit-manual-reason' }, h('b', null, 'Justificación del ajuste: '), a.manual_reason) : null,
+        can('audit:rate') && ctx.canWrite && a.phase !== 'PLANIFICACION'
+          ? h('button', { class: 'sm', onclick: () => manual('/audits/' + a.id + '/rating', 'Calificación global', a.manual_score) }, 'Ajustar calificación global') : null));
 
-    const controlKpi = metric(
-      'Controles calificados',
-      `${scoredItems} / ${totalItems}`,
-      `${completion}% completado`,
-      'audit-kpi-teal'
-    );
-    controlKpi.append(makeProgress(completion));
-    kpis.append(
-      controlKpi,
-      metric(
-        'Excepciones',
-        String(exceptions),
-        'Información no recibida',
-        'audit-kpi-rose'
-      ),
-      metric(
-        'Cédulas',
-        String(sheets.length),
-        'En esta auditoría',
-        'audit-kpi-violet'
-      )
-    );
+    // ---- indicadores por cédula (los mismos del cuestionario y del informe)
+    const indicatorCards = (indicators.worksheets || []).map((w) => h('div', { class: 'audit-indicator-block' },
+      h('div', { class: 'audit-indicator-head' },
+        h('a', { href: `#/audits/${a.id}/cedulas/${w.id}` }, h('b', null, w.title || 'Cédula')),
+        h('span', null, S.ratingBadge(w.rating), ' ', h('b', null, scoreText(w.score)))),
+      h('div', { class: 'audit-indicator-grid' }, (w.indicators || []).map((i) =>
+        h('div', { class: `audit-indicator ind-${i.key}` }, h('div', { class: 'n' }, String(i.value)), h('div', { class: 'l' }, i.label))))));
+    const indicatorsPanel = section('Indicadores de la evaluación', 'Resultado del cuestionario por cédula. Seleccione una cédula para abrir sus controles.',
+      indicatorCards.length ? h('div', null, indicatorCards) : h('p', { class: 'muted' }, 'No hay cédulas registradas.'));
 
-    const dataPanel = h('section', { class: 'panel audit-summary-panel' },
-      h('h3', null, 'Datos de la auditoría'),
+    // ---- datos y equipo
+    const dataPanel = section('Datos de la auditoría', null,
       h('div', { class: 'kv audit-summary-kv' },
+        h('b', null, 'Expediente'), `${a.file_code} — ${a.title || ''}`,
+        h('b', null, 'Unidad'), a.unit_name || '—',
         h('b', null, 'Objetivos'), a.objectives || '—',
         h('b', null, 'Alcance'), a.scope || '—',
         h('b', null, 'Procedimientos'), a.procedures || '—',
-        h('b', null, 'Líneas'),
-        (a.lines || []).map((l) => LINE[l] || l).join(', ') || '—',
+        h('b', null, 'Líneas'), (a.lines || []).map((l) => LINE[l] || l).join(', ') || '—',
+        h('b', null, 'Modalidad'), a.modality === 'PRESENCIAL' ? 'Presencial' : a.modality === 'REMOTA' ? 'Remota' : (a.modality || '—'),
         h('b', null, 'Lugar'), a.location || '—',
-        h('b', null, 'Colaborador en la unidad'),
-        (a.contact_name || '—') + (a.contact_role ? ' · ' + a.contact_role : ''),
-        h('b', null, 'Modalidad'), a.modality || '—',
-        h('b', null, 'Período'),
-        `${S.date(a.period_from) || '—'} → ${S.date(a.period_to) || '—'}`,
-        h('b', null, 'Fechas previstas'),
-        `${S.date(a.planned_start) || '—'} → ${S.date(a.planned_end) || '—'}`
-      )
-    );
+        h('b', null, 'Colaborador en la unidad'), (a.contact_name || '—') + (a.contact_role ? ' · ' + a.contact_role : ''),
+        h('b', null, 'Período revisado'), `${S.date(a.period_from) || '—'} → ${S.date(a.period_to) || '—'}`,
+        h('b', null, 'Fechas previstas'), `${S.date(a.planned_start) || '—'} → ${S.date(a.planned_end) || '—'}`),
+      ctx.canWrite ? h('div', { class: 'row' }, h('button', { class: 'sm', onclick: editAudit }, 'Editar datos de la auditoría')) : null);
+    const teamPanel = section('Equipo auditor', null,
+      team.length ? h('div', { class: 'audit-team-list' }, team.map((t) => h('div', { class: 'audit-team-member' },
+        h('div', { class: 'audit-team-initials' }, t.initials || '—'),
+        h('div', { class: 'audit-team-info' },
+          h('b', null, t.name),
+          h('span', null, h('span', { class: 'muted' }, 'Rol: '), t.system_role || '—'),
+          h('span', null, h('span', { class: 'muted' }, 'Función: '), t.role === 'LIDER' ? 'Líder de la auditoría' : 'Auditor del equipo')))))
+        : h('p', { class: 'muted' }, 'Sin integrantes registrados.'));
 
-    const teamPanel = h('section', { class: 'panel audit-summary-panel' },
-      h('h3', null, 'Equipo auditor'),
-      tbl(
-        ['Nombre', 'Rol', 'Iniciales'],
-        team.map((t) => [
-          t.name,
-          t.role === 'LIDER' ? 'Líder' : 'Auditor',
-          t.initials || '—'
-        ])
-      )
-    );
-
-    const excellent = d.thresholds?.excelente ?? 90;
-    const ratingPanel = h('section', {
-      class: 'panel audit-summary-panel audit-rating-panel'
-    },
-      h('h3', null, 'Calificación global'),
-      h('div', { class: 'audit-rating-metrics' },
-        h('div', { class: 'audit-rating-metric' },
-          h('span', null, 'Automática'),
-          h('strong', null, scoreText(d.overall.auto))
-        ),
-        h('div', { class: 'audit-rating-metric' },
-          h('span', null, 'Final'),
-          h('strong', null, scoreText(d.overall.final))
-        ),
-        h('div', { class: 'audit-rating-metric' },
-          h('span', null, 'Resultado'),
-          S.ratingBadge(d.overall.rating)
-        )
-      ),
-      h('div', { class: 'audit-rating-scale' },
-        `Escala: Excelente > ${excellent}; Satisfactorio 70–90; ` +
-        'Aceptable 60–69; Necesita mejoras 50–59; No satisfactoria ≤ 49'
-      )
-    );
-
-    if (a.manual_reason) {
-      ratingPanel.append(
-        h('p', { class: 'audit-manual-reason' },
-          h('b', null, 'Justificación del ajuste: '),
-          a.manual_reason
-        )
-      );
-    }
-
-    if (can('audit:rate') && ctx.canWrite && a.phase !== 'PLANIFICACION') {
-      ratingPanel.append(
-        h('div', { class: 'audit-rating-actions' },
-          h('button', {
-            class: 'sm',
-            onclick: () => manual(
-              '/audits/' + a.id + '/rating',
-              'Calificación global',
-              a.manual_score
-            )
-          }, 'Ajustar calificación global')
-        )
-      );
-    }
-
-    const resultCards = h('div', { class: 'audit-sheet-results' });
-    if (!sheets.length) {
-      resultCards.append(
-        h('div', { class: 'empty panel' }, 'No hay cédulas registradas.')
-      );
-    } else {
-      sheets.forEach((s) => {
-        const result = h('button', {
-          class: 'audit-sheet-result',
-          type: 'button',
-          onclick: () => {
-            location.hash = `#/audits/${a.id}/cedulas/${s.id}`;
-          }
-        });
-
-        result.append(
-          h('div', { class: 'audit-sheet-result-head' },
-            h('span', { class: 'audit-sheet-result-title' }, s.title || 'Cédula'),
-            h('strong', { class: 'audit-sheet-result-score' }, scoreText(s.final))
-          ),
-          makeProgress(s.final),
-          h('div', { class: 'audit-sheet-result-meta' },
-            `${Number(s.scored || 0)} de ${Number(s.items || 0)} controles calificados`,
-            h('span', null, `${Number(s.exceptions || 0)} excepciones`)
-          ),
-          S.ratingBadge(s.rating)
-        );
-        resultCards.append(result);
-      });
-    }
-
-    const resultsPanel = h('section', {
-      class: 'panel audit-summary-panel audit-results-panel'
-    },
-      h('div', { class: 'audit-section-heading' },
-        h('h3', null, 'Resultados por cédula'),
-        h('p', { class: 'muted' }, 'Seleccione una cédula para abrir sus controles.')
-      ),
-      resultCards
-    );
-
+    // ---- evolución por fase
     const phaseSnapshots = Array.isArray(d.phase_snapshots) ? d.phase_snapshots : [];
-    const triggerNames = {
-      PHASE_CHANGE: 'Cierre por cambio de fase',
-      FINAL_REPORT_SUBMITTED: 'Envío del informe final',
-      PAC_SENT: 'Cierre por envío del PAC'
-    };
-    const snapshotRows = phaseSnapshots.map((snapshot) => {
-      const overall = snapshot.scorecard?.overall || {};
-      return [
-        fmt(snapshot.captured_at),
-        S.label2(snapshot.phase),
-        triggerNames[snapshot.trigger_action] || snapshot.trigger_action,
-        scoreText(overall.auto),
-        scoreText(overall.final),
-        `${Number(overall.scored || 0)} / ${Number(overall.items || 0)}`,
-        String(Number(overall.exceptions || 0)),
-        snapshot.captured_username || '—',
-        signed(snapshot.variation?.overall_delta),
-        snapshot.scorecard?.reason || '—'
-      ];
-    });
-    const phaseSnapshotPanel = h('section', { class: 'panel audit-summary-panel' },
-      h('h3', null, 'Comparación histórica por fase'),
-      h('p', { class: 'muted' },
-        'Se conservan las puntuaciones capturadas al cambiar de fase, presentar el informe final y cerrar por PAC. ' +
-        'La captura histórica comienza con la activación de esta funcionalidad; no se reconstruyen puntuaciones antiguas.'
-      ),
-      phaseSnapshots.length
-        ? tbl(
-            ['Fecha', 'Fase capturada', 'Evento', 'Automática', 'Final', 'Ítems calificados', 'Excepciones', 'Usuario', 'Variación', 'Motivo'],
-            snapshotRows
-          )
-        : h('p', { class: 'muted' }, 'Todavía no hay instantáneas históricas. Se crearán en los próximos eventos de fase o cierre.')
-    );
-
-    const worksheetSnapshotRows = phaseSnapshots.flatMap((snapshot) => {
-      const worksheets = Array.isArray(snapshot.scorecard?.worksheets)
-        ? snapshot.scorecard.worksheets
-        : [];
-      return worksheets.map((sheet) => [
-        fmt(snapshot.captured_at),
-        S.label2(snapshot.phase),
-        sheet.title || 'Cédula',
-        scoreText(sheet.auto),
-        scoreText(sheet.final),
-        `${Number(sheet.scored || 0)} / ${Number(sheet.items || 0)}`,
-        String(Number(sheet.exceptions || 0))
-      ]);
-    });
-    const worksheetSnapshotPanel = h('section', { class: 'panel audit-summary-panel' },
-      h('h3', null, 'Evolución de calificaciones por cédula'),
-      worksheetSnapshotRows.length
-        ? tbl(
-            ['Fecha', 'Fase', 'Cédula', 'Automática', 'Final', 'Ítems calificados', 'Excepciones'],
-            worksheetSnapshotRows
-          )
-        : h('p', { class: 'muted' }, 'La comparación por cédula aparecerá después de la primera instantánea.')
-    );
-
+    const triggerNames = { PHASE_CHANGE: 'Cierre de fase', FINAL_REPORT_SUBMITTED: 'Envío del informe final', PAC_SENT: 'Envío del PAC' };
     const changedItems = phaseSnapshots.flatMap((snapshot) => (snapshot.variation?.items || []).map((it) => [
       fmt(snapshot.captured_at), S.label2(snapshot.phase), it.sheet || '—', it.ref, scoreText(it.before), scoreText(it.after),
-      signed(it.delta), it.manual_reason || it.info_exception || it.observation || '—'
-    ]));
-    const changedPanel = changedItems.length ? h('section', { class: 'panel audit-summary-panel' },
-      h('h3', null, 'Ítems que originaron los ajustes entre fases'),
-      tbl(['Fecha', 'Fase', 'Cédula', 'Ref.', 'Antes', 'Después', 'Variación', 'Sustento'], changedItems)) : null;
+      signed(it.delta), it.manual_reason || it.info_exception || it.observation || '—']));
+    const sheetRows = phaseSnapshots.flatMap((snapshot) => (snapshot.scorecard?.worksheets || []).map((sheet) => [
+      fmt(snapshot.captured_at), S.label2(snapshot.phase), sheet.title || 'Cédula', scoreText(sheet.final),
+      `${Number(sheet.scored || 0)} / ${Number(sheet.items || 0)}`, String(Number(sheet.exceptions || 0))]));
+    const evolution = section('Evolución de la calificación por fase',
+      'Fotografía conservada al cerrar cada fase, enviar el informe final y enviar el PAC.',
+      phaseSnapshots.length
+        ? tbl(['Fecha', 'Fase', 'Evento', 'Nota final', 'Nivel', 'Variación', 'Motivo', 'Usuario'], phaseSnapshots.map((snapshot) => {
+          const ov = snapshot.scorecard?.overall || {};
+          return [fmt(snapshot.captured_at), S.label2(snapshot.phase), triggerNames[snapshot.trigger_action] || snapshot.trigger_action,
+            scoreText(ov.final), S.ratingBadge(ov.rating || 'SIN_CALIFICAR'), signed(snapshot.variation?.overall_delta),
+            snapshot.scorecard?.reason || '—', snapshot.captured_username || '—'];
+        }))
+        : h('p', { class: 'muted' }, 'Todavía no hay fotografías de fase. Se crean al cambiar de fase o enviar el informe.'),
+      changedItems.length ? h('details', null, h('summary', null, `Ítems que originaron los ajustes (${changedItems.length})`),
+        tbl(['Fecha', 'Fase', 'Cédula', 'Ref.', 'Antes', 'Después', 'Variación', 'Sustento'], changedItems)) : null,
+      sheetRows.length ? h('details', null, h('summary', null, 'Detalle por cédula'),
+        tbl(['Fecha', 'Fase', 'Cédula', 'Nota final', 'Ítems calificados', 'Excepciones'], sheetRows)) : null,
+      h('details', null, h('summary', null, `Historial de fases (${phaseLog.length})`),
+        tbl(['Fecha', 'De', 'A', 'Usuario', 'Nota'], phaseLog.map((p) => [
+          fmt(p.changed_at), p.from_phase ? S.label2(p.from_phase) : '—', S.label2(p.to_phase), p.username || '—', p.note || '—']))));
 
-    const cmp = d.comparison;
-    const cmpRow = (label, c) => [label, String(c.reference.items), scoreText(c.reference.expected_score),
-      `${S.score(c.reference.acceptance_threshold)}% (${L(c.reference.acceptance_level)})`,
-      String(c.result.affirmative), `${c.result.answered} / ${c.result.answered + c.result.pending}`,
-      scoreText(c.result.score), S.ratingBadge(c.result.rating), signed(c.differences.vs_expected), signed(c.differences.vs_threshold),
-      c.differences.meets_threshold == null ? '—' : c.differences.meets_threshold ? '✔ Alcanza' : '✘ No alcanza'];
-    const comparisonPanel = cmp ? h('section', { class: 'panel audit-summary-panel' },
-      h('h3', null, 'Cuadro comparativo: referencia y resultado'),
-      h('p', { class: 'muted' }, 'Referencia: nota esperada 100 y nivel de aceptación Satisfactorio. La nota obtenida es la final vigente (incluye ajustes manuales justificados).'),
-      tbl(['Cédula', 'Ítems', 'Nota esperada', 'Umbral', 'Afirmativas', 'Respondidas', 'Nota obtenida', 'Nivel', 'Dif. esperada', 'Dif. umbral', 'Aceptación'],
-        [...(cmp.worksheets || []).map((w) => cmpRow(w.title || 'Cédula', w)), cmpRow('GLOBAL', cmp.overall)])) : null;
+    el.replaceChildren(h('div', { class: 'audit-phase-bar' }, stepper, phaseBtns),
+      h('div', { class: 'audit-summary-dashboard' },
+        hero,
+        indicatorsPanel,
+        h('div', { class: 'audit-summary-layout' }, dataPanel, teamPanel),
+        evolution));
+  }
 
-    const history = h('details', { class: 'audit-history-details' },
-      h('summary', null, `Historial de fases (${phaseLog.length})`),
-      tbl(
-        ['Fecha', 'De', 'A', 'Usuario', 'Nota'],
-        phaseLog.map((p) => [
-          fmt(p.changed_at),
-          p.from_phase ? S.label2(p.from_phase) : '—',
-          S.label2(p.to_phase),
-          p.username || '—',
-          p.note || '—'
-        ])
-      )
-    );
-
-    const dashboard = h('div', { class: 'audit-summary-dashboard' },
-      kpis,
-      h('div', { class: 'audit-summary-layout' }, dataPanel, teamPanel),
-      ratingPanel,
-      comparisonPanel,
-      resultsPanel,
-      phaseSnapshotPanel,
-      changedPanel,
-      worksheetSnapshotPanel,
-      history
-    );
-
-    el.replaceChildren(stepper, phaseBtns, dashboard);
+  async function editAudit() {
+    const a = ctx.d.audit;
+    const v = await S.ask('Editar datos de la auditoría', [
+      { name: 'objectives', label: 'Objetivos', type: 'textarea', value: a.objectives || '', required: true },
+      { name: 'scope', label: 'Alcance', type: 'textarea', value: a.scope || '', required: true },
+      { name: 'procedures', label: 'Procedimientos', type: 'textarea', value: a.procedures || '' },
+      { name: 'modality', label: 'Modalidad', type: 'select', options: [['REMOTA', 'Remota'], ['PRESENCIAL', 'Presencial']], value: a.modality },
+      { name: 'location', label: 'Lugar (obligatorio si es presencial)', value: a.location || '' },
+      { name: 'contact_name', label: 'Colaborador en la unidad', value: a.contact_name || '' },
+      { name: 'contact_role', label: 'Cargo del colaborador', value: a.contact_role || '' },
+      { name: 'planned_start', label: 'Inicio previsto', type: 'date', value: S.date(a.planned_start) },
+      { name: 'planned_end', label: 'Fin previsto', type: 'date', value: S.date(a.planned_end) },
+      { name: 'reason', label: 'Motivo de la modificación (mínimo 10 caracteres; queda en la bitácora)', type: 'textarea', required: true }],
+    'Guardar', 'Cada cambio queda registrado con el valor anterior, el nuevo, el usuario y el motivo.');
+    if (!v) return;
+    const r = await S.send(`${A}/${ctx.aid}`, 'PUT', v);
+    if (r) { S.say(r.note || 'Datos actualizados.', true); reload(); }
   }
 
   async function movePhase(to) {

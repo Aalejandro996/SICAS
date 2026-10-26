@@ -19,7 +19,6 @@ SYSTEM_CONTROL_VALUES = ("SI", "NO")
 SYSTEM_DOC_POINTS = {"SI": 100.0, "NO": 0.0}
 # Identifica la regla de cálculo vigente en las instantáneas por fase.
 RULE_VERSION = "sicas-scoring-2026.10-sistemas-si-no"
-EXPECTED_SCORE = 100.0
 SYSTEM_EVIDENCE_POINTS = {"ACTUALIZADO": 100.0, "DESACTUALIZADO": 50.0, "INEXISTENTE": 0.0}
 
 def is_system_criteria(criteria: list[dict]) -> bool:
@@ -279,24 +278,22 @@ def audit_summary(sheets: list[SheetSummary], manual: float | None = None, thres
             "items": sum(s.items for s in sheets), "exceptions": sum(s.exceptions for s in sheets)}
 
 
-# ------------------------------------------------------------------ cuadro comparativo (referencia vs. resultado)
+# ------------------------------------------------------------------ indicadores de la evaluación (cuadro del informe)
+SYSTEM_INDICATORS = (
+    ("total", "Controles"),
+    ("respondidas", "Respondidos"),
+    ("controles_si", "Control: Sí"),
+    ("controles_no", "Control: No"),
+    ("controles_documentados", "Documentados"),
+    ("evidencia_actualizada", "Evidencia actualizada"),
+    ("brechas_alto", "Brechas altas"),
+    ("brechas_medio", "Brechas medias"),
+)
+
+
 def _response_counts(criteria: list[dict], items: list[dict]) -> dict:
-    """Cuenta respuestas afirmativas, respondidas, no aplicables y pendientes según el tipo de cédula."""
+    """Cuenta respuestas de cédulas no sistemas: cumple, no cumple, no aplica y pendientes."""
     aff = answered = na = pending = 0
-    if is_system_criteria(criteria):
-        for it in items:
-            for r in (it.get("results") or {}).values():
-                control = str(r.get("control", "")).upper() if isinstance(r, dict) else ""
-                if control == "SI":
-                    aff += 1
-                    answered += 1
-                elif control == "NO":
-                    answered += 1
-                else:
-                    pending += 1
-            if not (it.get("results") or {}):
-                pending += 1
-        return {"affirmative": aff, "answered": answered, "not_applicable": 0, "pending": pending}
     for it in items:
         results = it.get("results") or {}
         for c in criteria:
@@ -313,44 +310,31 @@ def _response_counts(criteria: list[dict], items: list[dict]) -> dict:
     return {"affirmative": aff, "answered": answered, "not_applicable": na, "pending": pending}
 
 
-def _comparison_row(items: int, counts: dict, final: float | None, rating_code: str, thresholds: dict) -> dict:
-    threshold = float(thresholds.get("satisfactorio", DEFAULT_THRESHOLDS["satisfactorio"]))
+def evaluation_indicators(worksheets: list[dict], overall: dict, thresholds: dict | None = None) -> dict:
+    """Cuadro de resultados por cédula: los indicadores que muestra la cédula y su calificación.
 
-    def diff(ref):
-        return None if final is None else round(float(final) - ref, 2)
-
-    return {
-        "reference": {
-            "items": items,
-            "expected_score": EXPECTED_SCORE,
-            "acceptance_threshold": threshold,
-            "acceptance_level": "SATISFACTORIO",
-        },
-        "result": {**counts, "score": final, "rating": rating_code},
-        "differences": {
-            "vs_expected": diff(EXPECTED_SCORE),
-            "vs_threshold": diff(threshold),
-            "meets_threshold": None if final is None else float(final) >= threshold,
-        },
-    }
-
-
-def comparison(worksheets: list[dict], overall: dict, thresholds: dict | None = None) -> dict:
-    """Referencia esperada (100 y umbral Satisfactorio) frente al resultado, por cédula y global.
-
-    La nota obtenida es la final vigente (incluye ajustes manuales justificados); la fórmula y
-    los umbrales son los mismos de worksheet_summary/audit_summary.
+    Sistemas: los mismos indicadores del cuestionario ERP/TI (system_statistics).
+    Otras cédulas: ítems, criterios respondidos, cumple, no cumple, no aplica y pendientes.
     """
     t = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
-    sheets, total = [], {"affirmative": 0, "answered": 0, "not_applicable": 0, "pending": 0}
-    total_items = 0
+    sheets = []
     for ws in worksheets:
         summary = worksheet_summary(ws["criteria"], ws["items"], ws.get("manual_score"), t)
-        counts = _response_counts(ws["criteria"], ws["items"])
-        for k in total:
-            total[k] += counts[k]
-        total_items += summary.items
+        if is_system_criteria(ws["criteria"]):
+            stats = system_statistics(ws["criteria"], ws["items"])
+            indicators = [{"key": k, "label": label, "value": int(stats.get(k) or 0)} for k, label in SYSTEM_INDICATORS]
+        else:
+            counts = _response_counts(ws["criteria"], ws["items"])
+            indicators = [
+                {"key": "items", "label": "Ítems evaluados", "value": summary.items},
+                {"key": "answered", "label": "Criterios respondidos", "value": counts["answered"]},
+                {"key": "affirmative", "label": "Cumple", "value": counts["affirmative"]},
+                {"key": "negative", "label": "No cumple / parcial", "value": counts["answered"] - counts["affirmative"]},
+                {"key": "not_applicable", "label": "No aplica / excepción", "value": counts["not_applicable"]},
+                {"key": "pending", "label": "Pendientes", "value": counts["pending"]},
+            ]
         sheets.append({"id": ws.get("id"), "title": ws.get("title"), "kind": ws.get("kind"),
-                       **_comparison_row(summary.items, counts, summary.final, summary.rating, t)})
-    return {"overall": _comparison_row(total_items, total, overall.get("final"), overall.get("rating", "SIN_CALIFICAR"), t),
+                       "score": summary.final, "rating": summary.rating, "items": summary.items, "indicators": indicators})
+    return {"overall": {"score": overall.get("final"), "rating": overall.get("rating", "SIN_CALIFICAR"),
+                        "items": sum(s["items"] for s in sheets)},
             "worksheets": sheets}

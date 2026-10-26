@@ -46,8 +46,8 @@ def assemble(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dict]
     if audit.get("manual_score") is not None:
         body["overall_reason"] = audit.get("manual_reason") or ""
     body["revision"] = revision
-    body["comparison"] = scoring.comparison(
-        [{**ws, "title": sheet_title(ws)} for ws in worksheets], overall, thresholds)
+    body["indicators"] = scoring.evaluation_indicators(
+        [{**ws, "title": ws.get("title") or sheet_title(ws)} for ws in worksheets], overall, thresholds)
     if history is not None:
         body.update(trace_sections(history, observations, evidence))
     return body

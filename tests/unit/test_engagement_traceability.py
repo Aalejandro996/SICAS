@@ -22,32 +22,30 @@ def sys_item(code, control, doc="SI", evidence="ACTUALIZADO", manual=None, iid=N
             "observation": None, "info_exception": None}
 
 
-class ComparisonTests(unittest.TestCase):
-    def test_reference_is_100_and_satisfactorio_threshold(self):
-        ws = {"id": "w1", "title": "ERP / TI", "kind": "SISTEMAS", "criteria": SYS_CRITERIA, "manual_score": None,
-              "items": [sys_item("C1", "SI"), sys_item("C2", "NO")]}
+class IndicatorsTests(unittest.TestCase):
+    def test_systems_sheet_reports_questionnaire_indicators(self):
+        items = [sys_item("C1", "SI"), sys_item("C2", "NO", doc="NO", evidence="INEXISTENTE")]
+        ws = {"id": "w1", "title": "ERP / TI", "kind": "SISTEMAS", "criteria": SYS_CRITERIA, "manual_score": None, "items": items}
         overall = scoring.audit_summary([scoring.worksheet_summary(ws["criteria"], ws["items"])])
-        cmp_ = scoring.comparison([ws], overall, {"satisfactorio": 70})
-        row = cmp_["worksheets"][0]
-        self.assertEqual(row["reference"]["expected_score"], 100.0)
-        self.assertEqual(row["reference"]["acceptance_threshold"], 70.0)
-        self.assertEqual(row["reference"]["items"], 2)
-        self.assertEqual(row["result"]["affirmative"], 1)
-        self.assertEqual(row["result"]["answered"], 2)
-        # SI con documento y evidencia = 100, NO = 0 -> 50
-        self.assertEqual(row["result"]["score"], 50.0)
-        self.assertEqual(row["differences"]["vs_expected"], -50.0)
-        self.assertEqual(row["differences"]["vs_threshold"], -20.0)
-        self.assertFalse(row["differences"]["meets_threshold"])
-        self.assertEqual(cmp_["overall"]["result"]["score"], overall["final"])
+        ind = scoring.evaluation_indicators([ws], overall)
+        sheet = ind["worksheets"][0]
+        values = {i["label"]: i["value"] for i in sheet["indicators"]}
+        self.assertEqual(list(values), ["Controles", "Respondidos", "Control: Sí", "Control: No", "Documentados",
+                                        "Evidencia actualizada", "Brechas altas", "Brechas medias"])
+        self.assertEqual(values["Controles"], 2)
+        self.assertEqual(values["Control: Sí"], 1)
+        self.assertEqual(values["Control: No"], 1)
+        self.assertEqual(values["Brechas altas"], 1)
+        self.assertEqual(sheet["score"], 50.0)
+        self.assertEqual(ind["overall"]["score"], overall["final"])
 
-    def test_generic_counts_cumple_as_affirmative_and_excludes_no_aplica(self):
+    def test_generic_sheet_counts_cumple_and_excludes_no_aplica(self):
         criteria = [{"code": "A", "weight": 1}, {"code": "B", "weight": 1}]
         ws = {"id": "w", "title": "Suscripción", "kind": "SUSCRIPCION", "criteria": criteria, "manual_score": None,
               "items": [{"results": {"A": "CUMPLE", "B": "NO_APLICA"}}, {"results": {"A": "NO_CUMPLE"}}]}
         overall = scoring.audit_summary([scoring.worksheet_summary(criteria, ws["items"])])
-        res = scoring.comparison([ws], overall)["worksheets"][0]["result"]
-        self.assertEqual((res["affirmative"], res["answered"], res["not_applicable"], res["pending"]), (1, 2, 1, 1))
+        values = {i["key"]: i["value"] for i in scoring.evaluation_indicators([ws], overall)["worksheets"][0]["indicators"]}
+        self.assertEqual((values["affirmative"], values["answered"], values["not_applicable"], values["pending"]), (1, 2, 1, 1))
 
 
 class SystemsWithoutParcialTests(unittest.TestCase):
@@ -116,7 +114,7 @@ class FinalReportTraceTests(unittest.TestCase):
         }
         return assemble.assemble(kind="FINAL", audit={"code": "AUD-1", "modality": "REMOTA", "objectives": "o", "scope": "s"},
                                  file={"code": "F", "title": "T", "period_from": "2026-01-01", "period_to": "2026-06-30"},
-                                 unit={"code": "U", "name": "Unidad", "kind": "UNIDAD"}, team=[{"name": "Ana Pérez", "initials": "AP", "role": "LIDER"}],
+                                 unit={"code": "U", "name": "Unidad", "kind": "UNIDAD"}, team=[{"name": "Ana Pérez", "initials": "AP", "role": "LIDER", "system_role": "Auditor de Sistemas"}],
                                  worksheets=[ws], observations=obs, evidence=[{"filename": "acta.pdf", "sha256": "a" * 64}],
                                  thresholds=scoring.DEFAULT_THRESHOLDS, company="SICAS", version=2, today=date(2026, 10, 25),
                                  history=history, revision=3)
@@ -124,6 +122,7 @@ class FinalReportTraceTests(unittest.TestCase):
     def test_body_explains_score_evolution_changes_and_decisions(self):
         body = self.body()
         self.assertEqual(body["revision"], 3)
+        self.assertEqual(body["team"][0]["system_role"], "Auditor de Sistemas")
         self.assertEqual([h["score"] for h in body["score_history"]], [70.0, 55.0])
         self.assertEqual(body["score_history"][1]["delta"], -15.0)
         self.assertEqual(body["score_history"][1]["changed_items"][0]["reason"], "Falta firma")
@@ -131,7 +130,7 @@ class FinalReportTraceTests(unittest.TestCase):
         self.assertEqual(body["observation_changes"][0]["original"]["condition"], "Original")
         self.assertEqual(body["observation_changes"][0]["changes"][0]["reason"], "Se elevó el riesgo por la prueba")
         self.assertEqual(body["review_history"][0]["points"][0]["status"], "ATENDIDO")
-        self.assertIn("comparison", body)
+        self.assertIn("indicators", body)
 
     def test_pdf_renders_trace_sections(self):
         pdf = build_pdf(self.body(), {"final": True, "transitions": [], "body_sha256": "b" * 64})
@@ -220,6 +219,48 @@ class EditRulesApiTests(unittest.TestCase):
                                         data={"observation_id": foreign["id"], "file": (__import__("io").BytesIO(b"%PDF-1.4"), "acta.pdf")})
         self.assertEqual(response.status_code, 400)
         put.assert_not_called()
+
+    def put_audit(self, json):
+        return self.client.put(f"/audits/{AUDIT_ID}", headers=self.headers(), json=json)
+
+    def test_audit_data_edit_requires_reason_and_logs_changes(self):
+        self.audit.update(objectives="Evaluar controles de TI", scope="Sistemas ERP", modality="REMOTA", location=None)
+        with patch.object(engagement_api.repo, "update_audit_data") as upd:
+            response = self.put_audit({"scope": "Sistemas ERP y bases de datos"})
+            self.assertEqual(response.status_code, 400)
+            upd.assert_not_called()
+            response = self.put_audit({"scope": "Sistemas ERP y bases de datos", "reason": "Se amplió el alcance acordado"})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        upd.assert_called_once_with(AUDIT_ID, {"scope": "Sistemas ERP y bases de datos"})
+        event = engagement_api.repo.stage_change.call_args.args[0]
+        self.assertEqual(event["action"], "AUDIT_DATA_UPDATED")
+        self.assertEqual(event["changes"]["scope"], {"before": "Sistemas ERP", "after": "Sistemas ERP y bases de datos"})
+
+    def test_presential_audit_requires_location(self):
+        self.audit.update(objectives="Evaluar controles de TI", scope="Sistemas ERP", modality="REMOTA", location=None)
+        with patch.object(engagement_api.repo, "update_audit_data") as upd:
+            response = self.put_audit({"modality": "PRESENCIAL", "reason": "Cambio a visita en sitio"})
+        self.assertEqual(response.status_code, 400)
+        upd.assert_not_called()
+
+    def test_non_member_cannot_edit_audit_data(self):
+        with patch.object(engagement_api.repo, "is_member", return_value=False), \
+             patch.object(engagement_api.repo, "update_audit_data") as upd:
+            response = self.put_audit({"scope": "Otro alcance distinto", "reason": "Intento de un tercero"})
+        self.assertIn(response.status_code, (403, 404))
+        upd.assert_not_called()
+
+    def test_duplicate_open_file_for_unit_and_period_is_rejected(self):
+        unit = {"id": 7, "active": True, "audit_domain": "SISTEMAS"}
+        existing = {"code": "EXP-2026-0001", "audits": 1}
+        with patch.object(engagement_api.repo, "get_unit", return_value=unit), \
+             patch.object(engagement_api.repo, "open_file_for", return_value=existing), \
+             patch.object(engagement_api.repo, "create_file") as create:
+            response = self.client.post("/audits/files", headers=self.headers(), json={
+                "unit_id": 7, "title": "Seguridad TI", "period_from": "2026-10-22", "period_to": "2026-10-30"})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("EXP-2026-0001", response.get_json()["error"])
+        create.assert_not_called()
 
 
 if __name__ == "__main__":

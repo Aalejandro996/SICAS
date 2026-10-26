@@ -99,6 +99,11 @@ def list_files(domains=None):
     return q(sql + " ORDER BY f.created_at DESC LIMIT 200", **params)
 
 
+def open_file_for(unit_id, period_from, period_to):
+    return q1(FILE_SQL + "WHERE f.unit_id = :u AND f.period_from = :pf AND f.period_to = :pt AND f.status = 'OPEN'",
+              u=unit_id, pf=period_from, pt=period_to)
+
+
 def get_file(file_id):
     return q1(FILE_SQL + "WHERE f.id = CAST(:i AS uuid)", i=str(file_id))
 
@@ -131,8 +136,19 @@ def get_audit(audit_id):
 
 
 def team(audit_id):
-    return q("SELECT t.user_id::text AS user_id, t.role, t.initials, u.full_name AS name, u.username FROM engagement.team t "
-             "JOIN iam.users u ON u.id = t.user_id WHERE t.audit_id = CAST(:a AS uuid) ORDER BY t.role DESC, u.full_name", a=str(audit_id))
+    """Equipo de la auditoría con la función en el equipo (LIDER/AUDITOR) y los roles del usuario en SICAS."""
+    from app.core.security.permissions import ROLE_LABELS
+
+    rows = q("SELECT t.user_id::text AS user_id, t.role, t.initials, u.full_name AS name, u.username, "
+             "COALESCE((SELECT array_agg(r.code ORDER BY r.code) FROM iam.user_roles ur JOIN iam.roles r ON r.id = ur.role_id "
+             "WHERE ur.user_id = t.user_id), '{}') AS user_roles "
+             "FROM engagement.team t JOIN iam.users u ON u.id = t.user_id WHERE t.audit_id = CAST(:a AS uuid) ORDER BY t.role DESC, u.full_name",
+             a=str(audit_id))
+    for r in rows:
+        codes = list(r.get("user_roles") or [])
+        r["user_roles"] = codes
+        r["system_role"] = ", ".join(ROLE_LABELS.get(c, c) for c in codes) or "—"
+    return rows
 
 
 def is_member(audit_id, user_id) -> bool:
@@ -248,6 +264,20 @@ def phase_snapshots(audit_id):
 def set_audit_manual(audit_id, score, reason, user):
     x("UPDATE engagement.audits SET manual_score=:s, manual_reason=:r, manual_by=CAST(:u AS uuid), manual_at=now() WHERE id = CAST(:a AS uuid)",
       s=score, r=reason, u=user, a=str(audit_id))
+    db.session.commit()
+
+
+AUDIT_EDITABLE = ("modality", "objectives", "scope", "procedures", "location", "contact_name", "contact_role",
+                  "planned_start", "planned_end")
+
+
+def update_audit_data(audit_id, d):
+    """Actualiza los datos generales de la auditoría (columnas de lista fija)."""
+    cols = [c for c in AUDIT_EDITABLE if c in d]
+    if not cols:
+        return
+    x("UPDATE engagement.audits SET " + ", ".join(f"{c} = :{c}" for c in cols) + " WHERE id = CAST(:a AS uuid)",
+      **{c: d[c] for c in cols}, a=str(audit_id))
     db.session.commit()
 
 

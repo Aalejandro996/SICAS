@@ -29,6 +29,18 @@ ROLES = {
     JEFE_AUDITORIA_SISTEMAS: "Supervisa y coordina auditorías de sistemas/TI, con alcance exclusivo de sistemas; no aprueba ni firma como Contralor o Gerente.",
 }
 
+# Nombre visible de cada rol (pantallas e informes).
+ROLE_LABELS = {
+    AUDITOR: "Auditor",
+    CONTRALOR: "Contralor",
+    SYS_ADMIN: "Administrador del sistema",
+    GERENCIA: "Gerencia",
+    AUDITOR_FINANCIERO: "Auditor Financiero",
+    JEFE_AUDITORIA_FINANCIERA: "Jefe de Auditoría Financiera",
+    AUDITOR_SISTEMAS: "Auditor de Sistemas",
+    JEFE_AUDITORIA_SISTEMAS: "Jefe de Auditoría de Sistemas",
+}
+
 # ---------------------------------------------------------- Permisos por módulo
 # código -> (módulo, descripción)
 PERMISSIONS: dict[str, tuple[str, str]] = {

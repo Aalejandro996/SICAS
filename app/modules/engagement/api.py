@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 
 from flask import Blueprint, Response, current_app, g, jsonify, request
 from flask_jwt_extended import get_jwt_identity
+from sqlalchemy.exc import IntegrityError
 
 from app.core.audit.audit_service import audit as log
 from app.core.security.rbac import permission_required
@@ -248,17 +249,30 @@ def new_file():
                 403,
             )
 
+    # Un expediente por unidad y período: las auditorías adicionales se abren dentro de él.
+    existing = repo.open_file_for(unit_id, pf, pt)
+    if existing:
+        return err(
+            f"Ya existe el expediente {existing['code']} abierto para esta unidad y período "
+            f"({existing['audits']} auditoría(s)); cree la auditoría dentro de él.",
+            409,
+        )
+
     code = repo.next_code("EXP", "file_seq", date.today().year)
-    fid = repo.create_file(
-        code,
-        unit_id,
-        title,
-        objective,
-        pf,
-        pt,
-        me(),
-        domain,
-    )
+    try:
+        fid = repo.create_file(
+            code,
+            unit_id,
+            title,
+            objective,
+            pf,
+            pt,
+            me(),
+            domain,
+        )
+    except IntegrityError:
+        repo.db.session.rollback()
+        return err("Ya existe un expediente abierto para esta unidad y período", 409)
 
     log(
         "FILE_CREATED",
@@ -355,7 +369,7 @@ def audit_overview(a):
     obs = repo.observations(a["id"])
     return {"audit": a, "team": repo.team(a["id"]), "phase_log": repo.phase_log(a["id"]),
             "phase_snapshots": repo.phase_snapshots(a["id"]), "overall": overall, "thresholds": th,
-            "comparison": scoring.comparison(sheets, overall, th),
+            "indicators": scoring.evaluation_indicators(sheets, overall, th),
             "sheets": [{"id": ws["id"], "kind": ws["kind"], "line": ws["line"], "title": ws["title"], "criteria_count": len(ws["criteria"]),
                         "items": s.items, "scored": s.scored, "exceptions": s.exceptions, "auto": s.auto, "final": s.final,
                         "manual_override": s.manual_override, "rating": s.rating,
@@ -370,6 +384,48 @@ def audit_overview(a):
 def audit_detail(aid):
     a, e = load(aid)
     return e or jsonify(audit_overview(a))
+
+
+@bp.put("/<uuid:aid>")
+@permission_required("audit:manage")
+def edit_audit(aid):
+    """Edición de los datos generales por el equipo auditor, con motivo y registro en la bitácora."""
+    a, e = load(aid, write=True)
+    if e:
+        return e
+    d = request.get_json(silent=True) or {}
+    try:
+        upd = {}
+        if "modality" in d:
+            upd["modality"] = str(d["modality"] or "").upper()
+            if upd["modality"] not in ("REMOTA", "PRESENCIAL"):
+                raise ValueError("Modalidad: REMOTA o PRESENCIAL")
+        for k, lo, hi in (("objectives", 10, 3000), ("scope", 10, 3000), ("procedures", 0, 3000), ("location", 0, 200),
+                          ("contact_name", 0, 120), ("contact_role", 0, 120)):
+            if k in d:
+                upd[k] = txt(d, k, lo, hi)
+        if "planned_start" in d:
+            upd["planned_start"] = parse_date(d["planned_start"], "Inicio previsto")
+        if "planned_end" in d:
+            upd["planned_end"] = parse_date(d["planned_end"], "Fin previsto")
+    except ValueError as ex:
+        return err(str(ex))
+    merged = {**a, **upd}
+    if merged.get("modality") == "PRESENCIAL" and not merged.get("location"):
+        return err("En una auditoría presencial indique el lugar")
+    if merged.get("planned_start") and merged.get("planned_end") and merged["planned_end"] < merged["planned_start"]:
+        return err("La fecha de fin no puede ser anterior a la de inicio")
+    changes = {k: {"before": a.get(k), "after": v} for k, v in upd.items() if a.get(k) != v}
+    if not changes:
+        return jsonify(status="OK", note="Sin cambios")
+    reason = str(d.get("reason") or "").strip()[:1000]
+    if len(reason) < 10:
+        return err("Indique el motivo de la modificación (mínimo 10 caracteres)")
+    _change(a, "audit", a["id"], "AUDIT_DATA_UPDATED", changes, reason=reason)
+    repo.update_audit_data(a["id"], {k: upd[k] for k in changes})
+    log("AUDIT_DATA_UPDATED", entity_type="audit", entity_id=a["id"], before_data={k: v["before"] for k, v in changes.items()},
+        after_data={k: v["after"] for k, v in changes.items()}, metadata={"reason": reason}, request_id=g.request_id)
+    return jsonify(status="OK")
 
 
 @bp.post("/<uuid:aid>/phase")
@@ -1377,7 +1433,8 @@ def offline_import(aid):
 
 # ------------------------------------------------------------------ informes
 def _team_info(aid):
-    return [{"name": t["name"], "initials": t["initials"], "role": t["role"], "user_id": t["user_id"]} for t in repo.team(aid)]
+    return [{"name": t["name"], "initials": t["initials"], "role": t["role"], "user_id": t["user_id"],
+             "system_role": t.get("system_role")} for t in repo.team(aid)]
 
 
 def _make_body(a, kind, version, conclusion, revision=1):

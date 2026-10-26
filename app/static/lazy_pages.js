@@ -41,7 +41,7 @@
     },
 
     audit: {
-      src: '/static/pages_audit.js?v=20261025-traceability1',
+      src: '/static/pages_audit.js?v=20261025-resumen4',
       pages: [
         {
           id: 'audits',

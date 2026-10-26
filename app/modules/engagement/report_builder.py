@@ -69,7 +69,7 @@ def build_body(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dic
         "modality": audit["modality"], "period": {"from": str(file["period_from"]), "to": str(file["period_to"])},
         "objectives": audit["objectives"], "scope": audit["scope"], "procedures": audit.get("procedures") or "",
         "contact": {"name": audit.get("contact_name") or "", "role": audit.get("contact_role") or ""},
-        "team": [{"name": t["name"], "initials": t["initials"], "role": t["role"]} for t in team],
+        "team": [{"name": t["name"], "initials": t["initials"], "role": t["role"], "system_role": t.get("system_role")} for t in team],
         "sheets": sheets, "overall": overall, "thresholds": thresholds or {},
         "observations": observations, "limitations": limitations, "adjustments": adjustments, "evidence": evidence,
     }
@@ -110,7 +110,7 @@ def _action(code):
 
 
 def _p(text, style):
-    return Paragraph(escape(str(text or "")).replace("\n", "<br/>"), style)
+    return Paragraph(escape("" if text is None else str(text)).replace("\n", "<br/>"), style)
 
 
 def build_pdf(body: dict, state: dict | None = None) -> bytes:
@@ -206,7 +206,11 @@ def build_pdf(body: dict, state: dict | None = None) -> bytes:
     s += [Paragraph("1. Objetivo y alcance", h1), _p(body["objectives"], body_st), Spacer(1, 4), _p(body["scope"], body_st)]
     if body["procedures"]:
         s += [Paragraph("Procedimientos aplicados", h2), _p(body["procedures"], body_st)]
-    s += [Paragraph("Equipo auditor", h2), _p(", ".join(f"{t['name']} ({t['role'].lower()})" for t in body["team"]), body_st)]
+    s += [Paragraph("Equipo auditor", h2),
+          table([[Paragraph(x, hdr) for x in ("Nombre", "Rol", "Función en la auditoría", "Iniciales")]] +
+                [[_p(t["name"], cell), _p(t.get("system_role") or "—", cell),
+                  _p("Líder" if t["role"] == "LIDER" else "Auditor", cell), _p(t["initials"], cell)] for t in body["team"]],
+                [6 * cm, 5 * cm, 4 * cm, 2.5 * cm])]
 
     s.append(Paragraph("2. Resultados por cédula", h1))
     rows = [[Paragraph(x, hdr) for x in ("Cédula", "Ítems", "Excep.", "Nota auto.", "Nota final", "Calificación")]]
@@ -237,21 +241,31 @@ def build_pdf(body: dict, state: dict | None = None) -> bytes:
     if ov.get("manual_override") and body.get("overall_reason"):
         s.append(_p(f"Ajuste manual de la calificación global: {body['overall_reason']}", small))
 
-    cmp_ = body.get("comparison")
-    if cmp_:
-        s.append(Paragraph("Cuadro comparativo: referencia y resultado", h2))
-        rows = [[Paragraph(x, hdr) for x in ("Cédula", "Ítems", "Nota esperada", "Umbral", "Afirmativas", "Respondidas",
-                                             "Nota obtenida", "Nivel", "Dif. esperada", "Dif. umbral")]]
-        for label, c in [(w["title"], w) for w in cmp_["worksheets"]] + [("GLOBAL", cmp_["overall"])]:
-            ref, res, dif = c["reference"], c["result"], c["differences"]
-            rows.append([_p(label, cell), _p(ref["items"], cell), _p(_num(ref["expected_score"]), cell),
-                         _p(f"{_num(ref['acceptance_threshold'])} ({_rating(ref['acceptance_level'])})", cell),
-                         _p(res["affirmative"], cell), _p(res["answered"], cell), _p(_num(res["score"]), cell),
-                         _p(_rating(res["rating"]), cell), _p(_signed(dif["vs_expected"]), cell), _p(_signed(dif["vs_threshold"]), cell)])
-        t = table(rows, [3.3 * cm, 1.1 * cm, 1.5 * cm, 2.4 * cm, 1.5 * cm, 1.6 * cm, 1.5 * cm, 1.9 * cm, 1.4 * cm, 1.3 * cm])
-        t.setStyle(TableStyle([("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"), ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E8EEF7"))]))
-        s += [t, _p("Referencia: nota esperada 100 y nivel de aceptación Satisfactorio. La nota obtenida es la final vigente, "
-                    "con los ajustes manuales justificados. Ítems NO_APLICA y excepciones no puntúan.", small)]
+    ind = body.get("indicators")
+    if ind:
+        s.append(Paragraph("Cuadro de resultados de la evaluación", h2))
+        big = ParagraphStyle("big", parent=cell, fontSize=15, leading=18, fontName="Helvetica-Bold", textColor=NAVY)
+        lab = ParagraphStyle("lab", parent=cell, fontSize=7.2, leading=8.6, textColor=colors.HexColor("#444444"))
+        for w in ind["worksheets"]:
+            score = "—" if w["score"] is None else f"{w['score']:.1f}%"
+            values = {i["key"]: i["value"] for i in w["indicators"]}
+            head = f"<b>{escape(w['title'] or 'Cédula')}</b> · {_rating(w['rating'])} · Final {score}"
+            if "total" in values:
+                head += f" · {values['total']} controles · {values.get('respondidas', 0)} respondidos"
+            s.append(Paragraph(head, cell))
+            cells = [[Paragraph(str(i["value"]), big) for i in w["indicators"]],
+                     [Paragraph(escape(i["label"]), lab) for i in w["indicators"]]]
+            n = len(w["indicators"]) or 1
+            t = Table(cells, colWidths=[doc.width / n] * n)
+            t.setStyle(TableStyle([
+                ("BOX", (0, 0), (-1, -1), 0.4, colors.HexColor("#C9D3E3")),
+                ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#C9D3E3")),
+                ("LINEABOVE", (0, 0), (-1, 0), 2, colors.HexColor("#319C91")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ]))
+            s += [Spacer(1, 3), t, Spacer(1, 6)]
 
     s.append(Paragraph("3. Observaciones", h1))
     if not body["observations"]:
