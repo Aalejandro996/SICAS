@@ -793,9 +793,12 @@
   } });
 
   // ------------------------------------------------------------------ Solicitudes de rol
-  S.pages.push({ id: 'roles', title: 'Solicitudes de rol', perms: ['role:approve', 'role:assign', 'role:read'], render: async (el) => {
+  S.pages.push({ id: 'roles', title: 'Solicitudes', perms: ['role:approve', 'role:assign', 'role:read', 'admin:action_approve', 'audit:annul_approve', 'backup:restore_approve'], render: async (el) => {
     const draw = async () => {
-      el.replaceChildren(h('h2', null, 'Solicitudes de cambio de rol'));
+      el.replaceChildren(h('h2', null, 'Solicitudes y aprobaciones'));
+      if (S.adminApprovals) await S.adminApprovals(el, draw);
+      if (!can('role:approve', 'role:assign', 'role:read')) return;
+      el.append(h('h3', null, 'Cambios de rol'));
       const d = await S.get('/admin/role-requests?status=PENDING');
       if (!d) return;
       el.append(tbl(['Usuario', 'Acción', 'Rol', 'Motivo', 'Solicitó', 'Fecha', ''], d.requests.map((q) => [q.target, S.label(q.action), S.roleLabel(q.role), q.reason, q.requested_by, fmt(q.created_at),
@@ -829,7 +832,11 @@
   // ------------------------------------------------------------------ Reglas de los motores
   // El Administrador del Sistema propone; el Contralor aprueba (doble control). Nada se aplica sin aprobación.
   S.pages.push({ id: 'rules-admin', title: 'Reglas de los motores', perms: ['rule:propose', 'rule:configure'], render: async (el) => {
-    const ENGINES = [['SUDEASEG', 'Normativa SUDEASEG'], ['SISTEMAS', 'Auditoría de Sistemas'], ['ANALITICO', 'Motor analítico']];
+    const ENGINES = [['SUDEASEG', 'Normativa SUDEASEG'], ['SISTEMAS', 'Auditoría de Sistemas'], ['ANALITICO', 'Motor analítico'],
+      ['UNIDAD', 'Unidades y sucursales'], ['CODIFICACION', 'Codificación']];
+    const CODE_CATALOGS = [['AUDIT_TYPE', 'Tipo de auditoría'], ['COMPANY', 'Compañía'], ['PLAN_TYPE', 'Siglas (planificada/especial)'],
+      ['PROCESS', 'Proceso'], ['FREQUENCY', 'Tipo (frecuencia)'], ['REPORT_COMPANY', 'Compañía del informe']];
+    const DOMAINS = [['GENERAL', 'General (operativa)'], ['FINANCIERA', 'Financiera'], ['SISTEMAS', 'Sistemas']];
     let tab = 'SUDEASEG';
     const kwText = (k) => (k || []).join(', ');
     const kwList = (t) => String(t || '').split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
@@ -839,7 +846,17 @@
       const [cat, pend] = await Promise.all([S.get('/rules-admin/catalogs'), S.get('/rules-admin/requests?status=PENDING')]);
       if (!cat || !pend) return;
       el.append(h('div', { class: 'toolbar' }, ENGINES.map(([k, l]) => h('button', { class: k === tab ? '' : 'secondary', onclick: () => { tab = k; draw(); } }, l))));
-      if (tab === 'ANALITICO') {
+      if (tab === 'UNIDAD') {
+        if (can('rule:propose')) el.append(h('div', { class: 'toolbar' }, h('button', { onclick: () => proposeUnit(null) }, 'Proponer unidad nueva')));
+        el.append(tbl(['Código', 'Nombre', 'Tipo', 'Dominio', 'Responsable', 'Activa', ''], cat.unidades.map((r) => [r.key, r.label, r.kind === 'SUCURSAL' ? 'Sucursal' : 'Unidad',
+          r.audit_domain, [r.responsible_name, r.responsible_role].filter(Boolean).join(' · ') || '—', r.active ? 'Sí' : 'No',
+          can('rule:propose') ? h('button', { class: 'sm', onclick: () => proposeUnit(r) }, 'Proponer cambio') : ''])));
+      } else if (tab === 'CODIFICACION') {
+        if (can('rule:propose')) el.append(h('div', { class: 'toolbar' }, h('button', { onclick: () => proposeCode(null) }, 'Proponer código nuevo')));
+        el.append(tbl(['Catálogo', 'Código', 'Descripción', 'Orden', 'Activo', ''], cat.codificacion.map((r) => [
+          (CODE_CATALOGS.find(([k]) => k === r.catalog) || [0, r.catalog])[1], r.code, r.label, r.sort_order, r.active ? 'Sí' : 'No',
+          can('rule:propose') ? h('button', { class: 'sm', onclick: () => proposeCode(r) }, 'Proponer cambio') : ''])));
+      } else if (tab === 'ANALITICO') {
         el.append(tbl(['Regla', 'Descripción', 'Parámetros vigentes', 'Activa', 'Actualizada', ''], cat.analitico.map((r) => [
           r.key, r.title, h('code', null, JSON.stringify({ ...r.defaults, ...(r.params || {}) })), r.enabled ? 'Sí' : 'No', fmt(r.updated_at),
           can('rule:propose') ? h('button', { class: 'sm', onclick: () => proposeAnalytic(r) }, 'Proponer cambio') : ''])));
@@ -894,6 +911,36 @@
         recommendation: v.recommendation, sort_order: Number(v.sort_order), active: v.active };
       if (sys) Object.assign(payload, { field_test: v.field_test, critical: v.critical });
       const d = await S.send('/rules-admin/requests', 'POST', { engine: tab, rule_key: r ? r.key : v.key, payload, reason: v.reason });
+      if (d) { S.say(d.note, true); draw(); }
+    };
+    const proposeUnit = async (r) => {
+      const v = await S.ask(r ? 'Proponer cambio: ' + r.key : 'Proponer unidad nueva', [
+        ...(r ? [] : [{ name: 'key', label: 'Código (mayúsculas, números y guiones; p. ej. SUC-MARACAY)', required: true }]),
+        { name: 'name', label: 'Nombre', value: r?.label, required: true },
+        { name: 'kind', label: 'Tipo', type: 'select', value: r?.kind || 'SUCURSAL', options: [['SUCURSAL', 'Sucursal'], ['UNIDAD', 'Unidad administrativa']] },
+        { name: 'audit_domain', label: 'Dominio de auditoría', type: 'select', value: r?.audit_domain || 'GENERAL', options: DOMAINS },
+        { name: 'responsible_name', label: 'Responsable', value: r?.responsible_name },
+        { name: 'responsible_role', label: 'Cargo del responsable', value: r?.responsible_role },
+        { name: 'active', label: 'Activa', type: 'checkbox', value: r ? r.active : true },
+        { name: 'reason', label: 'Motivo del cambio (mínimo 10 caracteres)', type: 'textarea', required: true }], 'Proponer',
+        'Doble verificación: se propone con MFA reciente y se aplica cuando el Contralor lo aprueba.');
+      if (!v) return;
+      const payload = { name: v.name, kind: v.kind, audit_domain: v.audit_domain, responsible_name: v.responsible_name, responsible_role: v.responsible_role, active: v.active };
+      const d = await S.send('/rules-admin/requests', 'POST', { engine: 'UNIDAD', rule_key: (r ? r.key : v.key).toUpperCase(), payload, reason: v.reason });
+      if (d) { S.say(d.note, true); draw(); }
+    };
+    const proposeCode = async (r) => {
+      const v = await S.ask(r ? `Proponer cambio: ${r.catalog} ${r.code}` : 'Proponer código nuevo', [
+        ...(r ? [] : [{ name: 'catalog', label: 'Catálogo', type: 'select', options: CODE_CATALOGS },
+          { name: 'code', label: 'Código (1 a 6 letras mayúsculas)', required: true }]),
+        { name: 'label', label: 'Descripción', value: r?.label, required: true },
+        { name: 'sort_order', label: 'Orden', type: 'number', value: String(r?.sort_order ?? 100) },
+        { name: 'active', label: 'Activo (disponible para expedientes e informes nuevos)', type: 'checkbox', value: r ? r.active : true },
+        { name: 'reason', label: 'Motivo del cambio (mínimo 10 caracteres)', type: 'textarea', required: true }], 'Proponer',
+        'Los códigos ya usados en expedientes e informes no cambian. Doble verificación: MFA y aprobación del Contralor.');
+      if (!v) return;
+      const key = r ? r.key : `${v.catalog}:${String(v.code).toUpperCase()}`;
+      const d = await S.send('/rules-admin/requests', 'POST', { engine: 'CODIFICACION', rule_key: key, payload: { label: v.label, sort_order: Number(v.sort_order), active: v.active }, reason: v.reason });
       if (d) { S.say(d.note, true); draw(); }
     };
     const proposeAnalytic = async (r) => {

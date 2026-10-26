@@ -48,12 +48,22 @@ def _routing(v):
     return out
 
 
+def _security_policy(v):
+    from app.core.security.policy import PolicyError, validate
+    try:
+        return validate(v)
+    except PolicyError as e:
+        raise ParamError(str(e)) from e
+
+
 SPECS = {
     "company_name": (_company, "Aseguradora"),
     "retention_years": (_int_range(1, 30, "retention_years"), 10),
     "findings_sla_days": (_int_range(1, 90, "findings_sla_days"), 15),
     "alert_routing": (_routing, {}),
     "rating_thresholds": (_thresholds, {"satisfactorio": 70, "mejora": 50}),
+    # Vacío = valores vigentes de configuración (5 intentos, 30 min de bloqueo, MFA reciente de 5 min, sesión de 8 h).
+    "security_policy": (_security_policy, {}),
 }
 
 

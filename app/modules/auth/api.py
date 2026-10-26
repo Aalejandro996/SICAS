@@ -22,16 +22,31 @@ GENERIC = {"error": "Credenciales inválidas o cuenta no disponible"}
 
 
 def _service() -> AuthService:
-    cfg = current_app.config
+    from app.core.security.policy import current as current_policy
     if "sicas_auth" not in current_app.extensions:
-        current_app.extensions["sicas_auth"] = AuthService(
-            SqlUserRepo(), Argon2Hasher(), KeyRing.from_env(), audit,
-            max_failed=cfg["MAX_FAILED_LOGINS"], lock_minutes=cfg["LOCKOUT_MINUTES"])
-    return current_app.extensions["sicas_auth"]
+        current_app.extensions["sicas_auth"] = AuthService(SqlUserRepo(), Argon2Hasher(), KeyRing.from_env(), audit)
+    svc = current_app.extensions["sicas_auth"]
+    pol = current_policy()                                   # política vigente (editable por el Administrador)
+    svc.max_failed, svc.lock_minutes = pol["max_failed_logins"], pol["lockout_minutes"]
+    return svc
 
 
 def _refresh() -> RefreshService:
-    return RefreshService(SqlRefreshStore(), current_app.config["JWT_REFRESH_TOKEN_EXPIRES"])
+    from app.core.security.policy import current as current_policy
+    return RefreshService(SqlRefreshStore(), timedelta(hours=current_policy()["session_hours"]))
+
+
+def _password_expired(user) -> bool:
+    """Vencimiento de contraseña según la política (0 = sin vencimiento)."""
+    from sqlalchemy import text
+
+    from app.core.security.policy import current as current_policy
+    from app.extensions import db
+    days = current_policy()["password_max_age_days"]
+    if not days:
+        return False
+    return bool(db.session.execute(text("SELECT password_changed_at < now() - make_interval(days => :d) FROM iam.users "
+                                        "WHERE id = CAST(:u AS uuid)"), {"d": days, "u": user.id}).scalar())
 
 
 def _challenge(user, step: str) -> str:
@@ -81,6 +96,10 @@ def login():
         user = _service().verify_password_step(str(data.get("username", "")), str(data.get("password", "")), request.remote_addr)
     except AuthError as e:
         return _fail(e)
+    if not user.must_change_password and _password_expired(user):
+        SqlUserRepo().require_password_change(user.id)
+        user.must_change_password = True
+        audit("PASSWORD_EXPIRED", entity_type="user", entity_id=user.id)
     step = _service().next_step(user)
     return jsonify(status=step, challenge=_challenge(user, step))
 
@@ -212,7 +231,29 @@ def me():
     perms = sorted(set(c.get("perms", [])) | delegated_perms())
     acting = [{"stage": STAGE_LABEL.get(d["stage"], d["stage"]), "titular": d["titular_name"], "ends_on": d["ends_on"].isoformat()}
               for d in active_delegations()]
+    if "health:read" in c.get("perms", []):
+        _warn_if_services_down()
     return jsonify(username=c.get("username"), roles=c.get("roles", []), permissions=perms, delegations=acting)
+
+
+def _warn_if_services_down():
+    """Si el worker o el beat dejaron de latir, avisa a los administradores (una vez por hora).
+
+    Se revisa desde la API porque, con el worker caído, ninguna tarea programada podría avisar.
+    """
+    from sqlalchemy import text
+
+    from app.extensions import db
+    try:
+        age = db.session.execute(text("SELECT extract(epoch FROM now() - last_seen) FROM admin.service_heartbeats "
+                                      "WHERE service = 'scheduler'")).scalar()
+        if age is not None and age > 180:
+            from app.tasks.admin_tasks import _notify_admins
+            _notify_admins(f"system:down:{datetime.now(timezone.utc):%Y%m%d%H}", "Servicios en segundo plano detenidos",
+                           f"El worker o el planificador no registran actividad hace {int(age // 60)} minuto(s): "
+                           "no se procesan cargas, respaldos ni alertas.")
+    except Exception:  # noqa: BLE001 - el aviso nunca impide el ingreso
+        db.session.rollback()
 
 
 @bp.post("/step-up")

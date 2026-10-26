@@ -19,6 +19,15 @@ def _rows(sql, **params):
 
 class SqlRulesRepo:
     def current(self, engine, key):
+        if engine == "UNIDAD":
+            r = db.session.execute(text("SELECT name, kind, audit_domain, active, responsible_name, responsible_role "
+                                        "FROM engagement.units WHERE code = :k"), {"k": key}).first()
+            return dict(r._mapping) if r else None
+        if engine == "CODIFICACION":
+            cat, code = key.split(":", 1)
+            r = db.session.execute(text("SELECT label, sort_order, active FROM engagement.codification_catalog "
+                                        "WHERE catalog = :c AND code = :k"), {"c": cat, "k": code}).first()
+            return dict(r._mapping) if r else None
         if engine == "ANALITICO":
             r = db.session.execute(text("SELECT params, enabled FROM engine.rule_parameters WHERE rule_code = :k"),
                                    {"k": key}).first()
@@ -57,6 +66,26 @@ class SqlRulesRepo:
             "LEFT JOIN iam.users d ON d.id = q.decided_by WHERE q.status = :s ORDER BY q.created_at DESC LIMIT 200", s=status)
 
     def apply(self, engine, key, values, actor, is_new):
+        if engine == "UNIDAD":
+            if is_new:
+                db.session.execute(text("INSERT INTO engagement.units (code, name, kind, audit_domain, active, responsible_name, "
+                                        "responsible_role) VALUES (:k, :name, :kind, :audit_domain, :active, :responsible_name, "
+                                        ":responsible_role)"), {"k": key, **values})
+            else:
+                db.session.execute(text("UPDATE engagement.units SET name = :name, kind = :kind, audit_domain = :audit_domain, "
+                                        "active = :active, responsible_name = :responsible_name, responsible_role = :responsible_role "
+                                        "WHERE code = :k"), {"k": key, **values})
+            return
+        if engine == "CODIFICACION":
+            cat, code = key.split(":", 1)
+            db.session.execute(text("INSERT INTO engagement.codification_catalog (catalog, code, label, sort_order, active, updated_by) "
+                                    "VALUES (:c, :k, :label, :sort_order, :active, CAST(:u AS uuid)) ON CONFLICT (catalog, code) DO UPDATE "
+                                    "SET label = EXCLUDED.label, sort_order = EXCLUDED.sort_order, active = EXCLUDED.active, "
+                                    "updated_by = EXCLUDED.updated_by, updated_at = now()"),
+                               {"c": cat, "k": code, "u": actor, **values})
+            from app.modules.engagement import codification
+            codification.invalidate()
+            return
         if engine == "ANALITICO":
             db.session.execute(text(
                 "INSERT INTO engine.rule_parameters (rule_code, params, enabled, updated_by) "
@@ -88,6 +117,10 @@ class SqlRulesRepo:
         from app.modules.audit_engine.engine import REGISTRY
         saved = {r["rule_code"]: r for r in _rows("SELECT rule_code, params, enabled, updated_at FROM engine.rule_parameters")}
         return {
+            "unidades": _rows("SELECT code AS key, name AS label, kind, audit_domain, active, responsible_name, responsible_role "
+                              "FROM engagement.units ORDER BY code"),
+            "codificacion": _rows("SELECT catalog || ':' || code AS key, catalog, code, label, sort_order, active, updated_at "
+                                  "FROM engagement.codification_catalog ORDER BY catalog, sort_order, code"),
             "sudeaseg": _rows("SELECT topic AS key, label, keywords, criteria, cause, effect, recommendation, sort_order, active, "
                               "updated_at FROM engagement.regulatory_catalog ORDER BY sort_order, topic"),
             "sistemas": _rows("SELECT domain_key AS key, label, keywords, criteria, cause, effect, recommendation, field_test, "

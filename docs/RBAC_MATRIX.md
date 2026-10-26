@@ -26,11 +26,13 @@ Leyenda: ● permitido · (vacío) denegado.
 | `role:assign` | Solicitar asignación/retiro de roles (queda pendiente de aprobación) | ● |  |  |  |
 | `role:approve` | Aprobar o rechazar solicitudes de cambio de roles (doble control) |  |  | ● |  |
 | `session:revoke` | Revocar sesiones activas de un usuario | ● |  |  |  |
+| `admin:action_approve` | Aprobar las acciones del Administrador del Sistema (doble verificación) |  |  | ● |  |
 | `param:read` | Ver parámetros del sistema | ● |  | ● |  |
 | `param:update` | Modificar parámetros del sistema | ● |  |  |  |
 | `backup:read` | Ver estado de respaldos | ● |  |  |  |
 | `backup:run` | Ejecutar respaldo manual | ● |  |  |  |
-| `backup:restore` | Restaurar respaldo (doble control) | ● |  |  |  |
+| `backup:restore` | Solicitar la verificación de restauración de un respaldo (doble control) | ● |  |  |  |
+| `backup:restore_approve` | Aprobar la verificación de restauración de un respaldo (doble control) |  |  | ● |  |
 | `health:read` | Ver salud del servidor y servicios | ● |  |  |  |
 
 ## Ingesta de datos
@@ -111,6 +113,8 @@ Leyenda: ● permitido · (vacío) denegado.
 | `audit:sign_gerente` | Firma electrónica del Gerente de Control Interno |  |  |  | ● |
 | `audit:pac_send` | Enviar el PAC (anexo en Excel) a la unidad |  | ● |  |  |
 | `audit:general_read` | Acceso a auditorías generales existentes |  | ● |  |  |
+| `audit:annul_request` | Solicitar la anulación de una auditoría creada por error (doble control) | ● |  |  |  |
+| `audit:annul_approve` | Aprobar la anulación de una auditoría creada por error |  |  | ● |  |
 | `audit:financial_read` | Acceso exclusivo a auditorías financieras |  |  |  |  |
 | `audit:financial_manage` | Crear y trabajar auditorías financieras |  |  |  |  |
 | `audit:financial_execute` | Pantalla operativa del Auditor Financiero |  |  |  |  |
@@ -143,6 +147,9 @@ Ningún usuario puede acumular ambos permisos de un par. El servicio de asignaci
 | `role:assign` | `report:approve` | Quien asigna roles no aprueba informes. |
 | `role:assign` | `role:approve` | Quien solicita un cambio de roles no lo aprueba. |
 | `rule:propose` | `rule:configure` | Quien propone un cambio de reglas no lo aprueba. |
+| `audit:annul_request` | `audit:annul_approve` | Quien solicita anular una auditoría no lo aprueba. |
+| `backup:restore` | `backup:restore_approve` | Quien solicita una restauración no la aprueba. |
+| `param:update` | `admin:action_approve` | Quien solicita una acción de administración no la aprueba. |
 | `user:create` | `role:approve` | Quien crea usuarios no aprueba sus roles. |
 | `audit:manage` | `audit:report_approve` | Quien ejecuta la auditoría no aprueba su informe. |
 | `audit:report_draft` | `audit:sign_contralor` | Quien genera el informe no lo firma como Contralor. |

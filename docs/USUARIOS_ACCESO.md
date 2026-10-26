@@ -65,3 +65,19 @@ Todo queda en el audit trail: `USER_CREATED`, `USER_REMOVAL_REQUESTED`, `USER_RE
 ## Primer arranque
 
 `scripts/bootstrap_admin.py` crea el primer SYS_ADMIN y el primer CONTRALOR (personas distintas). Funciona solo mientras el rol no tenga usuarios activos y deja el evento `BOOTSTRAP_USER_CREATED`. Después de eso, todo cambio de rol pasa por doble control.
+
+## Herramientas del Administrador del Sistema (doble verificación)
+
+Toda acción del Administrador en estas herramientas pide **MFA reciente** al solicitarla y se ejecuta solo cuando el **Contralor la aprueba**, también con MFA reciente. Quien solicita no puede aprobar (`SOD_CONFLICTS` y `CHECK` en la base de datos). Las consultas (monitor, certificados, listados) no cambian nada y no pasan por aprobación.
+
+| Herramienta | Qué hace | Pantalla |
+|---|---|---|
+| Anulación de auditorías | Anula una auditoría en curso y sin informes: queda `ANULADA`, fuera de las listas y con el código liberado; la bitácora la conserva | Anulación de auditorías / Solicitudes |
+| Monitor | Estado del worker y del beat (latido cada minuto), respaldos, cargas fallidas o detenidas; avisa a los administradores | Monitoreo |
+| Certificados y firmas | Vencimiento de certificados personales e institucionales (aviso 30 días antes) y firmantes sin firma escaneada | Monitoreo |
+| Política de seguridad | Intentos antes del bloqueo, minutos de bloqueo, vigencia del MFA reciente, duración de la sesión y vencimiento de contraseñas | Monitoreo |
+| Revisión de accesos | Roles, último ingreso, cuentas sin uso, sin MFA o con conflicto SoD; exporta CSV, propone desactivaciones y guarda la revisión como evidencia | Revisión de accesos |
+| Sesiones activas | Lista quién está conectado y cierra sus sesiones | Revisión de accesos |
+| Catálogos | Unidades y sucursales y codificación institucional, con el mismo circuito que las reglas de los motores | Reglas de los motores |
+| Verificación de restauración | Comprueba que el respaldo existe, que su SHA-256 coincide y que `pg_restore` lo lee completo. No sobrescribe producción | Monitoreo |
+| Prueba de correo | Envía un correo de prueba con la configuración SMTP vigente | Monitoreo |

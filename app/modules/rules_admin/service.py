@@ -4,6 +4,8 @@ Motores:
   SUDEASEG  -> engagement.regulatory_catalog   (hallazgos de auditorías no de Sistemas)
   SISTEMAS  -> engagement.systems_rule_catalog (observaciones de Auditoría de Sistemas)
   ANALITICO -> engine.rule_parameters          (parámetros del motor analítico; las reglas son código)
+  UNIDAD    -> engagement.units                (unidades y sucursales auditables; clave = código)
+  CODIFICACION -> engagement.codification_catalog (codificación institucional; clave = CATÁLOGO:CÓDIGO)
 
 El Administrador del Sistema propone (rule:propose) una regla nueva o un cambio con su motivo; el
 Contralor (rule:configure) lo aprueba o rechaza. Quien propone no aprueba. Al aprobar se vuelve a
@@ -16,7 +18,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
-ENGINES = ("SUDEASEG", "SISTEMAS", "ANALITICO")
+ENGINES = ("SUDEASEG", "SISTEMAS", "ANALITICO", "UNIDAD", "CODIFICACION")
+UNIT_KEY_RX = re.compile(r"^[A-Z0-9][A-Z0-9-]{1,19}$")
+CODE_CATALOGS = ("AUDIT_TYPE", "COMPANY", "PLAN_TYPE", "PROCESS", "FREQUENCY", "REPORT_COMPANY")
+CODE_KEY_RX = re.compile(r"^(" + "|".join(CODE_CATALOGS) + r"):[A-Z]{1,6}$")
 KEY_RX = re.compile(r"^[a-z][a-z0-9_]{1,29}$")
 GENERAL_KEY = {"SUDEASEG": "general", "SISTEMAS": "general"}
 REASON_MIN = 10
@@ -31,6 +36,8 @@ CATALOG_FIELDS = {
     "SISTEMAS": ("label", "keywords", "criteria", "cause", "effect", "recommendation", "field_test",
                  "critical", "sort_order", "active"),
     "ANALITICO": ("params", "enabled"),
+    "UNIDAD": ("name", "kind", "audit_domain", "active", "responsible_name", "responsible_role"),
+    "CODIFICACION": ("label", "sort_order", "active"),
 }
 
 
@@ -132,6 +139,32 @@ def validate_analytic(defaults: dict, values: dict) -> dict:
     return {"params": params, "enabled": _bool(values.get("enabled", True), "enabled")}
 
 
+def validate_unit(values: dict) -> dict:
+    out = {"name": _text(values.get("name"), "name", 3, 120)}
+    kind = str(values.get("kind") or "").upper()
+    if kind not in ("SUCURSAL", "UNIDAD"):
+        raise RuleAdminError("INVALID_DATA", "kind: SUCURSAL o UNIDAD")
+    domain = str(values.get("audit_domain") or "GENERAL").upper()
+    if domain not in ("GENERAL", "FINANCIERA", "SISTEMAS"):
+        raise RuleAdminError("INVALID_DATA", "audit_domain: GENERAL, FINANCIERA o SISTEMAS")
+    out.update(kind=kind, audit_domain=domain, active=_bool(values.get("active", True), "active"))
+    for f in ("responsible_name", "responsible_role"):
+        v = str(values.get(f) or "").strip()
+        if len(v) > 200:
+            raise RuleAdminError("INVALID_DATA", f"{f}: máximo 200 caracteres")
+        out[f] = v or None
+    return out
+
+
+def validate_code(values: dict) -> dict:
+    out = {"label": _text(values.get("label"), "label", 2, 150), "active": _bool(values.get("active", True), "active")}
+    try:
+        out["sort_order"] = int(values.get("sort_order", 100))
+    except (TypeError, ValueError):
+        raise RuleAdminError("INVALID_DATA", "sort_order: número entero")
+    return out
+
+
 def _comparable(engine: str, row: dict | None) -> dict | None:
     if row is None:
         return None
@@ -161,6 +194,14 @@ class RulesAdminService:
                 raise RuleAdminError("NOT_FOUND", "Regla analítica inexistente: las reglas nuevas del motor analítico requieren desarrollo")
             base = current or {"params": {}, "enabled": True}
             return validate_analytic(defaults, {**base, **payload}), current
+        if engine == "UNIDAD":
+            if not UNIT_KEY_RX.match(key or ""):
+                raise RuleAdminError("INVALID_DATA", "Código de la unidad: 2 a 20 caracteres (mayúsculas, números y guiones)")
+            return validate_unit({**(current or {}), **payload}), current
+        if engine == "CODIFICACION":
+            if not CODE_KEY_RX.match(key or ""):
+                raise RuleAdminError("INVALID_DATA", "Clave: CATÁLOGO:CÓDIGO, p. ej. COMPANY:SC (código de 1 a 6 letras mayúsculas)")
+            return validate_code({**(current or {}), **payload}), current
         if not KEY_RX.match(key or ""):
             raise RuleAdminError("INVALID_DATA", "Clave de la regla: 2 a 30 caracteres (minúsculas, números y _), comenzando por letra")
         return validate_catalog(engine, key, {**(current or {}), **payload}), current

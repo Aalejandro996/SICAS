@@ -60,6 +60,39 @@ class CodeError(ValueError):
     pass
 
 
+# Los catálogos vigentes están en engagement.codification_catalog (editables con doble control);
+# los diccionarios anteriores quedan como respaldo si la tabla no existe o está vacía.
+_BUILTIN = {"AUDIT_TYPE": AUDIT_TYPES, "COMPANY": COMPANIES, "PLAN_TYPE": PLAN_TYPES, "PROCESS": PROCESSES,
+            "FREQUENCY": FREQUENCIES, "REPORT_COMPANY": REPORT_COMPANIES}
+_CACHE: dict = {"at": 0.0, "value": None}
+
+
+def invalidate() -> None:
+    _CACHE.update(at=0.0, value=None)
+
+
+def _catalog(name: str) -> dict:
+    import time
+    if _CACHE["value"] is None or time.monotonic() - _CACHE["at"] > 30:
+        loaded = {}
+        try:
+            from sqlalchemy import text
+
+            from app.extensions import db
+            for r in db.session.execute(text("SELECT catalog, code, label FROM engagement.codification_catalog "
+                                             "WHERE active ORDER BY catalog, sort_order, code")):
+                loaded.setdefault(r.catalog, {})[r.code] = r.label
+        except Exception:  # noqa: BLE001 - sin base o sin tabla: catálogos incorporados
+            try:
+                from app.extensions import db
+                db.session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            loaded = {}
+        _CACHE.update(at=time.monotonic(), value=loaded)
+    return _CACHE["value"].get(name) or _BUILTIN[name]
+
+
 def _pick(value, catalog: dict, name: str, default: str | None = None) -> str:
     v = str(value or default or "").strip().upper()
     if v not in catalog:
@@ -79,10 +112,10 @@ def defaults_for_domain(domain: str, unit_kind: str | None = None) -> dict:
 
 def file_fields(d: dict, domain: str, unit_kind: str | None = None) -> dict:
     base = defaults_for_domain(domain, unit_kind)
-    audit_type = _pick(d.get("audit_type"), AUDIT_TYPES, "Tipo de auditoría", base["audit_type"])
+    audit_type = _pick(d.get("audit_type"), _catalog("AUDIT_TYPE"), "Tipo de auditoría", base["audit_type"])
     if str(domain).upper() == "SISTEMAS" and audit_type != "S":
         raise CodeError("Las auditorías de Sistemas usan el tipo S (Sistema)")
-    return {"audit_type": audit_type, "company": _pick(d.get("company"), COMPANIES, "Compañía", "SC")}
+    return {"audit_type": audit_type, "company": _pick(d.get("company"), _catalog("COMPANY"), "Compañía", "SC")}
 
 
 # Proceso, siglas y tipo por defecto según el tipo de auditoría.
@@ -97,10 +130,10 @@ KIND_DEFAULTS = {
 def report_fields(d: dict, domain: str, audit_kind: str | None = None) -> dict:
     base = {**defaults_for_domain(domain), **KIND_DEFAULTS.get(str(audit_kind or "").upper(), {})}
     return {
-        "plan_type": _pick(d.get("plan_type"), PLAN_TYPES, "Siglas (planificada/especial)", base.get("plan_type", "P")),
-        "process": _pick(d.get("process"), PROCESSES, "Proceso", base["process"]),
-        "frequency": _pick(d.get("frequency"), FREQUENCIES, "Tipo (frecuencia)", base.get("frequency", "G")),
-        "report_company": _pick(d.get("report_company"), REPORT_COMPANIES, "Compañía del informe", "SC"),
+        "plan_type": _pick(d.get("plan_type"), _catalog("PLAN_TYPE"), "Siglas (planificada/especial)", base.get("plan_type", "P")),
+        "process": _pick(d.get("process"), _catalog("PROCESS"), "Proceso", base["process"]),
+        "frequency": _pick(d.get("frequency"), _catalog("FREQUENCY"), "Tipo (frecuencia)", base.get("frequency", "G")),
+        "report_company": _pick(d.get("report_company"), _catalog("REPORT_COMPANY"), "Compañía del informe", "SC"),
     }
 
 
@@ -126,5 +159,5 @@ def report_code(prefix: str, n: int, year: int) -> str:
 
 def catalogs() -> dict:
     """Catálogos para los formularios."""
-    return {"audit_types": AUDIT_TYPES, "companies": COMPANIES, "plan_types": PLAN_TYPES, "processes": PROCESSES,
-            "frequencies": FREQUENCIES, "report_companies": REPORT_COMPANIES}
+    return {"audit_types": _catalog("AUDIT_TYPE"), "companies": _catalog("COMPANY"), "plan_types": _catalog("PLAN_TYPE"),
+            "processes": _catalog("PROCESS"), "frequencies": _catalog("FREQUENCY"), "report_companies": _catalog("REPORT_COMPANY")}

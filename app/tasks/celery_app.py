@@ -24,12 +24,17 @@ def make_celery(app) -> Celery:
             "app.tasks.ingestion_tasks.*": {"queue": "ingestion"},
             "app.tasks.audit_tasks.*": {"queue": "ingestion"},
             "app.tasks.alert_tasks.*": {"queue": "alerts"},
+            "app.tasks.admin_tasks.*": {"queue": "reports"},
         },
         beat_schedule={
             "verificar-cadena-audit-trail": {"task": "app.tasks.audit_tasks.verify_audit_chain",
                                              "schedule": 3600.0},
             "particiones-audit-trail": {"task": "app.tasks.audit_tasks.ensure_audit_partitions", "schedule": 86400.0},
             "anclar-cadena-audit-trail": {"task": "app.tasks.audit_tasks.anchor_audit_chain", "schedule": 21600.0},
+            # Monitor del Administrador: latido de worker y beat, alertas y vencimiento de certificados.
+            "latido-servicios": {"task": "app.tasks.admin_tasks.heartbeat", "schedule": 60.0},
+            "vigilar-servicios": {"task": "app.tasks.admin_tasks.watch_services", "schedule": 3600.0},
+            "avisar-certificados": {"task": "app.tasks.admin_tasks.warn_certificates", "schedule": 86400.0},
         },
     )
 

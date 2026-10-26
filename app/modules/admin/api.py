@@ -213,6 +213,11 @@ def deactivate_signature(uid, sid):
     return jsonify(status="INACTIVE")
 
 
+from .tools import register_tools  # noqa: E402
+
+register_tools(bp)
+
+
 # ------------------------------------------------------------------ roles, parámetros, respaldos, salud
 import json as _json
 import os as _os
@@ -240,6 +245,8 @@ def get_params():
 @bp.put("/params/<key>")
 @permission_required("param:update", step_up=True)
 def put_param(key):
+    if key == "security_policy":
+        return jsonify(error="La política de seguridad se cambia por solicitud con aprobación del Contralor (Monitoreo › Política de seguridad)"), 409
     try:
         value = validate_param(key, (request.get_json(silent=True) or {}).get("value"))
     except ParamError as e:

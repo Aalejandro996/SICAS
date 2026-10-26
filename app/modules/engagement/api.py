@@ -166,7 +166,8 @@ def stage_required(*needed, step_up=False):
             if not set(needed) & perms():
                 return _deny("Permiso insuficiente")
             if step_up:
-                max_age = current_app.config.get("STEP_UP_MAX_AGE_SECONDS", 300)
+                from app.core.security.policy import current as current_policy
+                max_age = current_policy()["step_up_seconds"]
                 if time.time() - claims.get("mfa_at", 0) > max_age:
                     return jsonify(error="Reautenticación MFA requerida", step_up_required=True), 401
             return fn(*args, **kwargs)

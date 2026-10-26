@@ -30,6 +30,11 @@ def _to_user(r) -> User:
 
 
 class SqlUserRepo:
+    def require_password_change(self, user_id):
+        """La contraseña venció según la política: el próximo paso del ingreso es cambiarla."""
+        db.session.execute(text("UPDATE iam.users SET must_change_password = true WHERE id = CAST(:u AS uuid)"), {"u": user_id})
+        db.session.commit()
+
     def find_by_username(self, username):
         r = db.session.execute(text(_FIND.replace("{where}", "u.username = :v")), {"v": username}).first()
         return _to_user(r) if r else None
