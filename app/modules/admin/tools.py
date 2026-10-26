@@ -277,6 +277,7 @@ def register_tools(bp):
         status = request.args.get("status", "PENDING").upper()
         return jsonify(requests=_rows(
             "SELECT q.id::text, q.action, q.summary, q.payload, q.reason, q.status, q.created_at, u.username AS requested_by, "
+            "(q.secret_enc IS NOT NULL) AS has_secret, "
             "d.username AS decided_by, q.decided_at, q.decision_note, q.result FROM admin.action_requests q "
             "JOIN iam.users u ON u.id = q.requested_by LEFT JOIN iam.users d ON d.id = q.decided_by "
             "WHERE (:s = 'ALL' OR q.status = :s) ORDER BY q.created_at DESC LIMIT 100", s=status))
@@ -293,22 +294,50 @@ def register_tools(bp):
         if q["requested_by"] == get_jwt_identity():
             return _err("Doble control: quien solicita la acción no puede aprobarla", 403)
         approve, note = bool(d.get("approve")), str(d.get("note") or "")[:1000] or None
-        status, result = ("REJECTED", None)
+        status, result, secret = ("REJECTED", None, None)
         if approve:
             try:
                 result = ACTIONS[q["action"]]["execute"](q["payload"], q["requested_by"], get_jwt_identity())
+                secret = result.pop("_secret", None) if isinstance(result, dict) else None
                 status = "APPROVED"
             except ValueError as ex:
                 db.session.rollback()
                 status, result = "FAILED", {"error": str(ex)}
+        secret_enc = None
+        if secret:
+            # Solo lo podrá leer, una vez, el Administrador que lo solicitó.
+            from app.core.security.crypto import KeyRing
+            secret_enc = KeyRing.from_env().encrypt(secret.encode(), aad=f"action:{rid}".encode())
         db.session.execute(text("UPDATE admin.action_requests SET status = :s, decided_by = CAST(:u AS uuid), decided_at = now(), "
-                                "decision_note = :n, result = CAST(:r AS jsonb) WHERE id = CAST(:i AS uuid)"),
+                                "decision_note = :n, result = CAST(:r AS jsonb), secret_enc = :se WHERE id = CAST(:i AS uuid)"),
                            {"s": status, "u": get_jwt_identity(), "n": note, "r": json.dumps(result, default=str) if result is not None else None,
-                            "i": str(rid)})
+                            "se": secret_enc, "i": str(rid)})
         db.session.commit()
         audit("ADMIN_ACTION_" + status, outcome="FAILURE" if status == "FAILED" else "SUCCESS", entity_type="admin_action",
               entity_id=str(rid), after_data={"action": q["action"], "result": result, "note": note}, request_id=g.request_id)
         return jsonify(status=status, result=result)
+
+    @bp.post("/actions/<uuid:rid>/secret")
+    @permission_required("user:update", step_up=True)
+    def action_secret(rid):
+        """Contraseña temporal de un restablecimiento aprobado: solo para quien lo solicitó y una sola vez."""
+        from app.core.security.crypto import CryptoError, KeyRing
+        q = _one("SELECT requested_by::text, status, secret_enc FROM admin.action_requests WHERE id = CAST(:i AS uuid) FOR UPDATE", i=str(rid))
+        if q is None or q["requested_by"] != get_jwt_identity():
+            return _err("No encontrada", 404)
+        if q["status"] != "APPROVED" or not q["secret_enc"]:
+            return _err("La contraseña temporal ya fue consultada o la solicitud no está aprobada", 409)
+        try:
+            secret = KeyRing.from_env().decrypt(q["secret_enc"], aad=f"action:{rid}".encode()).decode()
+        except CryptoError:
+            return _err("No se pudo recuperar la contraseña temporal; solicite un nuevo restablecimiento", 500)
+        db.session.execute(text("UPDATE admin.action_requests SET secret_enc = NULL, secret_viewed_at = now() WHERE id = CAST(:i AS uuid)"),
+                           {"i": str(rid)})
+        db.session.commit()
+        audit("TEMP_PASSWORD_VIEWED", entity_type="admin_action", entity_id=str(rid), request_id=g.request_id)
+        response = jsonify(temporary_password=secret, note="Se muestra una sola vez. Entréguela al usuario por un canal seguro; deberá cambiarla al ingresar.")
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
 
 # ------------------------------------------------------------------ acciones del Administrador (validación y ejecución)
@@ -405,7 +434,31 @@ def _x_smtp(payload, requester, approver):
     return {"sent": True}
 
 
+def _v_reset_password(payload):
+    u = _user_ref(payload)
+    if not u["is_active"]:
+        raise ValueError("La cuenta está desactivada: actívela antes de restablecer la contraseña")
+    return {"user_id": u["id"]}, f"Restablecer la contraseña de {u['full_name']} ({u['username']})"
+
+
+def _x_reset_password(payload, requester, approver):
+    from app.modules.auth.password import Argon2Hasher
+
+    from .service import generate_temp_password
+    if payload["user_id"] in (requester, approver):
+        raise ValueError("Nadie restablece su propia contraseña por esta vía")
+    temp = generate_temp_password()
+    db.session.execute(text(
+        "UPDATE iam.users SET password_hash = :h, password_changed_at = now(), must_change_password = true, failed_attempts = 0, "
+        "locked_until = NULL, lockouts = 0 WHERE id = CAST(:u AS uuid) AND is_active AND removed_at IS NULL"),
+        {"h": Argon2Hasher().hash(temp), "u": payload["user_id"]})
+    db.session.execute(text("UPDATE iam.refresh_tokens SET revoked_at = now() WHERE user_id = CAST(:u AS uuid) AND revoked_at IS NULL"),
+                       {"u": payload["user_id"]})
+    return {"reset": payload["user_id"], "unlocked": True, "_secret": temp}
+
+
 ACTIONS = {
+    "RESET_PASSWORD": {"validate": _v_reset_password, "execute": _x_reset_password},
     "SECURITY_POLICY": {"validate": _v_policy, "execute": _x_policy},
     "REVOKE_SESSIONS": {"validate": _v_revoke, "execute": _x_revoke},
     "DEACTIVATE_USER": {"validate": _v_deactivate, "execute": _x_deactivate},
@@ -413,7 +466,7 @@ ACTIONS = {
     "SMTP_TEST": {"validate": _v_smtp, "execute": _x_smtp},
 }
 ACTION_PERMS = {"SECURITY_POLICY": "param:update", "REVOKE_SESSIONS": "session:revoke", "DEACTIVATE_USER": "user:deactivate",
-                "ACCESS_REVIEW": "user:update", "SMTP_TEST": "param:update"}
+                "ACCESS_REVIEW": "user:update", "SMTP_TEST": "param:update", "RESET_PASSWORD": "user:update"}
 
 
 # ------------------------------------------------------------------ consultas compartidas con las tareas

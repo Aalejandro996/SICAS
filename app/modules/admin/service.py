@@ -86,7 +86,8 @@ class AdminRepo(Protocol):
 
 
 def generate_temp_password(n: int = 16) -> str:
-    alphabet = string.ascii_letters + string.digits + "!#$%*+-=?"
+    # Sin caracteres que se confunden al copiarlos o dictarlos (l, I, 1, O, o, 0).
+    alphabet = "".join(c for c in string.ascii_letters + string.digits if c not in "lI1Oo0") + "!#$%*+-=?"
     while True:
         pw = "".join(secrets.choice(alphabet) for _ in range(n))
         if not validate_password(pw):

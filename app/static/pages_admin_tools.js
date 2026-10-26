@@ -5,7 +5,7 @@
   'use strict';
   const S = window.SICAS, { h, can, tbl, fmt } = S;
   const ACTION_LABEL = { SECURITY_POLICY: 'Política de seguridad', REVOKE_SESSIONS: 'Cerrar sesiones', DEACTIVATE_USER: 'Desactivar cuenta',
-    ACCESS_REVIEW: 'Revisión de accesos', SMTP_TEST: 'Prueba de correo' };
+    ACCESS_REVIEW: 'Revisión de accesos', SMTP_TEST: 'Prueba de correo', RESET_PASSWORD: 'Restablecer contraseña' };
   const STATE = { ok: 'Funcionando', down: 'Detenido', unknown: 'Sin datos' };
   const POLICY_LABEL = { max_failed_logins: 'Intentos fallidos antes del bloqueo', lockout_minutes: 'Minutos de bloqueo inicial',
     step_up_seconds: 'Vigencia del MFA reciente (segundos)', session_hours: 'Duración máxima de la sesión (horas)',
@@ -22,14 +22,28 @@
     return d;
   };
 
-  const myRequests = async () => {
+  // Contraseña temporal de un restablecimiento aprobado: solo quien lo solicitó y una sola vez.
+  S.showTempPassword = async (id) => {
+    if (!confirm('La contraseña temporal se muestra UNA sola vez. ¿Mostrarla ahora?')) return false;
+    const d = await S.send(`/admin/actions/${id}/secret`, 'POST');
+    if (!d) return false;
+    const m = S.modal('Contraseña temporal', h('div', null, h('p', null, d.note), h('div', { class: 'temp' }, d.temporary_password)));
+    m.footer.append(h('button', { onclick: () => m.close() }, 'Entendido'));
+    return true;
+  };
+
+  S.myAdminRequests = async (redraw) => {
     const d = await S.get('/admin/actions?status=ALL');
     if (!d) return null;
     return h('div', { class: 'panel' }, h('h3', null, 'Solicitudes del Administrador'),
       tbl(['Fecha', 'Acción', 'Detalle', 'Motivo', 'Solicitó', 'Estado', 'Resolvió', 'Resultado'], d.requests.map((q) => [
         fmt(q.created_at), ACTION_LABEL[q.action] || q.action, q.summary, q.reason, q.requested_by, S.badge(q.status),
-        q.decided_by ? `${q.decided_by} (${fmt(q.decided_at)})` : '—', q.result ? JSON.stringify(q.result) : '—'])));
+        q.decided_by ? `${q.decided_by} (${fmt(q.decided_at)})` : '—',
+        q.has_secret && q.requested_by === S.user?.username
+          ? h('button', { class: 'sm', onclick: async () => { if (await S.showTempPassword(q.id) && redraw) redraw(); } }, 'Ver contraseña temporal')
+          : (q.result ? JSON.stringify(q.result) : '—')])));
   };
+  const myRequests = () => S.myAdminRequests();
 
   // ------------------------------------------------------------------ Monitoreo
   S.pages.push({ id: 'admin-monitor', title: 'Monitoreo', perms: ['health:read'], render: async (el) => {

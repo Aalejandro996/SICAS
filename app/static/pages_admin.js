@@ -725,6 +725,12 @@
         h('div', { class: 'actions' },
           can('role:assign') ? h('button', { onclick: () => roleReq(u) }, 'Rol…') : null,
           can('user:unlock') ? h('button', { class: 'secondary', onclick: () => act(u, 'unlock', 'Desbloquear a ' + u.username) }, 'Desbloquear') : null,
+          can('user:update') && u.is_active && S.requestAdminAction ? h('button', { class: 'secondary', onclick: async () => {
+            const r = await S.requestAdminAction('RESET_PASSWORD', { user_id: u.id }, 'Restablecer la contraseña de ' + u.username,
+              'Se genera una contraseña temporal nueva, se desbloquea la cuenta y se cierran sus sesiones; el usuario deberá cambiarla al ingresar.');
+            if (r) S.say('Solicitud registrada. Cuando el Contralor la apruebe, vea la contraseña temporal aquí abajo, en «Solicitudes del Administrador».', true);
+            draw();
+          } }, 'Restablecer clave…') : null,
           can('user:reset_mfa') ? h('button', { class: 'secondary', onclick: () => act(u, 'reset-mfa', 'Restablecer el MFA de ' + u.username) }, 'Reset MFA') : null,
           can('user:deactivate') ? h('button', { class: u.is_active ? 'danger' : 'ok', onclick: () => act(u, u.is_active ? 'deactivate' : 'activate', (u.is_active ? 'Desactivar a ' : 'Activar a ') + u.username) }, u.is_active ? 'Desactivar' : 'Activar') : null,
           can('user:read') ? h('button', { class: 'secondary', title: 'Firmas escaneadas (Jefe que aprueba, Gerencia y Contralor)', onclick: () => signatures(u) }, 'Firmas…') : null,
@@ -756,6 +762,8 @@
         S.say('Firma registrada.', true); m.close(); signatures(u);
       } }, 'Cargar firma'));
       m.footer.append(h('button', { class: 'secondary', onclick: () => m.close() }, 'Cerrar'));
+      // Solicitudes del Administrador (p. ej. ver la contraseña temporal de un restablecimiento aprobado).
+      if (S.myAdminRequests && can('user:update')) { const panel = await S.myAdminRequests(draw); if (panel) el.append(panel); }
     };
     const removal = async (u) => {
       const v = await S.ask('Baja definitiva: ' + u.username, [
