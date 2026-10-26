@@ -16,6 +16,10 @@ JEFE = "00000000-0000-0000-0000-000000000002"
 GERENTE = "00000000-0000-0000-0000-000000000003"
 CONTRALOR = "00000000-0000-0000-0000-000000000004"
 SHA = "a" * 64
+OBS_ID = "00000000-0000-0000-0000-000000000501"
+SHEET_ID = "00000000-0000-0000-0000-000000000301"
+ITEM_ID = "00000000-0000-0000-0000-000000000401"
+FOREIGN_ID = "00000000-0000-0000-0000-000000000999"
 
 JEFE_PERMS = ["audit:read", "audit:systems_read", "audit:systems_review", "audit:report_approve_jefe"]
 GERENTE_PERMS = ["audit:read_final", "audit:report_approve_gerente", "audit:sign_gerente"]
@@ -139,6 +143,10 @@ class ReportTransitionApiTests(unittest.TestCase):
         }
         self.audit = {"id": AUDIT_ID, "code": "AUD-SIS-0001", "audit_domain": "SISTEMAS"}
         self.team = [{"user_id": AUDITOR, "name": "Auditor Uno"}]
+        self.points = []
+        self.reopened = None
+        self.observations = [{"id": OBS_ID, "seq": 1, "title": "Gestión de cambios", "audit_id": AUDIT_ID}]
+        self.sheets = [{"id": SHEET_ID, "title": "ERP / TI", "items": [{"id": ITEM_ID, "ref": "ERP-01"}]}]
 
         patches = [
             patch.object(engagement_api.repo, "get_report", side_effect=lambda rid: dict(self.report)),
@@ -148,6 +156,15 @@ class ReportTransitionApiTests(unittest.TestCase):
                 {"signer_type": "AUDITOR_INICIALES", "user_id": AUDITOR, "body_sha256": SHA, "display": "AU"},
             ]),
             patch.object(engagement_api.repo, "signed_docs", return_value=[]),
+            patch.object(engagement_api.repo, "review_points", side_effect=lambda rid: list(self.points)),
+            patch.object(engagement_api.repo, "worksheets_with_items", side_effect=lambda aid: list(self.sheets)),
+            patch.object(engagement_api.repo, "observations", side_effect=lambda aid: list(self.observations)),
+            patch.object(engagement_api.repo, "latest_final", side_effect=lambda aid: dict(self.report)),
+            patch.object(engagement_api.repo, "reopening", side_effect=lambda rid: self.reopened),
+            patch.object(engagement_api.repo, "get_review_point", side_effect=lambda pid: self.points[0] if self.points else None),
+            patch.object(engagement_api.repo, "attend_review_point", return_value=True),
+            patch.object(engagement_api.repo, "reopen_report"),
+            patch.object(engagement_api.repo, "db"),
             patch.object(engagement_api, "_team_info", side_effect=lambda aid: list(self.team)),
             patch.object(engagement_api, "_phase_snapshot", return_value=None),
             patch.object(engagement_api, "log"),
@@ -162,6 +179,7 @@ class ReportTransitionApiTests(unittest.TestCase):
         self.transition = patch.object(engagement_api.repo, "transition_report").start()
         self.addCleanup(patch.stopall)
         self.add_comment = patch.object(engagement_api.repo, "add_comment").start()
+        self.stage_change = patch.object(engagement_api.repo, "stage_change").start()
 
     def headers(self, user, perms, roles=()):
         with self.app.app_context():
@@ -255,6 +273,103 @@ class ReportTransitionApiTests(unittest.TestCase):
         response = self.post("submit", AUDITOR, AUDITOR_PERMS)
         self.assertEqual(response.status_code, 409)
         self.transition.assert_not_called()
+
+    # ---------------------------------------------------------------- puntos de devolución
+    def test_return_records_validated_review_points(self):
+        response = self.post("return", JEFE, JEFE_PERMS, json={
+            "comment": "Corregir los puntos indicados antes de reenviar",
+            "points": [
+                {"target_type": "OBSERVATION", "target_id": OBS_ID, "description": "Precisar la condición"},
+                {"target_type": "ITEM", "target_id": ITEM_ID, "description": "Falta evidencia del control"},
+                {"description": "Revisar la conclusión general"},
+            ],
+        })
+        self.assertEqual(response.status_code, 200, response.get_json())
+        points = self.transition.call_args.kwargs["review_points"]
+        self.assertEqual([p["target_type"] for p in points], ["OBSERVATION", "ITEM", "GENERAL"])
+        self.assertEqual(points[0]["target_label"], "Observación 1: Gestión de cambios")
+        self.assertEqual(points[1]["target_label"], "ERP / TI · ERP-01")
+        self.assertIsNone(points[2]["target_id"])
+
+    def test_return_rejects_points_from_another_audit(self):
+        response = self.post("return", JEFE, JEFE_PERMS, json={
+            "comment": "Corregir los puntos indicados antes de reenviar",
+            "points": [{"target_type": "OBSERVATION", "target_id": FOREIGN_ID, "description": "Punto ajeno"}],
+        })
+        self.assertEqual(response.status_code, 400)
+        self.transition.assert_not_called()
+
+    def test_resubmit_is_blocked_while_points_are_pending(self):
+        self.report["status"] = "RETURNED"
+        self.points = [{"id": 7, "report_id": REPORT_ID, "status": "PENDIENTE", "description": "Precisar la condición"}]
+        response = self.post("submit", AUDITOR, AUDITOR_PERMS)
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("sin atender", response.get_json()["error"])
+        self.transition.assert_not_called()
+
+    def test_team_attends_point_with_note_and_history_event(self):
+        self.report["status"] = "RETURNED"
+        self.points = [{"id": 7, "report_id": REPORT_ID, "status": "PENDIENTE", "description": "Precisar la condición"}]
+        response = self.client.post("/audits/review-points/7/attend", headers=self.headers(AUDITOR, AUDITOR_PERMS + ["audit:manage"]),
+                                    json={"note": "Se reformuló la condición con la evidencia"})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        event = self.stage_change.call_args.args[0]
+        self.assertEqual(event["action"], "REVIEW_POINT_ATTENDED")
+        self.assertEqual(event["reason"], "Se reformuló la condición con la evidencia")
+
+    def test_reviewer_cannot_attend_points(self):
+        self.report["status"] = "RETURNED"
+        self.points = [{"id": 7, "report_id": REPORT_ID, "status": "PENDIENTE", "description": "Precisar la condición"}]
+        response = self.client.post("/audits/review-points/7/attend", headers=self.headers(JEFE, JEFE_PERMS + ["audit:manage"]),
+                                    json={"note": "Intento del revisor de cerrar el punto"})
+        self.assertEqual(response.status_code, 403)
+        self.stage_change.assert_not_called()
+
+    # ---------------------------------------------------------------- reapertura tras la firma
+    def signed(self):
+        self.report.update(status="SIGNED", jefe_approved_by=JEFE, jefe_approved_body_sha256=SHA,
+                           gerente_approved_by=GERENTE, gerente_approved_body_sha256=SHA,
+                           contralor_approved_by=CONTRALOR, contralor_approved_body_sha256=SHA)
+        self.audit["status"] = "IN_PROGRESS"
+
+    def test_contralor_reopens_signed_report_with_reason(self):
+        self.signed()
+        response = self.post("reopen", CONTRALOR, CONTRALOR_PERMS, json={"reason": "Hallazgo posterior sobre evidencia del control C-04"})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        engagement_api.repo.reopen_report.assert_called_once()
+        self.assertEqual(self.stage_change.call_args.args[0]["action"], "FINAL_REPORT_REOPENED")
+
+    def test_reopen_requires_signed_latest_version_and_reason(self):
+        response = self.post("reopen", CONTRALOR, CONTRALOR_PERMS, json={"reason": "Hallazgo posterior sobre evidencia"})
+        self.assertEqual(response.status_code, 409)  # aún IN_REVIEW
+        self.signed()
+        response = self.post("reopen", CONTRALOR, CONTRALOR_PERMS, json={"reason": "corto"})
+        self.assertEqual(response.status_code, 400)
+        self.reopened = {"reason": "ya reabierto"}
+        response = self.post("reopen", CONTRALOR, CONTRALOR_PERMS, json={"reason": "Hallazgo posterior sobre evidencia del control"})
+        self.assertEqual(response.status_code, 409)
+        engagement_api.repo.reopen_report.assert_not_called()
+
+    def test_only_contralor_can_reopen(self):
+        self.signed()
+        for user, perms in ((JEFE, JEFE_PERMS), (GERENTE, GERENTE_PERMS), (AUDITOR, AUDITOR_PERMS)):
+            response = self.post("reopen", user, perms, json={"reason": "Intento de reapertura no autorizada del informe"})
+            self.assertEqual(response.status_code, 403, user)
+        engagement_api.repo.reopen_report.assert_not_called()
+
+    def test_reopened_signed_version_unlocks_audit(self):
+        self.signed()
+        self.assertTrue(engagement_api.final_locked(AUDIT_ID))
+        self.reopened = {"reason": "Hallazgo posterior"}
+        self.assertFalse(engagement_api.final_locked(AUDIT_ID))
+
+    def test_audit_stays_locked_through_every_review_stage(self):
+        for status in ("IN_REVIEW", "GERENCIA", "CONTRALOR", "SIGNED"):
+            self.report["status"] = status
+            self.assertTrue(engagement_api.final_locked(AUDIT_ID), status)
+        for status in ("DRAFT", "RETURNED"):
+            self.report["status"] = status
+            self.assertFalse(engagement_api.final_locked(AUDIT_ID), status)
 
 
 if __name__ == "__main__":

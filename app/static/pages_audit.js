@@ -8,6 +8,7 @@
   const LINE = Object.fromEntries(LINES), KIND = Object.fromEntries(KINDS);
   const PHASES = ['PLANIFICACION', 'TRABAJO_CAMPO', 'INFORME'];
   const RES = [['', '—'], ['CUMPLE', 'Cumple'], ['PARCIAL', 'Parcial'], ['NO_CUMPLE', 'No cumple'], ['NO_APLICA', 'No aplica'], ['EXCEPCION', 'Excepción']];
+  const L = (v) => (v == null || v === '' ? '—' : (S.label2 || ((x) => x))(S.label(v)));
   const closeBtn = (m, t = 'Cerrar') => h('button', { class: 'secondary', onclick: () => m.close() }, t);
   const dlg = (title, body) => { const m = S.modal(title, body); return m; };
 
@@ -162,13 +163,13 @@
     ctx = { d, aid, el, tab: tab || 'resumen', canWrite: d.is_member && d.audit.status === 'IN_PROGRESS' && !d.locked };
     const a = d.audit;
     const body = h('div');
-    const tabs = [['resumen', 'Resumen'], ['cedulas', 'Cédulas'], ['observaciones', 'Observaciones'], ['evidencias', 'Evidencias'], ['sinconexion', 'Sin conexión'], ['informes', 'Informes y PAC']];
+    const tabs = [['resumen', 'Resumen'], ['cedulas', 'Cédulas'], ['observaciones', 'Observaciones'], ['evidencias', 'Evidencias'], ['sinconexion', 'Sin conexión'], ['informes', 'Informes y PAC'], ['bitacora', 'Bitácora']];
     el.replaceChildren(h('div', { class: 'row' }, h('a', { href: '#/audits' }, '← Auditorías')),
       h('h2', null, `${a.code} — ${a.unit_name}`),
       h('div', { class: 'row' }, S.badge(a.status), h('span', null, `${a.modality} · ${a.file_code} · ${S.date(a.period_from)} → ${S.date(a.period_to)} · `), S.ratingBadge(d.overall.rating),
         d.overall.final != null ? h('b', null, ' ' + S.score(d.overall.final) + '%') : null, d.locked ? h('span', { class: 'badge PENDING' }, 'Bloqueada: informe en revisión/aprobado') : null),
       h('div', { class: 'tabs' }, tabs.map(([id, t]) => h('button', { class: id === ctx.tab ? 'active' : '', onclick: () => { location.hash = `#/audits/${aid}/${id}`; } }, t))), body);
-    ({ resumen, cedulas, observaciones, evidencias, sinconexion, informes })[ctx.tab](body);
+    ({ resumen, cedulas, observaciones, evidencias, sinconexion, informes, bitacora })[ctx.tab](body);
   }
   const reload = () => renderAudit(ctx.el, ctx.aid, ctx.tab);
 
@@ -192,6 +193,7 @@
       : 0;
 
     const scoreText = (v) => v == null ? 'Pendiente' : `${S.score(v)}%`;
+    const signed = (v) => v == null ? '—' : (v > 0 ? '+' : '') + S.score(v);
     const scorePct = (v) => v == null
       ? 0
       : Math.min(100, Math.max(0, Number(v) || 0));
@@ -402,7 +404,9 @@
         scoreText(overall.final),
         `${Number(overall.scored || 0)} / ${Number(overall.items || 0)}`,
         String(Number(overall.exceptions || 0)),
-        snapshot.captured_username || '—'
+        snapshot.captured_username || '—',
+        signed(snapshot.variation?.overall_delta),
+        snapshot.scorecard?.reason || '—'
       ];
     });
     const phaseSnapshotPanel = h('section', { class: 'panel audit-summary-panel' },
@@ -413,7 +417,7 @@
       ),
       phaseSnapshots.length
         ? tbl(
-            ['Fecha', 'Fase capturada', 'Evento', 'Automática', 'Final', 'Ítems calificados', 'Excepciones', 'Usuario'],
+            ['Fecha', 'Fase capturada', 'Evento', 'Automática', 'Final', 'Ítems calificados', 'Excepciones', 'Usuario', 'Variación', 'Motivo'],
             snapshotRows
           )
         : h('p', { class: 'muted' }, 'Todavía no hay instantáneas históricas. Se crearán en los próximos eventos de fase o cierre.')
@@ -443,6 +447,26 @@
         : h('p', { class: 'muted' }, 'La comparación por cédula aparecerá después de la primera instantánea.')
     );
 
+    const changedItems = phaseSnapshots.flatMap((snapshot) => (snapshot.variation?.items || []).map((it) => [
+      fmt(snapshot.captured_at), S.label2(snapshot.phase), it.sheet || '—', it.ref, scoreText(it.before), scoreText(it.after),
+      signed(it.delta), it.manual_reason || it.info_exception || it.observation || '—'
+    ]));
+    const changedPanel = changedItems.length ? h('section', { class: 'panel audit-summary-panel' },
+      h('h3', null, 'Ítems que originaron los ajustes entre fases'),
+      tbl(['Fecha', 'Fase', 'Cédula', 'Ref.', 'Antes', 'Después', 'Variación', 'Sustento'], changedItems)) : null;
+
+    const cmp = d.comparison;
+    const cmpRow = (label, c) => [label, String(c.reference.items), scoreText(c.reference.expected_score),
+      `${S.score(c.reference.acceptance_threshold)}% (${L(c.reference.acceptance_level)})`,
+      String(c.result.affirmative), `${c.result.answered} / ${c.result.answered + c.result.pending}`,
+      scoreText(c.result.score), S.ratingBadge(c.result.rating), signed(c.differences.vs_expected), signed(c.differences.vs_threshold),
+      c.differences.meets_threshold == null ? '—' : c.differences.meets_threshold ? '✔ Alcanza' : '✘ No alcanza'];
+    const comparisonPanel = cmp ? h('section', { class: 'panel audit-summary-panel' },
+      h('h3', null, 'Cuadro comparativo: referencia y resultado'),
+      h('p', { class: 'muted' }, 'Referencia: nota esperada 100 y nivel de aceptación Satisfactorio. La nota obtenida es la final vigente (incluye ajustes manuales justificados).'),
+      tbl(['Cédula', 'Ítems', 'Nota esperada', 'Umbral', 'Afirmativas', 'Respondidas', 'Nota obtenida', 'Nivel', 'Dif. esperada', 'Dif. umbral', 'Aceptación'],
+        [...(cmp.worksheets || []).map((w) => cmpRow(w.title || 'Cédula', w)), cmpRow('GLOBAL', cmp.overall)])) : null;
+
     const history = h('details', { class: 'audit-history-details' },
       h('summary', null, `Historial de fases (${phaseLog.length})`),
       tbl(
@@ -461,8 +485,10 @@
       kpis,
       h('div', { class: 'audit-summary-layout' }, dataPanel, teamPanel),
       ratingPanel,
+      comparisonPanel,
       resultsPanel,
       phaseSnapshotPanel,
+      changedPanel,
       worksheetSnapshotPanel,
       history
     );
@@ -627,7 +653,7 @@
     }
     if (edit) actions.append(h('button', { class: 'sm', onclick: () => obsForm({ item_id: it.id, title: '', condition: it.observation || '' }) }, '+ Obs.'));
     return h('tr', null, h('td', null, h('b', null, code)), h('td', null, criterion?.section || '—'), h('td', { title: criterion?.text || '' }, criterion?.text || 'Pregunta no disponible'),
-      h('td', null, select('control', [['SI', 'Sí'], ['NO', 'No'], ['PARCIAL', 'Parcialmente']])),
+      h('td', null, select('control', [['SI', 'Sí'], ['NO', 'No']])),
       h('td', null, select('documental', [['SI', 'Sí'], ['NO', 'No']])),
       h('td', null, select('evidencia', [['ACTUALIZADO', 'Actualizado'], ['DESACTUALIZADO', 'Desactualizado'], ['INEXISTENTE', 'Inexistente']])),
       auto, h('td', null, obs), actions);
@@ -922,7 +948,9 @@
     const v = await S.ask(o.id ? 'Editar observación ' + o.seq : 'Nueva observación', [
       { name: 'title', label: 'Título', value: o.title || '', required: true }, { name: 'risk', label: 'Riesgo', type: 'select', options: [['ALTO', 'Alto'], ['MEDIO', 'Medio'], ['BAJO', 'Bajo']].map(([v2, l]) => [v2, l]), value: o.risk || 'MEDIO' },
       { name: 'condition', label: 'Condición (qué se encontró)', type: 'textarea', value: o.condition || '', required: true }, { name: 'criteria', label: 'Criterio (norma o procedimiento incumplido)', type: 'textarea', value: o.criteria || '' },
-      { name: 'cause', label: 'Causa', type: 'textarea', value: o.cause || '' }, { name: 'effect', label: 'Efecto / riesgo', type: 'textarea', value: o.effect || '' }, { name: 'recommendation', label: 'Recomendación', type: 'textarea', value: o.recommendation || '' }], 'Guardar');
+      { name: 'cause', label: 'Causa', type: 'textarea', value: o.cause || '' }, { name: 'effect', label: 'Efecto / riesgo', type: 'textarea', value: o.effect || '' }, { name: 'recommendation', label: 'Recomendación', type: 'textarea', value: o.recommendation || '' },
+      ...(o.id ? [{ name: 'reason', label: 'Motivo de la modificación (mínimo 10 caracteres; queda en el historial)', type: 'textarea', required: true }] : [])], 'Guardar',
+      o.id ? 'La versión anterior se conserva: el informe final distingue el registro original de las modificaciones.' : undefined);
     if (!v) return;
     const r = o.id ? await S.send(`${A}/observations/${o.id}`, 'PUT', v) : await S.send(`${A}/${ctx.aid}/observations`, 'POST', { ...v, item_id: o.item_id });
     if (r) { S.say('Guardado.', true); if (ctx.tab === 'observaciones') reload(); }
@@ -1010,6 +1038,50 @@
     if (r) { S.say(r.note || 'PAC enviado.', true); reload(); }
   }
 
+  // ---------------------------------------------------------------- Bitácora del expediente
+  const ACTION = {
+    SUBMIT: 'Envío a revisión', RETURN: 'Devolución', APPROVE_JEFE: 'Aprobación del Jefe de Auditoría', SEND_PREVIO: 'Envío del informe previo',
+    APPROVE_SIGN_GERENTE: 'Aprobación y firma de Gerencia', APPROVE_SIGN_CONTRALOR: 'Aprobación y firma de Contraloría'
+  };
+  const fmtChange = (changes) => {
+    if (!changes || typeof changes !== 'object') return '—';
+    const parts = Object.entries(changes).map(([k, v]) => v && typeof v === 'object' && 'before' in v && 'after' in v
+      ? `${k}: ${JSON.stringify(v.before)} → ${JSON.stringify(v.after)}` : `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`);
+    const text = parts.join(' · ');
+    return text.length > 400 ? text.slice(0, 400) + '…' : (text || '—');
+  };
+  async function bitacora(el) {
+    const d = await S.get(`${A}/${ctx.aid}/history`);
+    if (!d) return;
+    el.append(h('div', { class: 'panel' }, h('h3', null, 'Bitácora del expediente'),
+      h('p', { class: 'muted' }, 'Registro inmutable de cambios de datos y decisiones del flujo. Los eventos no se pueden editar ni borrar desde la aplicación.'),
+      d.events.length ? tbl(['Fecha', 'Tipo', 'Acción', 'Elemento', 'Cambio', 'Motivo / comentario', 'Fase / estado', 'Usuario'],
+        d.events.map((ev) => ev.source === 'TRANSITION'
+          ? [fmt(ev.created_at), 'Flujo', ACTION[ev.action] || ev.action, `Informe ${ev.kind === 'PREVIO' ? 'previo' : 'final'} v${ev.report_version}`,
+            `${L(ev.from_status)} → ${L(ev.to_status)}`, ev.comment || '—', L(ev.to_status), ev.actor_username || '—']
+          : [fmt(ev.created_at), 'Dato', L(ev.action), `${L(ev.entity_type)}${ev.entity_id ? ' · ' + String(ev.entity_id).slice(0, 8) : ''}`,
+            fmtChange(ev.changes), ev.reason || '—', [L(ev.audit_phase), ev.report_status ? ' / ' + L(ev.report_status) : ''].join(''),
+            ev.actor_username || '—']))
+        : h('p', { class: 'muted' }, 'Todavía no hay eventos registrados en la bitácora.')));
+    const revs = (d.observation_revisions || []).filter((x) => x.revision > 1);
+    if (revs.length) el.append(h('div', { class: 'panel' }, h('h3', null, 'Modificaciones de observaciones'),
+      tbl(['Observación', 'Revisión', 'Fecha', 'Usuario', 'Campos', 'Motivo'], revs.map((x) => [x.data?.title || x.observation_id.slice(0, 8), String(x.revision),
+        fmt(x.created_at), x.username || '—', (x.changed_fields || []).join(', '), x.reason || '—']))));
+  }
+
+  function reviewPointsBlock(d, rid, refresh) {
+    const points = d.review_points || [];
+    if (!points.length) return null;
+    const pending = points.filter((p) => p.status === 'PENDIENTE').length;
+    return h('div', null, h('h3', null, `Puntos de la devolución (${pending} pendiente${pending === 1 ? '' : 's'})`),
+      tbl(['Elemento', 'Punto a corregir', 'Estado', 'Atención', ''], points.map((p) => [p.target_label || 'General', p.description, S.badge(p.status),
+        p.status === 'ATENDIDO' ? `${p.attended_note} (${p.attended_by_name || '—'}, ${fmt(p.attended_at)})` : '—',
+        p.status === 'PENDIENTE' && d.can.attend_points ? h('button', { class: 'sm', onclick: async () => {
+          const v = await S.ask('Marcar punto como atendido', [{ name: 'note', label: 'Cómo se atendió (mínimo 10 caracteres)', type: 'textarea', required: true }], 'Marcar atendido', p.description);
+          if (v && await S.send(`${A}/review-points/${p.id}/attend`, 'POST', v)) { S.say('Punto atendido.', true); refresh(); }
+        } }, 'Marcar atendido') : null])));
+  }
+
   // ---------------------------------------------------------------- Informe: vista, firmas y revisión
   async function openReport(rid, after) {
     const d = await S.get(`${A}/reports/${rid}`);
@@ -1017,11 +1089,19 @@
     const r = d.report, b = r.body, c = d.can;
     const done = () => { if (after) after(); };
     const reopen = (m) => { m.close(); openReport(rid, after); };
+    const holder = {};
     const content = h('div', null,
       h('div', { class: 'kv' }, h('b', null, 'Tipo'), r.kind === 'PREVIO' ? 'Informe previo (hacia la unidad)' : 'Informe final', h('b', null, 'Versión'), 'v' + r.version, h('b', null, 'Estado'), S.badge(r.status),
         h('b', null, 'Calificación'), [S.ratingBadge(b.overall.rating), ' ', b.overall.final != null ? S.score(b.overall.final) + '%' : ''], h('b', null, 'Observaciones'), String((b.observations || []).length),
         h('b', null, 'Limitaciones al alcance'), String((b.limitations || []).length), h('b', null, 'Ajustes manuales'), String((b.adjustments || []).length), r.sent_to ? [h('b', null, 'Enviado a'), r.sent_to] : null),
-      r.status === 'RETURNED' ? h('div', { class: 'warn' }, 'Devuelto por el Contralor: revise los comentarios, regenere y vuelva a enviar.') : null,
+      r.status === 'RETURNED' ? h('div', { class: 'warn' }, 'Informe devuelto: atienda los puntos indicados, regenere y vuelva a enviar.') : null,
+      d.reopening ? h('div', { class: 'warn' }, `Reapertura autorizada el ${fmt(d.reopening.authorized_at)} por ${d.reopening.username || '—'}: ${d.reopening.reason}`) : null,
+      reviewPointsBlock(d, rid, () => { done(); reopen(holder.m); }),
+      (d.transitions || []).length ? h('details', null, h('summary', null, `Historial de decisiones (${d.transitions.length})`),
+        tbl(['Fecha', 'Decisión', 'De', 'A', 'Usuario', 'Comentario'], d.transitions.map((t) => [fmt(t.created_at), ACTION[t.action] || t.action,
+          L(t.from_status), L(t.to_status), t.actor_username || '—', t.comment || '—']))) : null,
+      (d.body_revisions || []).length > 1 ? h('details', null, h('summary', null, `Revisiones del contenido (${d.body_revisions.length})`),
+        tbl(['Rev.', 'Fecha', 'Usuario', 'Motivo', 'SHA-256'], d.body_revisions.map((x) => [String(x.revision), fmt(x.created_at), x.username || '—', x.reason || '—', x.body_sha256.slice(0, 12) + '…']))) : null,
       r.kind === 'FINAL' ? h('div', null, h('h3', null, 'Firmas'), h('div', { class: 'kv' },
         h('b', null, 'Iniciales auditores'), d.team.map((t) => (d.signoffs.some((s) => s.signer_type === 'AUDITOR_INICIALES' && s.user_id === t.user_id && s.body_sha256 === r.body_sha256) ? '✔ ' : '✘ ') + t.initials + ' ').join('  '),
         h('b', null, 'Colaborador'), (d.signoffs.filter((s) => s.signer_type === 'COLABORADOR').slice(-1)[0]?.display) || (b.contact.name ? b.contact.name + ' (de la auditoría)' : 'sin registrar (firma manuscrita en la impresión)'),
@@ -1030,6 +1110,7 @@
       h('h3', null, 'Conclusión'), h('p', null, b.conclusion), b.conclusion_custom ? h('span', { class: 'muted' }, '(redactada por el auditor)') : h('span', { class: 'muted' }, '(generada automáticamente)'),
       r.kind === 'FINAL' ? h('div', null, h('h3', null, 'Revisión Auditor ↔ Contralor'), h('div', { class: 'thread' }, d.comments.length ? d.comments.map((x) => h('div', { class: 'c' }, h('b', null, `${x.full_name} (${x.kind.toLowerCase()}) `), h('span', { class: 'muted' }, fmt(x.created_at)), h('div', null, x.text))) : h('span', { class: 'muted' }, 'Sin comentarios'))) : null);
     const m = dlg(`${r.kind === 'PREVIO' ? 'Informe previo' : 'Informe final'} v${r.version}`, content);
+    holder.m = m;
     const btn = (label, cls, fn) => h('button', { class: cls || '', onclick: async (e) => { e.target.disabled = true; try { await fn(); } finally { e.target.disabled = false; } } }, label);
     const post = (label, path, cls, body) => btn(label, cls, async () => { const x = await S.send(`${A}/reports/${rid}/${path}`, 'POST', body || {}); if (x) { S.say(x.note || 'Hecho.', true); done(); reopen(m); } });
     m.footer.append(btn(
@@ -1056,12 +1137,27 @@
       if (v && await S.send(`${A}/reports/${rid}/comments`, 'POST', v)) reopen(m);
     }));
     if (c.review) m.footer.append(btn('Devolver al auditor', 'danger', async () => {
-      const v = await S.ask('Devolver el informe', [{ name: 'comment', label: 'Qué debe corregirse (mínimo 10 caracteres)', type: 'textarea', required: true }], 'Devolver');
-      if (v && await S.send(`${A}/reports/${rid}/return`, 'POST', v)) { done(); reopen(m); }
+      const v = await S.ask('Devolver el informe al equipo auditor', [
+        { name: 'comment', label: 'Motivo de la devolución (mínimo 10 caracteres)', type: 'textarea', required: true },
+        { name: 'points', label: 'Puntos a corregir (uno por línea). Para una observación empiece con "Obs N:"', type: 'textarea' }], 'Devolver',
+        'Cada punto queda pendiente hasta que el equipo lo marque como atendido; el informe no puede reenviarse con puntos pendientes.');
+      if (!v) return;
+      const obs = (await S.get(`${A}/${r.audit_id}/observations`))?.observations || [];
+      const points = String(v.points || '').split('\n').map((l) => l.trim()).filter(Boolean).map((line) => {
+        const mt = line.match(/^obs(?:ervaci[oó]n)?\s*(\d+)\s*[:.-]\s*(.+)$/i);
+        const o = mt && obs.find((x) => String(x.seq) === mt[1]);
+        return o ? { target_type: 'OBSERVATION', target_id: o.id, description: mt[2] } : { target_type: 'GENERAL', description: line };
+      });
+      if (await S.send(`${A}/reports/${rid}/return`, 'POST', { comment: v.comment, points })) { done(); reopen(m); }
     }));
     if (c.approve_jefe) m.footer.append(post('Aprobar y enviar a Gerencia', 'approve/jefe', 'ok'));
     if (c.sign_gerente) m.footer.append(post('Aprobar y firmar como Gerente de Control Interno', 'sign/gerente', 'ok'));
     if (c.sign_contralor) m.footer.append(post('Aprobar y firmar como Contralor', 'sign/contralor', 'ok'));
+    if (c.reopen) m.footer.append(btn('Autorizar nueva versión', 'secondary', async () => {
+      const v = await S.ask('Autorizar una nueva versión del informe firmado', [{ name: 'reason', label: 'Motivo (mínimo 20 caracteres)', type: 'textarea', required: true }], 'Autorizar',
+        'La versión firmada no se modifica. El equipo auditor podrá generar la versión siguiente, que recorrerá de nuevo toda la cadena de revisión.');
+      if (v) { const x = await S.send(`${A}/reports/${rid}/reopen`, 'POST', v); if (x) { S.say(x.note || 'Reapertura autorizada.', true); done(); reopen(m); } }
+    }));
     m.footer.append(closeBtn(m));
   }
 

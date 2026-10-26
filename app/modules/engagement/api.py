@@ -26,7 +26,8 @@ from app.modules.notifications.service import (
 bp = Blueprint("engagement", __name__)
 EMAIL_RX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHASES = ("PLANIFICACION", "TRABAJO_CAMPO", "INFORME")
-LOCKING = ("IN_REVIEW", "APPROVED", "SIGNED")
+# Estados del informe final en los que la auditoría queda bloqueada para el equipo.
+LOCKING = ("IN_REVIEW", "GERENCIA", "CONTRALOR", "APPROVED", "SIGNED")
 
 
 def err(msg, code=400):
@@ -109,16 +110,28 @@ def load(aid, write=False, phases=None):
             return None, err("La auditoría está cerrada", 409)
         if phases and a["phase"] not in phases:
             return None, err("No disponible en la fase actual (" + a["phase"] + ")", 409)
-        if any(r["kind"] == "FINAL" and r["status"] in LOCKING for r in repo.reports(a["id"])):
+        if final_locked(a["id"]):
             return None, err("El informe final está en revisión, aprobado o firmado: la información quedó bloqueada", 409)
     return a, None
+
+
+def final_locked(audit_id) -> bool:
+    """La auditoría se bloquea según la última versión del informe final.
+
+    Una versión firmada deja de bloquear cuando Contraloría autorizó su reapertura:
+    el equipo puede entonces generar la versión siguiente sin alterar la firmada.
+    """
+    latest = repo.latest_final(audit_id)
+    if latest is None or latest["status"] not in LOCKING:
+        return False
+    return not (latest["status"] == "SIGNED" and repo.reopening(latest["id"]))
 
 
 def thresholds():
     return repo.thresholds() or scoring.DEFAULT_THRESHOLDS
 
 
-def _phase_snapshot(a, trigger_action, report=None):
+def _phase_snapshot(a, trigger_action, report=None, reason=None):
     """Prepara una instantánea para insertarla en la transacción del evento."""
     return {
         "audit_id": str(a["id"]),
@@ -129,9 +142,28 @@ def _phase_snapshot(a, trigger_action, report=None):
         "report_id": str(report["id"]) if report else None,
         "report_version": report.get("version") if report else None,
         "scorecard": score_snapshots.build_scorecard(
-            a, repo.worksheets_with_items(a["id"]), thresholds()
+            a, repo.worksheets_with_items(a["id"]), thresholds(),
+            evidence=repo.evidence(a["id"]), reason=reason,
         ),
     }
+
+
+def _change(a, entity_type, entity_id, action, changes=None, reason=None, report=None):
+    """Agrega a la transacción en curso un evento de la bitácora del expediente.
+
+    Debe llamarse inmediatamente antes de la operación del repositorio que confirma
+    el cambio: el evento y el cambio se confirman juntos o no se confirma ninguno.
+    """
+    claims = getattr(g, "claims", {}) or {}
+    latest = repo.latest_final(a["id"])
+    repo.stage_change({
+        "audit_id": a["id"], "report_id": report["id"] if report else None,
+        "entity_type": entity_type, "entity_id": entity_id, "action": action,
+        "changes": changes or {}, "reason": reason, "audit_phase": a.get("phase"),
+        "report_status": (report or latest or {}).get("status"),
+        "actor_id": me(), "actor_username": claims.get("username"), "actor_roles": claims.get("roles", []),
+        "request_id": getattr(g, "request_id", None),
+    })
 
 
 # ------------------------------------------------------------------ catálogos y expedientes
@@ -323,12 +355,13 @@ def audit_overview(a):
     obs = repo.observations(a["id"])
     return {"audit": a, "team": repo.team(a["id"]), "phase_log": repo.phase_log(a["id"]),
             "phase_snapshots": repo.phase_snapshots(a["id"]), "overall": overall, "thresholds": th,
+            "comparison": scoring.comparison(sheets, overall, th),
             "sheets": [{"id": ws["id"], "kind": ws["kind"], "line": ws["line"], "title": ws["title"], "criteria_count": len(ws["criteria"]),
                         "items": s.items, "scored": s.scored, "exceptions": s.exceptions, "auto": s.auto, "final": s.final,
                         "manual_override": s.manual_override, "rating": s.rating,
                         "statistics": scoring.system_statistics(ws["criteria"], ws["items"]) if ws["kind"] == "SISTEMAS" else None} for ws, s in pairs],
             "observations": len(obs), "evidence": len(repo.evidence(a["id"])), "reports": reps,
-            "locked": any(r["kind"] == "FINAL" and r["status"] in LOCKING for r in reps),
+            "locked": final_locked(a["id"]),
             "is_member": repo.is_member(a["id"], me())}
 
 
@@ -359,7 +392,9 @@ def phase(aid):
             return err("Para pasar a Informe, cada cédula debe tener al menos un ítem calificado" + (": " + ", ".join(empty) if empty else ""))
     if PHASES.index(to) < cur and not note:
         return err("Para retroceder de fase indique el motivo")
-    repo.change_phase(a["id"], a["phase"], to, me(), note, phase_snapshot=_phase_snapshot(a, "PHASE_CHANGE"))
+    snapshot = _phase_snapshot(a, "PHASE_CHANGE", reason=note)
+    _change(a, "audit", a["id"], "PHASE_CHANGED", {"phase": {"before": a["phase"], "after": to}}, reason=note or None)
+    repo.change_phase(a["id"], a["phase"], to, me(), note, phase_snapshot=snapshot)
     log("AUDIT_PHASE_CHANGED", entity_type="audit", entity_id=a["id"], before_data={"phase": a["phase"]}, after_data={"phase": to, "note": note}, request_id=g.request_id)
     return jsonify(phase=to)
 
@@ -376,6 +411,8 @@ def audit_rating(aid):
             "manual": float(a["manual_score"]) if a.get("manual_score") is not None else None,
             "reason": a.get("manual_reason"),
         }
+        _change(a, "audit", a["id"], "AUDIT_RATING_CLEARED", {"manual_score": {"before": before["manual"], "after": None}},
+                reason="Se retira el ajuste manual de la calificación global")
         repo.set_audit_manual(a["id"], None, None, me())
         log(
             "AUDIT_RATING_CLEARED",
@@ -390,6 +427,9 @@ def audit_rating(aid):
         score, reason = scoring.validate_manual(d.get("score"), d.get("reason"))
     except scoring.ScoreError as ex:
         return err(str(ex))
+    _change(a, "audit", a["id"], "AUDIT_RATING_OVERRIDDEN",
+            {"manual_score": {"before": float(a["manual_score"]) if a.get("manual_score") is not None else None, "after": score}},
+            reason=reason)
     repo.set_audit_manual(a["id"], score, reason, me())
     log(
         "AUDIT_RATING_OVERRIDDEN",
@@ -494,6 +534,7 @@ def new_worksheet(aid):
         #
         if str(a.get("audit_domain", "")).upper() == "FINANCIERA":
 
+            _change(a, "worksheet", None, "WORKSHEET_CREATED", {"kind": kind, "line": line})
             wid = repo.create_financial_worksheet(
                 a["id"],
                 kind,
@@ -528,6 +569,7 @@ def new_worksheet(aid):
             line,
         )
 
+        _change(a, "worksheet", None, "WORKSHEET_CREATED", {"kind": kind, "line": line, "template_version": ver})
         wid = repo.create_worksheet(
             a["id"],
             kind,
@@ -728,6 +770,8 @@ def import_system_questionnaire(wid):
         f"Auditoría de Sistemas — {questionnaire_name}"
     )[:180]
 
+    _change(a, "worksheet", ws["id"], "SYSTEM_QUESTIONNAIRE_IMPORTED",
+            {"filename": name, "controls": len(rows), "previous_items": len(ws.get("items") or [])})
     try:
         repo.replace_system_questionnaire(
             wid,
@@ -929,8 +973,10 @@ def add_system_control(wid):
     if weight not in (1, 2, 3):
         return err("El peso debe ser 1, 2 o 3")
     try:
+        _change(a, "worksheet", str(wid), "SYSTEM_CONTROL_ADDED", {"text": text, "section": section, "weight": weight})
         code = repo.add_system_control(wid, text, section, weight, me())
     except ValueError as ex:
+        repo.db.session.rollback()
         return err(str(ex), 409)
     log("SYSTEM_CONTROL_ADDED", entity_type="worksheet", entity_id=wid,
         after_data={"code": code, "section": section, "weight": weight}, request_id=g.request_id)
@@ -946,6 +992,7 @@ def add_items(wid):
     refs = [str(r).strip()[:60] for r in (request.get_json(silent=True) or {}).get("refs", []) if str(r).strip()]
     if not refs or len(refs) > 500:
         return err("Indique entre 1 y 500 referencias")
+    _change(a, "worksheet", ws["id"], "ITEMS_ADDED", {"refs": list(dict.fromkeys(refs))})
     n = repo.add_items(ws["id"], list(dict.fromkeys(refs)), me())
     log("ITEMS_ADDED", entity_type="worksheet", entity_id=ws["id"], after_data={"agregados": n}, request_id=g.request_id)
     return jsonify(added=n)
@@ -967,6 +1014,7 @@ def sample(wid):
         return err("Las auditorías de Sistemas no usan muestreo de pólizas/siniestros; utilice el cuestionario ERP/TI")
     existing = {i["ref"] for i in ws["items"]}
     refs = repo.sample_refs(ws["kind"], ws["line"], branches_for_line(ws["line"]), a["period_from"], a["period_to"], n, existing)
+    _change(a, "worksheet", ws["id"], "SAMPLE_DRAWN", {"requested": n, "refs": list(refs)})
     added = repo.add_items(ws["id"], refs, me())
     log("SAMPLE_DRAWN", entity_type="worksheet", entity_id=ws["id"], after_data={"solicitados": n, "agregados": added}, request_id=g.request_id)
     return jsonify(added=added, note=None if added else "No hay datos cargados para ese período y línea (cargue pólizas/siniestros en Cargas) o ya están todos en la muestra.")
@@ -992,8 +1040,10 @@ def update_item(iid):
             control = str(v.get("control", "")).upper()
             doc = str(v.get("documental", "")).upper()
             evidence = str(v.get("evidencia", "")).upper()
-            if control in {"SI", "NO", "PARCIAL"} or doc in scoring.SYSTEM_DOC_POINTS or evidence in scoring.SYSTEM_EVIDENCE_POINTS:
-                results[k] = {"control": control if control in {"SI", "NO", "PARCIAL"} else "", "documental": doc if doc in scoring.SYSTEM_DOC_POINTS else "", "evidencia": evidence if evidence in scoring.SYSTEM_EVIDENCE_POINTS else ""}
+            if control == "PARCIAL":
+                return err("En Auditoría de Sistemas el control se responde solo SI o NO")
+            if control in scoring.SYSTEM_CONTROL_VALUES or doc in scoring.SYSTEM_DOC_POINTS or evidence in scoring.SYSTEM_EVIDENCE_POINTS:
+                results[k] = {"control": control if control in scoring.SYSTEM_CONTROL_VALUES else "", "documental": doc if doc in scoring.SYSTEM_DOC_POINTS else "", "evidencia": evidence if evidence in scoring.SYSTEM_EVIDENCE_POINTS else ""}
     else:
         valid = set(scoring.POINTS) | {"NO_APLICA", "EXCEPCION"}
         results = {k: v for k, v in raw_results.items() if k in codes and v in valid}
@@ -1001,6 +1051,11 @@ def update_item(iid):
     exc = str(d.get("info_exception") or "").strip()[:2000] or None
     if "EXCEPCION" in results.values() and not exc:
         return err("Marcó EXCEPCION: describa la información no recibida en el campo de excepción")
+    before = {"results": it.get("results") or {}, "observation": it.get("observation"), "info_exception": it.get("info_exception")}
+    after = {"results": results, "observation": obs, "info_exception": exc}
+    _change(a, "item", str(iid), "ITEM_UPDATED",
+            {k: {"before": before[k], "after": after[k]} for k in before if before[k] != after[k]},
+            reason=str(d.get("reason") or "").strip()[:500] or None)
     repo.update_item(iid, results, obs, exc, scoring.item_score(ws["criteria"], results), me())
     log(
         "ITEM_UPDATED",
@@ -1024,13 +1079,16 @@ def update_item(iid):
     return jsonify(auto_score=scoring.item_score(ws["criteria"], results))
 
 
-def _rate(kind_label, entity_id, current, current_reason, setter, a_id):
+def _rate(kind_label, entity_id, current, current_reason, setter, a):
     d = request.get_json(silent=True) or {}
     before = {
         "manual": float(current) if current is not None else None,
         "reason": current_reason,
     }
     if d.get("clear"):
+        _change(a, kind_label.lower(), entity_id, kind_label + "_RATING_CLEARED",
+                {"manual_score": {"before": before["manual"], "after": None}},
+                reason="Se retira el ajuste manual y se vuelve a la calificación automática")
         setter(None, None)
         log(
             kind_label + "_RATING_CLEARED",
@@ -1045,6 +1103,8 @@ def _rate(kind_label, entity_id, current, current_reason, setter, a_id):
         score, reason = scoring.validate_manual(d.get("score"), d.get("reason"))
     except scoring.ScoreError as ex:
         return err(str(ex))
+    _change(a, kind_label.lower(), entity_id, kind_label + "_RATING_OVERRIDDEN",
+            {"manual_score": {"before": before["manual"], "after": score}}, reason=reason)
     setter(score, reason)
     log(
         kind_label + "_RATING_OVERRIDDEN",
@@ -1064,17 +1124,20 @@ def item_rating(iid):
     if it is None:
         return err("No encontrado", 404)
     ws, a, e = ws_for(it["worksheet_id"], write=True)
-    return e or _rate("ITEM", str(iid), it["manual_score"], it.get("manual_reason"), lambda s, r: repo.set_item_manual(iid, s, r, me()), a["id"])
+    return e or _rate("ITEM", str(iid), it["manual_score"], it.get("manual_reason"), lambda s, r: repo.set_item_manual(iid, s, r, me()), a)
 
 
 @bp.put("/worksheets/<uuid:wid>/rating")
 @permission_required("audit:rate")
 def sheet_rating(wid):
     ws, a, e = ws_for(wid, write=True)
-    return e or _rate("WORKSHEET", ws["id"], ws["manual_score"], ws.get("manual_reason"), lambda s, r: repo.set_ws_manual(wid, s, r, me()), a["id"])
+    return e or _rate("WORKSHEET", ws["id"], ws["manual_score"], ws.get("manual_reason"), lambda s, r: repo.set_ws_manual(wid, s, r, me()), a)
 
 
 # ------------------------------------------------------------------ observaciones
+OBS_FINDING_FIELDS = ("title", "condition", "criteria", "cause", "effect", "recommendation", "risk")
+
+
 def _obs_fields(d, partial=False):
     out = {}
     if not partial or "title" in d: out["title"] = txt(d, "title", 5, 200)
@@ -1123,6 +1186,8 @@ def new_observation(aid):
         if item_ws is None or str(item_ws.get("audit_id")) != str(a["id"]):
             return err("El ítem asociado debe pertenecer a la misma auditoría.", 400)
         fields["item_id"] = normalized_item_id
+    _change(a, "observation", None, "OBSERVATION_CREATED", {k: {"before": None, "after": v} for k, v in fields.items()},
+            reason="Registro original")
     oid, seq = repo.add_observation(a["id"], fields, me())
     log("OBSERVATION_CREATED", entity_type="observation", entity_id=oid, after_data={"seq": seq, **fields}, request_id=g.request_id)
     return jsonify(id=oid, seq=seq), 201
@@ -1155,7 +1220,19 @@ def edit_observation(oid):
             upd["pac_status"] = d["pac_status"]
     except ValueError as ex:
         return err(str(ex))
-    repo.update_observation(oid, upd)
+    upd = {k: v for k, v in upd.items() if o.get(k) != v}
+    if not upd:
+        return jsonify(status="OK", note="Sin cambios")
+    # Toda modificación queda como una nueva revisión con su motivo. La respuesta de la
+    # unidad y el seguimiento del PAC llevan un motivo por defecto; el hallazgo, uno explícito.
+    reason = str(d.get("reason") or "").strip()[:1000]
+    if set(upd) & set(OBS_FINDING_FIELDS) and len(reason) < 10:
+        return err("Indique el motivo de la modificación de la observación (mínimo 10 caracteres)")
+    reason = reason if len(reason) >= 10 else "Registro de la respuesta de la unidad / seguimiento del PAC"
+    latest = repo.latest_final(a["id"])
+    _change(a, "observation", str(oid), "OBSERVATION_UPDATED",
+            {k: {"before": o.get(k), "after": v} for k, v in upd.items()}, reason=reason)
+    repo.update_observation(oid, upd, me(), reason, latest["status"] if latest else None)
     log(
         "OBSERVATION_UPDATED",
         entity_type="observation",
@@ -1190,11 +1267,28 @@ def upload_evidence(aid):
         name, ctype = evidence_rules.check(f.filename, data)
     except evidence_rules.EvidenceError as ex:
         return err(str(ex))
+    item_id, obs_id = request.form.get("item_id") or None, request.form.get("observation_id") or None
+    # La evidencia solo puede vincularse a ítems y observaciones de esta misma auditoría.
+    try:
+        if item_id:
+            item_id = str(uuid.UUID(str(item_id)))
+            item = repo.get_item(item_id)
+            item_ws = repo.get_worksheet(item["worksheet_id"], with_items=False) if item else None
+            if item_ws is None or str(item_ws.get("audit_id")) != str(a["id"]):
+                return err("El ítem asociado debe pertenecer a la misma auditoría.", 400)
+        if obs_id:
+            obs_id = str(uuid.UUID(str(obs_id)))
+            obs = repo.get_observation(obs_id)
+            if obs is None or str(obs["audit_id"]) != str(a["id"]):
+                return err("La observación asociada debe pertenecer a la misma auditoría.", 400)
+    except (TypeError, ValueError):
+        return err("Identificador de ítem u observación inválido", 400)
     sha = hashlib.sha256(data).hexdigest()
     eid_ = str(uuid.uuid4())
     key = f"evidence/{a['id']}/{eid_}"
     storage.put(key, data)
-    item_id, obs_id = request.form.get("item_id") or None, request.form.get("observation_id") or None
+    _change(a, "evidence", eid_, "EVIDENCE_ADDED",
+            {"filename": name, "sha256": sha, "item_id": item_id, "observation_id": obs_id})
     eid = repo.add_evidence(a["id"], item_id, obs_id, name, ctype, len(data), sha, key, (request.form.get("description") or "").strip()[:500] or None, me())
     log("EVIDENCE_ADDED", entity_type="evidence", entity_id=eid, after_data={"file": name, "sha256": sha}, request_id=g.request_id)
     return jsonify(id=eid, sha256=sha), 201
@@ -1272,6 +1366,10 @@ def offline_import(aid):
                        exported_at=control["exported_at"])
     if summary["INVALID"] or problems:
         return err("El archivo tiene filas inválidas; corríjalas y vuélvalo a cargar (use la vista previa para verlas)")
+    _change(a, "audit", a["id"], "OFFLINE_IMPORTED", {
+        "file_sha256": sha, "summary": summary, "overwrite": overwrite,
+        "rows": [{k: v for k, v in p.items() if k != "data"} for p in plan if p["status"] != "UNCHANGED"][:500],
+    })
     done = repo.apply_offline(plan, {wid: ws["criteria"] for wid, ws in sheets.items()}, me())
     log("OFFLINE_IMPORTED", entity_type="audit", entity_id=a["id"], metadata={"archivo_sha256": sha, "aplicadas": done, **summary, "sobrescribir": overwrite}, request_id=g.request_id)
     return jsonify(dry_run=False, applied=done, summary=summary)
@@ -1282,13 +1380,29 @@ def _team_info(aid):
     return [{"name": t["name"], "initials": t["initials"], "role": t["role"], "user_id": t["user_id"]} for t in repo.team(aid)]
 
 
-def _make_body(a, kind, version, conclusion):
+def _make_body(a, kind, version, conclusion, revision=1):
+    """Cuerpo del informe con los datos vigentes y su trazabilidad.
+
+    El historial (instantáneas por fase, revisiones de observaciones y decisiones de revisión
+    anteriores) queda dentro del cuerpo y, por tanto, dentro del SHA-256 que aprueban los revisores.
+    """
     team = _team_info(a["id"])
+    history = None
+    if kind == "FINAL":
+        reports_ = [r for r in repo.reports(a["id"]) if r["kind"] == "FINAL"]
+        history = {
+            "snapshots": repo.phase_snapshots(a["id"]),
+            "observation_revisions": repo.observation_revisions(a["id"]),
+            "transitions": repo.audit_report_transitions(a["id"]),
+            "review_points": [p for r in reports_ for p in repo.review_points(r["id"])],
+            "reopenings": [{"version": r["version"], **o} for r in reports_ for o in [repo.reopening(r["id"])] if o],
+        }
     return asm.assemble(
         kind=kind, audit=a, file={"code": a["file_code"], "title": a["title"], "period_from": a["period_from"], "period_to": a["period_to"]},
         unit={"code": a["unit_code"], "name": a["unit_name"], "kind": a["unit_kind"]}, team=team,
         worksheets=repo.worksheets_with_items(a["id"]), observations=repo.observations(a["id"]), evidence=repo.evidence(a["id"]),
-        thresholds=thresholds(), company=repo.company() or current_app.config["COMPANY_NAME"], version=version, today=date.today(), conclusion=conclusion)
+        thresholds=thresholds(), company=repo.company() or current_app.config["COMPANY_NAME"], version=version, today=date.today(), conclusion=conclusion,
+        history=history, revision=revision)
 
 
 def _transition(rep, status, action, **kw):
@@ -1341,7 +1455,10 @@ def _pdf_for(rep, team):
     final = rep["kind"] == "FINAL" and rep["status"] in (
         "GERENCIA", "CONTRALOR", "APPROVED", "SIGNED"
     )
-    return build_pdf(rep["body"], {"final": final, "initials": {t["name"]: valid.get(t["user_id"]) for t in team}, "collaborator": collab})
+    return build_pdf(rep["body"], {"final": final, "initials": {t["name"]: valid.get(t["user_id"]) for t in team}, "collaborator": collab,
+                                   "transitions": repo.report_transitions(rep["id"]), "body_sha256": rep["body_sha256"],
+                                   "review_points": [p for r in repo.reports(rep["audit_id"]) if r["kind"] == "FINAL"
+                                                     for p in repo.review_points(r["id"])]})
 
 
 def get_rep(rid, write=False, final_viewer=False):
@@ -1436,8 +1553,16 @@ def new_report(aid):
     except ValueError as ex:
         return err(str(ex))
     version = repo.next_version(a["id"], kind)
+    reason = "Generación inicial"
+    if kind == "FINAL":
+        previous = repo.latest_final(a["id"])
+        reopened = repo.reopening(previous["id"]) if previous and previous["status"] == "SIGNED" else None
+        if reopened:
+            reason = f"Nueva versión autorizada por Contraloría tras la firma de la v{previous['version']}: {reopened['reason']}"
     body = _make_body(a, kind, version, conclusion)
-    rid = repo.create_report(a["id"], kind, version, body, body_hash(body), me())
+    _change(a, "audit_report", None, "AUDIT_REPORT_GENERATED", {"kind": kind, "version": version, "sha256": body_hash(body)},
+            reason=reason)
+    rid = repo.create_report(a["id"], kind, version, body, body_hash(body), me(), reason=reason)
     log("AUDIT_REPORT_GENERATED", entity_type="audit_report", entity_id=rid, after_data={"kind": kind, "version": version, "sha256": body_hash(body)}, request_id=g.request_id)
     return jsonify(id=rid, version=version), 201
 
@@ -1508,9 +1633,19 @@ def report_detail(rid):
     return jsonify(
         report=rep, team=team, comments=repo.comments(rid),
         transitions=repo.report_transitions(rid),
+        body_revisions=repo.body_revisions(rid),
+        review_points=repo.review_points(rid),
+        reopening=repo.reopening(rid),
         signoffs=sos, signatures=visible_signatures,
         missing_initials=missing, is_member=member,
         can={
+            "attend_points": member and st.status in ("DRAFT", "RETURNED") and "audit:manage" in pset,
+            "reopen": (
+                st.kind == "FINAL" and st.status == "SIGNED" and "audit:report_approve" in pset
+                and not member and repo.reopening(rid) is None
+                and (repo.latest_final(a["id"]) or {}).get("id") == rep["id"]
+                and a.get("status") == "IN_PROGRESS"
+            ),
             "edit": member and ok(wf.can_edit) and "audit:report_draft" in pset,
             "initial": ok(wf.can_initial) and "audit:initial" in pset,
             "submit": ok(wf.can_submit_final) and "audit:report_submit" in pset,
@@ -1539,8 +1674,17 @@ def regenerate(rid):
         conclusion = txt(d, "conclusion", 0, 4000) if "conclusion" in d else (rep["body"]["conclusion"] if rep["body"].get("conclusion_custom") else None)
     except ValueError as ex:
         return err(str(ex))
-    body = _make_body(a, rep["kind"], rep["version"], conclusion)
-    repo.replace_body(rid, body, body_hash(body))
+    reason = str(d.get("reason") or "").strip()[:1000] or (
+        "Corrección tras devolución" if rep["status"] == "RETURNED" else "Regeneración del borrador")
+    revision = len(repo.body_revisions(rid)) + 1
+    body = _make_body(a, rep["kind"], rep["version"], conclusion, revision=revision)
+    _change(a, "audit_report", str(rid), "AUDIT_REPORT_REGENERATED",
+            {"body_sha256": {"before": rep["body_sha256"], "after": body_hash(body)}, "revision": revision},
+            reason=reason, report=rep)
+    try:
+        repo.replace_body(rid, body, body_hash(body), me(), reason, expected_sha256=rep["body_sha256"])
+    except repo.StaleReportState as ex:
+        return err(str(ex), 409)
     log("AUDIT_REPORT_REGENERATED", entity_type="audit_report", entity_id=str(rid), after_data={"sha256": body_hash(body)}, request_id=g.request_id)
     return jsonify(status="OK", note="Las iniciales estampadas antes quedan sin efecto: cada auditor debe volver a estamparlas.")
 
@@ -1556,6 +1700,7 @@ def initial(rid):
     except wf.WorkflowError as ex:
         return err(str(ex), 409)
     mine = next(t for t in team if t["user_id"] == me())
+    _change(a, "audit_report", str(rid), "REPORT_INITIALED", {"initials": mine["initials"], "body_sha256": rep["body_sha256"]}, report=rep)
     repo.add_signoff(rid, "AUDITOR_INICIALES", me(), mine["initials"], rep["body_sha256"])
     log("REPORT_INITIALED", entity_type="audit_report", entity_id=str(rid), after_data={"initials": mine["initials"], "sha256": rep["body_sha256"]}, request_id=g.request_id)
     return jsonify(initials=mine["initials"])
@@ -1589,6 +1734,9 @@ def submit(rid):
         wf.can_submit_final(_state(rep, team), me())
     except wf.WorkflowError as ex:
         return err(str(ex), 409)
+    pending = [p for p in repo.review_points(rid) if p["status"] == "PENDIENTE"]
+    if pending:
+        return err(f"Quedan {len(pending)} punto(s) de la devolución sin atender; márquelos como atendidos antes de reenviar", 409)
     snapshot = (
         _phase_snapshot(a, "FINAL_REPORT_SUBMITTED", report=rep)
         if rep.get("kind") == "FINAL"
@@ -1685,15 +1833,20 @@ def return_report(rid):
     except wf.WorkflowError as ex:
         return err(str(ex), 409)
 
-    t = str((request.get_json(silent=True) or {}).get("comment") or "").strip()
+    d = request.get_json(silent=True) or {}
+    t = str(d.get("comment") or "").strip()
     if len(t) < 10:
         return err("Indique qué debe corregirse (mínimo 10 caracteres)")
+    try:
+        points = _review_points(a, d.get("points") or [])
+    except ValueError as ex:
+        return err(str(ex))
 
     # Una devolución invalida las aprobaciones anteriores del contenido.
     # Los PDF firmados históricos se conservan, pero no se presentan como actuales;
     # las aprobaciones invalidadas siguen constando en report_transitions.
     conflict = _transition(
-        rep, "RETURNED", "RETURN", comment=t, comment_kind="DEVOLUCION",
+        rep, "RETURNED", "RETURN", comment=t, comment_kind="DEVOLUCION", review_points=points,
         approved_by=None, approved_at=None, approved_body_sha256=None,
         jefe_approved_by=None, jefe_approved_at=None, jefe_approved_body_sha256=None,
         gerente_approved_by=None, gerente_approved_at=None, gerente_approved_body_sha256=None,
@@ -1707,6 +1860,123 @@ def return_report(rid):
     )
     notify_report_returned(str(rid), a, stage, t, str(me()), getattr(g, "request_id", None))
     return jsonify(status="RETURNED")
+
+
+POINT_TARGETS = ("GENERAL", "OBSERVATION", "ITEM", "WORKSHEET")
+
+
+def _review_points(a, raw):
+    """Valida los puntos a corregir de una devolución: cada destino debe pertenecer a la auditoría."""
+    if not isinstance(raw, list) or len(raw) > 100:
+        raise ValueError("Los puntos de la devolución deben ser una lista de hasta 100 elementos")
+    sheets = {ws["id"]: ws for ws in repo.worksheets_with_items(a["id"])}
+    items = {it["id"]: (ws, it) for ws in sheets.values() for it in ws["items"]}
+    observations = {o["id"]: o for o in repo.observations(a["id"])}
+    out = []
+    for p in raw:
+        p = p if isinstance(p, dict) else {}
+        target = str(p.get("target_type") or "GENERAL").upper()
+        desc = str(p.get("description") or "").strip()
+        if target not in POINT_TARGETS:
+            raise ValueError("Tipo de punto inválido: GENERAL, OBSERVATION, ITEM o WORKSHEET")
+        if not 5 <= len(desc) <= 2000:
+            raise ValueError("Describa cada punto a corregir (5 a 2000 caracteres)")
+        tid = str(p.get("target_id") or "").strip() or None
+        label = None
+        if target == "OBSERVATION":
+            if tid not in observations:
+                raise ValueError("La observación indicada no pertenece a esta auditoría")
+            label = f"Observación {observations[tid]['seq']}: {observations[tid]['title']}"[:300]
+        elif target == "ITEM":
+            if tid not in items:
+                raise ValueError("El ítem indicado no pertenece a esta auditoría")
+            label = f"{items[tid][0]['title']} · {items[tid][1]['ref']}"[:300]
+        elif target == "WORKSHEET":
+            if tid not in sheets:
+                raise ValueError("La cédula indicada no pertenece a esta auditoría")
+            label = sheets[tid]["title"][:300]
+        else:
+            tid = None
+        out.append({"target_type": target, "target_id": tid, "target_label": label, "description": desc})
+    return out
+
+
+@bp.post("/review-points/<int:pid>/attend")
+@permission_required("audit:manage")
+def attend_review_point(pid):
+    """El equipo auditor marca un punto de la devolución como atendido, con nota obligatoria."""
+    point = repo.get_review_point(pid)
+    if point is None:
+        return err("No encontrado", 404)
+    rep, a, team, e = get_rep(point["report_id"], write=True)
+    if e:
+        return e
+    if rep["status"] not in ("DRAFT", "RETURNED"):
+        return err("Los puntos se atienden mientras el informe está devuelto o en borrador", 409)
+    if point["status"] != "PENDIENTE":
+        return err("El punto ya fue atendido", 409)
+    note = str((request.get_json(silent=True) or {}).get("note") or "").strip()
+    if not 10 <= len(note) <= 2000:
+        return err("Explique cómo se atendió el punto (10 a 2000 caracteres)")
+    _change(a, "review_point", str(pid), "REVIEW_POINT_ATTENDED",
+            {"status": {"before": "PENDIENTE", "after": "ATENDIDO"}, "description": point["description"]},
+            reason=note, report=rep)
+    if not repo.attend_review_point(pid, me(), note):
+        return err("El punto ya fue atendido", 409)
+    repo.db.session.commit()
+    log("REVIEW_POINT_ATTENDED", entity_type="review_point", entity_id=str(pid), after_data={"note": note}, request_id=g.request_id)
+    return jsonify(status="ATENDIDO")
+
+
+@bp.post("/reports/<uuid:rid>/reopen")
+@permission_required("audit:report_approve", step_up=True)
+def reopen_report(rid):
+    """Contraloría autoriza una nueva versión de un informe final firmado.
+
+    La versión firmada no se modifica: conserva su contenido, firmas y aprobaciones. La
+    autorización solo desbloquea la auditoría para que el equipo genere la versión siguiente,
+    que recorre de nuevo toda la cadena de revisión.
+    """
+    rep, a, team, e = get_rep(rid, final_viewer=True)
+    if e:
+        return e
+    if rep["kind"] != "FINAL" or rep["status"] != "SIGNED":
+        return err("Solo se reabre un informe final firmado", 409)
+    if me() in [t["user_id"] for t in team]:
+        return err("El equipo auditor no puede autorizar la reapertura de su propio informe", 403)
+    latest = repo.latest_final(a["id"])
+    if latest is None or latest["id"] != rep["id"]:
+        return err("Solo se puede reabrir la última versión del informe final", 409)
+    if a.get("status") != "IN_PROGRESS":
+        return err("La auditoría está cerrada (PAC enviado): no se puede reabrir el informe", 409)
+    if repo.reopening(rid):
+        return err("Esta versión ya fue reabierta", 409)
+    reason = str((request.get_json(silent=True) or {}).get("reason") or "").strip()
+    if not 20 <= len(reason) <= 2000:
+        return err("Indique el motivo de la reapertura (20 a 2000 caracteres)")
+    _change(a, "audit_report", str(rid), "FINAL_REPORT_REOPENED",
+            {"version": rep["version"], "body_sha256": rep["body_sha256"]}, reason=reason, report=rep)
+    try:
+        repo.reopen_report(rid, reason, me())
+    except Exception:  # noqa: BLE001 - reapertura concurrente (UNIQUE)
+        repo.db.session.rollback()
+        return err("Esta versión ya fue reabierta", 409)
+    log("AUDIT_REPORT_REOPENED", entity_type="audit_report", entity_id=str(rid), metadata={"reason": reason}, request_id=g.request_id)
+    return jsonify(status="REOPENED", note="El equipo auditor puede generar la nueva versión del informe final.")
+
+
+@bp.get("/<uuid:aid>/history")
+@permission_required("audit:read", "audit:read_final")
+def audit_history(aid):
+    """Bitácora del expediente: cambios de datos y decisiones del flujo, en orden cronológico."""
+    a, e = load(aid)
+    if e:
+        return e
+    events = [{"source": "CHANGE", **ev} for ev in repo.change_events(a["id"])]
+    events += [{"source": "TRANSITION", "entity_type": "audit_report", "entity_id": t["report_id"], **t}
+               for t in repo.audit_report_transitions(a["id"])]
+    events.sort(key=lambda ev: (ev["created_at"], ev["source"], ev["id"]))
+    return jsonify(events=events, observation_revisions=repo.observation_revisions(a["id"]))
 
 
 @bp.post("/reports/<uuid:rid>/approve/jefe")
@@ -1956,8 +2226,10 @@ def pac_send(aid):
         return err("Solo el equipo auditor envía el PAC", 403)
     if a["status"] != "IN_PROGRESS":
         return err("El PAC ya fue enviado y la auditoría está cerrada", 409)
+    # El PAC acompaña a la última versión del informe final, que debe estar firmada
+    # (una versión reabierta y aún en preparación no permite enviarlo).
     finals = [r for r in repo.reports(a["id"]) if r["kind"] == "FINAL"]
-    final = next((r for r in finals if r["status"] == "SIGNED"), None)
+    final = finals[0] if finals and finals[0]["status"] == "SIGNED" else None
     try:
         wf.can_send_pac(wf.ReportState("FINAL", final["status"], "", "") if final else None)
     except wf.WorkflowError as ex:
@@ -1975,7 +2247,9 @@ def pac_send(aid):
         pdf = storage.get(docs[-1]["object_key"]) if docs else b""
         emailed = try_email(email, f"Informe final y PAC — auditoría {a['code']}", "Se adjuntan el informe final firmado y el Plan de Acción Correctiva (PAC) para su diligenciamiento.",
                             [(f"{a['code']}_informe_final.pdf", pdf, "application/pdf"), (f"PAC_{a['code']}.xlsx", pac, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")])
-    repo.mark_pac_sent(a["id"], to, me(), phase_snapshot=_phase_snapshot(a, "PAC_SENT", report=final))
+    snapshot = _phase_snapshot(a, "PAC_SENT", report=final, reason=f"PAC enviado a {to}")
+    _change(a, "audit", a["id"], "PAC_SENT", {"to": to, "status": {"before": a.get("status"), "after": "CLOSED"}}, report=final)
+    repo.mark_pac_sent(a["id"], to, me(), phase_snapshot=snapshot)
     log("PAC_SENT", entity_type="audit", entity_id=a["id"], after_data={"to": to, "emailed": emailed}, request_id=g.request_id)
     return jsonify(status="CLOSED", emailed=emailed, note=None if emailed else "Registrado como enviado y auditoría cerrada. Entregue el informe firmado y el PAC a la unidad (el correo automático no está configurado).")
 

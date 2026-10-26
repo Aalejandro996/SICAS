@@ -29,8 +29,8 @@ def _control(value: Any) -> str:
         return "SI"
     if v in {"NO"}:
         return "NO"
-    if v in {"PARCIAL", "PARCIALMENTE"}:
-        return "PARCIAL"
+    # PARCIAL no es una respuesta válida en la fórmula de Sistemas (solo SI/NO):
+    # el control queda pendiente para que el auditor lo responda en SICAS.
     return ""
 
 

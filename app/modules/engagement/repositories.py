@@ -223,8 +223,16 @@ def phase_snapshots(audit_id):
     )
     # El detalle de respuestas y criterios permanece guardado en la instantánea,
     # pero el resumen solo entrega los indicadores necesarios para comparar.
+    from .score_snapshots import compare
+
+    previous = None
+    for row in rows:
+        full = row.get("scorecard") or {}
+        row["variation"] = compare(previous, full)
+        previous = full
     for row in rows:
         card = dict(row.get("scorecard") or {})
+        card.pop("evidence", None)
         card["worksheets"] = [
             {
                 key: value
@@ -696,6 +704,15 @@ def get_observation(oid):
     return q1(OBS_SQL + "WHERE id = CAST(:i AS uuid)", i=str(oid))
 
 
+def _insert_observation_revision(oid, user, changed_fields=(), reason=None, report_status=None):
+    """Guarda la observación tal como queda tras el cambio, con el número de revisión siguiente."""
+    x("INSERT INTO engagement.observation_revisions (observation_id, revision, data, changed_fields, reason, report_status, created_by) "
+      "SELECT o.id, COALESCE((SELECT max(revision) FROM engagement.observation_revisions r WHERE r.observation_id = o.id), 0) + 1, "
+      "to_jsonb(o) - 'id' - 'audit_id' - 'seq' - 'created_by' - 'created_at' - 'updated_at', "
+      ":f, :r, :st, CAST(:u AS uuid) FROM engagement.observations o WHERE o.id = CAST(:i AS uuid)",
+      i=str(oid), f=list(changed_fields), r=reason, st=report_status, u=user)
+
+
 def add_observation(audit_id, d, user):
     oid = str(uuid.uuid4())
     seq = db.session.execute(text("SELECT COALESCE(max(seq), 0) + 1 FROM engagement.observations WHERE audit_id = CAST(:a AS uuid)"), {"a": str(audit_id)}).scalar_one()
@@ -703,6 +720,7 @@ def add_observation(audit_id, d, user):
       "VALUES (CAST(:i AS uuid), CAST(:a AS uuid), CAST(:it AS uuid), :s, :t, :c, :cr, :ca, :e, :r, :k, CAST(:u AS uuid))",
       i=oid, a=str(audit_id), it=d.get("item_id"), s=seq, t=d["title"], c=d["condition"], cr=d.get("criteria"), ca=d.get("cause"), e=d.get("effect"),
       r=d.get("recommendation"), k=d["risk"], u=user)
+    _insert_observation_revision(oid, user, reason="Registro original")
     db.session.commit()
     return oid, seq
 
@@ -711,13 +729,23 @@ OBS_FIELDS = ("title", "condition", "criteria", "cause", "effect", "recommendati
               "pac_action", "pac_owner", "pac_due", "pac_status")
 
 
-def update_observation(oid, d):
+def update_observation(oid, d, user, reason, report_status=None):
+    """Actualiza la observación y guarda la revisión resultante en la misma transacción."""
     cols = [f for f in OBS_FIELDS if f in d]                       # nombres de columna de lista fija
     if not cols:
         return
     x("UPDATE engagement.observations SET " + ", ".join(f"{c} = :{c}" for c in cols) + ", updated_at = now() WHERE id = CAST(:i AS uuid)",
       **{c: d[c] for c in cols}, i=str(oid))
+    _insert_observation_revision(oid, user, cols, reason, report_status)
     db.session.commit()
+
+
+def observation_revisions(audit_id):
+    """Revisiones de las observaciones de la auditoría, de la más antigua a la más reciente."""
+    return q("SELECT r.observation_id::text, r.revision, r.data, r.changed_fields, r.reason, r.report_status, r.created_at, "
+             "u.username FROM engagement.observation_revisions r JOIN engagement.observations o ON o.id = r.observation_id "
+             "LEFT JOIN iam.users u ON u.id = r.created_by WHERE o.audit_id = CAST(:a AS uuid) ORDER BY o.seq, r.revision",
+             a=str(audit_id))
 
 
 def add_evidence(audit_id, item_id, observation_id, filename, ctype, size, sha, key, desc, user):
@@ -765,18 +793,106 @@ def next_version(audit_id, kind):
                               {"a": str(audit_id), "k": kind}).scalar_one()
 
 
-def create_report(audit_id, kind, version, body, sha, user):
+def _insert_body_revision(rid, body, sha, user, reason):
+    x("INSERT INTO engagement.report_body_revisions (report_id, revision, body, body_sha256, reason, created_by) "
+      "SELECT CAST(:i AS uuid), COALESCE(max(revision), 0) + 1, CAST(:b AS jsonb), :h, :r, CAST(:u AS uuid) "
+      "FROM engagement.report_body_revisions WHERE report_id = CAST(:i AS uuid)",
+      i=str(rid), b=json.dumps(body, default=str), h=sha, r=reason, u=user)
+
+
+def create_report(audit_id, kind, version, body, sha, user, reason="Generación inicial"):
     rid = str(uuid.uuid4())
     x("INSERT INTO engagement.reports (id, audit_id, kind, version, body, body_sha256, created_by) VALUES (CAST(:i AS uuid), CAST(:a AS uuid), :k, :v, CAST(:b AS jsonb), :h, CAST(:u AS uuid))",
       i=rid, a=str(audit_id), k=kind, v=version, b=json.dumps(body, default=str), h=sha, u=user)
+    _insert_body_revision(rid, body, sha, user, reason)
     db.session.commit()
     return rid
 
 
-def replace_body(rid, body, sha):
-    """Regenerar cambia el hash: se invalidan las iniciales previas (están atadas al hash)."""
-    x("UPDATE engagement.reports SET body = CAST(:b AS jsonb), body_sha256 = :h, updated_at = now() WHERE id = CAST(:i AS uuid)", b=json.dumps(body, default=str), h=sha, i=str(rid))
+def replace_body(rid, body, sha, user, reason=None, expected_sha256=None):
+    """Regenerar cambia el hash: se invalidan las iniciales previas (están atadas al hash).
+    El contenido anterior se conserva en report_body_revisions. Solo se aplica si el informe
+    sigue editable (y, si se indica, con el contenido que se leyó)."""
+    row = x("UPDATE engagement.reports SET body = CAST(:b AS jsonb), body_sha256 = :h, updated_at = now() "
+            "WHERE id = CAST(:i AS uuid) AND status IN ('DRAFT', 'RETURNED') "
+            "AND (CAST(:old AS text) IS NULL OR body_sha256 = :old) RETURNING id",
+            b=json.dumps(body, default=str), h=sha, i=str(rid), old=expected_sha256).first()
+    if row is None:
+        db.session.rollback()
+        raise StaleReportState("El informe cambió de estado o de contenido; recargue e intente de nuevo")
+    _insert_body_revision(rid, body, sha, user, reason)
     db.session.commit()
+
+
+def body_revisions(rid):
+    return q("SELECT b.revision, b.body_sha256, b.reason, b.created_at, u.username FROM engagement.report_body_revisions b "
+             "LEFT JOIN iam.users u ON u.id = b.created_by WHERE b.report_id = CAST(:r AS uuid) ORDER BY b.revision", r=str(rid))
+
+
+def latest_final(audit_id):
+    return q1("SELECT id::text, version, status, body_sha256 FROM engagement.reports WHERE audit_id = CAST(:a AS uuid) "
+              "AND kind = 'FINAL' ORDER BY version DESC LIMIT 1", a=str(audit_id))
+
+
+def reopening(rid):
+    return q1("SELECT o.reason, o.authorized_at, u.username FROM engagement.report_reopenings o LEFT JOIN iam.users u ON u.id = o.authorized_by "
+              "WHERE o.report_id = CAST(:r AS uuid)", r=str(rid))
+
+
+def reopen_report(rid, reason, user):
+    """Autoriza (una sola vez) que el equipo emita una nueva versión del informe firmado; el firmado no cambia."""
+    x("INSERT INTO engagement.report_reopenings (report_id, reason, authorized_by) VALUES (CAST(:r AS uuid), :t, CAST(:u AS uuid))",
+      r=str(rid), t=reason, u=user)
+    db.session.commit()
+
+
+# ------------------------------------------------------------------ bitácora por expediente
+def stage_change(ev):
+    """Agrega el evento a la transacción en curso, sin confirmar: el commit del cambio de negocio lo confirma."""
+    x("INSERT INTO engagement.change_events (audit_id, report_id, entity_type, entity_id, action, changes, reason, audit_phase, "
+      "report_status, actor_id, actor_username, actor_roles, request_id) VALUES (CAST(:a AS uuid), CAST(:r AS uuid), :et, :eid, "
+      ":act, CAST(:ch AS jsonb), :reason, :ph, :rs, CAST(:u AS uuid), :un, :roles, :rid)",
+      a=str(ev["audit_id"]), r=ev.get("report_id"), et=ev["entity_type"], eid=None if ev.get("entity_id") is None else str(ev["entity_id"]),
+      act=ev["action"], ch=json.dumps(ev.get("changes") or {}, ensure_ascii=False, default=str), reason=ev.get("reason"),
+      ph=ev.get("audit_phase"), rs=ev.get("report_status"), u=str(ev["actor_id"]), un=ev.get("actor_username"),
+      roles=list(ev.get("actor_roles") or ()), rid=ev.get("request_id"))
+
+
+def change_events(audit_id):
+    return q("SELECT id, report_id::text, entity_type, entity_id, action, changes, reason, audit_phase, report_status, "
+             "actor_id::text, actor_username, actor_roles, created_at FROM engagement.change_events "
+             "WHERE audit_id = CAST(:a AS uuid) ORDER BY id", a=str(audit_id))
+
+
+def audit_report_transitions(audit_id):
+    return q("SELECT t.id, t.report_id::text, r.kind, t.report_version, t.action, t.from_status, t.to_status, t.body_sha256, "
+             "t.actor_id::text AS actor_id, t.actor_username, t.actor_roles, t.comment, t.created_at "
+             "FROM engagement.report_transitions t JOIN engagement.reports r ON r.id = t.report_id "
+             "WHERE r.audit_id = CAST(:a AS uuid) ORDER BY t.id", a=str(audit_id))
+
+
+# ------------------------------------------------------------------ puntos de devolución
+RP_SQL = ("SELECT p.id, p.report_id::text, p.transition_id, p.target_type, p.target_id, p.target_label, p.description, p.status, "
+          "p.created_at, c.username AS created_by_name, p.attended_at, p.attended_note, a.username AS attended_by_name "
+          "FROM engagement.review_points p LEFT JOIN iam.users c ON c.id = p.created_by LEFT JOIN iam.users a ON a.id = p.attended_by ")
+
+
+def review_points(rid):
+    return q(RP_SQL + "WHERE p.report_id = CAST(:r AS uuid) ORDER BY p.id", r=str(rid))
+
+
+def get_review_point(pid):
+    return q1(RP_SQL + "WHERE p.id = :i", i=int(pid))
+
+
+def attend_review_point(pid, user, note):
+    """Marca el punto como atendido solo si sigue pendiente; devuelve False si otro lo atendió antes."""
+    row = x("UPDATE engagement.review_points SET status = 'ATENDIDO', attended_by = CAST(:u AS uuid), attended_at = clock_timestamp(), "
+            "attended_note = :n WHERE id = :i AND status = 'PENDIENTE' RETURNING id", i=int(pid), u=user, n=note).first()
+    if row is None:
+        db.session.rollback()
+        return False
+    return True
 
 
 class StaleReportState(Exception):
@@ -785,7 +901,7 @@ class StaleReportState(Exception):
 
 def transition_report(rid, *, expected_status, expected_sha256, status, action, actor, report_version,
                       actor_username=None, actor_roles=(), comment=None, comment_kind=None,
-                      signed_doc=None, phase_snapshot=None, **kw):
+                      signed_doc=None, phase_snapshot=None, review_points=(), **kw):
     """Cambia el estado del informe con compare-and-set y registra la transición.
 
     El UPDATE solo se aplica si el informe sigue en `expected_status` con el contenido
@@ -827,14 +943,19 @@ def transition_report(rid, *, expected_status, expected_sha256, status, action, 
             _insert_comment(rid, actor, comment_kind, comment)
         if signed_doc:
             _insert_signed_doc(rid, user=actor, **signed_doc)
-        x(
+        transition_id = x(
             "INSERT INTO engagement.report_transitions "
             "(report_id, report_version, action, from_status, to_status, body_sha256, "
             "actor_id, actor_username, actor_roles, comment) "
-            "VALUES (CAST(:r AS uuid), :v, :action, :f, :t, :h, CAST(:u AS uuid), :un, :roles, :c)",
+            "VALUES (CAST(:r AS uuid), :v, :action, :f, :t, :h, CAST(:u AS uuid), :un, :roles, :c) RETURNING id",
             r=str(rid), v=report_version, action=action, f=expected_status, t=status,
             h=expected_sha256, u=actor, un=actor_username, roles=list(actor_roles or ()), c=comment,
-        )
+        ).scalar_one()
+        for point in review_points or ():
+            x("INSERT INTO engagement.review_points (report_id, transition_id, target_type, target_id, target_label, description, created_by) "
+              "VALUES (CAST(:r AS uuid), :t, :tt, :tid, :tl, :d, CAST(:u AS uuid))",
+              r=str(rid), t=transition_id, tt=point["target_type"], tid=point.get("target_id"),
+              tl=point.get("target_label"), d=point["description"], u=actor)
         if phase_snapshot:
             _insert_phase_score_snapshot(phase_snapshot)
         db.session.commit()

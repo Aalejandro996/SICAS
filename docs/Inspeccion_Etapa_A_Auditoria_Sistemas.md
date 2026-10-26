@@ -128,3 +128,38 @@ Orden sugerido de incrementos: **3 → 1 → 2 → 4 → 5 → 6 → 7**, cada u
 - **D6:** Correspondencia exacta entre las fases del Jefe de Auditoría y `PLANIFICACION/TRABAJO_CAMPO/INFORME`.
 - **D7:** ¿Es intencional que auditores no miembros vean el informe en etapa CONTRALOR? (F5)
 - **D8:** ¿Se puede seguir actualizando el seguimiento del PAC después de la firma? (F4)
+
+---
+
+## 5. Estado de implementación (2026-10-25)
+
+### Decisiones confirmadas por el usuario
+- **D1:** en Sistemas se elimina `PARCIAL`; el control se responde solo SI/NO (fórmula 40/30/30). Las respuestas `PARCIAL` anteriores no puntúan y quedan pendientes.
+- **D2:** referencia del cuadro comparativo = 100; nivel de aceptación = umbral Satisfactorio (70, de parámetros).
+- **D3/D4:** los revisores no editan; devuelven con puntos a corregir y el informe siempre vuelve al equipo auditor.
+
+### Decisiones tomadas por defecto (a validar)
+- **D5:** solo Contraloría (`audit:report_approve`, MFA reciente, motivo de 20 caracteres o más) autoriza una nueva versión de un informe firmado, una vez por versión y mientras la auditoría siga en curso (PAC no enviado). La versión firmada no cambia; la nueva recorre toda la cadena.
+- **D6:** se mantienen las fases PLANIFICACION / TRABAJO_CAMPO / INFORME.
+- **D7:** `audit:read_final` ya no da acceso a informes en etapa CONTRALOR (solo aprobados o firmados).
+- **D8:** el seguimiento del PAC sigue el bloqueo general (no se edita con el informe en revisión o firmado).
+
+### Implementado
+| Brecha | Solución |
+|---|---|
+| T1/T2 Bitácora | `engagement.change_events`, escrita en la misma transacción que cada cambio; `GET /audits/<id>/history` y pestaña Bitácora |
+| T3 Cuerpo sobrescrito | `engagement.report_body_revisions`; regeneración con compare-and-set y motivo |
+| T4/T5 Transiciones | `engagement.report_transitions` + compare-and-set (migración 025) |
+| T6 Observaciones | `engagement.observation_revisions`, motivo obligatorio para el hallazgo |
+| F1 PARCIAL | eliminado en Sistemas (API, importación Excel y pantalla) |
+| F2 Cuadro comparativo | `scoring.comparison`, en el resumen y en el informe |
+| F3 Snapshot | evidencia, versión de plantilla, versión de regla, motivo y variación respecto del anterior |
+| F4 Reapertura | `engagement.report_reopenings` + `POST /reports/<id>/reopen` |
+| F5 Visibilidad | corregida |
+| Devoluciones | `engagement.review_points` (pendiente → atendido, inmutable); no se reenvía con puntos pendientes |
+| Informe final | cuadro comparativo, evolución por fase, ítems y evidencias que originaron ajustes, observaciones originales y modificadas, devoluciones y aprobaciones, identificación de versión |
+
+### Defectos preexistentes corregidos durante la implementación
+- Tras regenerar un informe el auditor no podía volver a estampar sus iniciales (UNIQUE sin el SHA-256), por lo que un informe devuelto no podía reenviarse.
+- La auditoría no quedaba bloqueada para el equipo mientras el informe estaba en las etapas GERENCIA o CONTRALOR.
+- La evidencia podía vincularse a ítems u observaciones de otra auditoría.

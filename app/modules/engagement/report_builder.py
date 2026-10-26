@@ -79,6 +79,36 @@ def build_body(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dic
 
 
 # ---------------------------------------------------------------------------------------- PDF
+def _num(v):
+    return "—" if v is None else f"{float(v):.1f}"
+
+
+def _signed(v):
+    return "—" if v is None else f"{float(v):+.1f}"
+
+
+def _rating(code):
+    return RATING_LABEL.get(code, str(code or "").replace("_", " ").capitalize())
+
+
+def _label(code):
+    return {"PLANIFICACION": "Planificación", "TRABAJO_CAMPO": "Trabajo de campo", "INFORME": "Informe"}.get(code, code or "—")
+
+
+def _iso(v):
+    return v.isoformat() if hasattr(v, "isoformat") else (str(v) if v is not None else None)
+
+
+def _d(v):
+    return str(v or "—")[:16].replace("T", " ")
+
+
+def _action(code):
+    return {"SUBMIT": "Envío a revisión", "RETURN": "Devolución", "APPROVE_JEFE": "Aprobación del Jefe de Auditoría",
+            "APPROVE_SIGN_GERENTE": "Aprobación y firma de Gerencia", "APPROVE_SIGN_CONTRALOR": "Aprobación y firma de Contraloría",
+            "SEND_PREVIO": "Envío del informe previo"}.get(code, code)
+
+
 def _p(text, style):
     return Paragraph(escape(str(text or "")).replace("\n", "<br/>"), style)
 
@@ -207,6 +237,22 @@ def build_pdf(body: dict, state: dict | None = None) -> bytes:
     if ov.get("manual_override") and body.get("overall_reason"):
         s.append(_p(f"Ajuste manual de la calificación global: {body['overall_reason']}", small))
 
+    cmp_ = body.get("comparison")
+    if cmp_:
+        s.append(Paragraph("Cuadro comparativo: referencia y resultado", h2))
+        rows = [[Paragraph(x, hdr) for x in ("Cédula", "Ítems", "Nota esperada", "Umbral", "Afirmativas", "Respondidas",
+                                             "Nota obtenida", "Nivel", "Dif. esperada", "Dif. umbral")]]
+        for label, c in [(w["title"], w) for w in cmp_["worksheets"]] + [("GLOBAL", cmp_["overall"])]:
+            ref, res, dif = c["reference"], c["result"], c["differences"]
+            rows.append([_p(label, cell), _p(ref["items"], cell), _p(_num(ref["expected_score"]), cell),
+                         _p(f"{_num(ref['acceptance_threshold'])} ({_rating(ref['acceptance_level'])})", cell),
+                         _p(res["affirmative"], cell), _p(res["answered"], cell), _p(_num(res["score"]), cell),
+                         _p(_rating(res["rating"]), cell), _p(_signed(dif["vs_expected"]), cell), _p(_signed(dif["vs_threshold"]), cell)])
+        t = table(rows, [3.3 * cm, 1.1 * cm, 1.5 * cm, 2.4 * cm, 1.5 * cm, 1.6 * cm, 1.5 * cm, 1.9 * cm, 1.4 * cm, 1.3 * cm])
+        t.setStyle(TableStyle([("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"), ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E8EEF7"))]))
+        s += [t, _p("Referencia: nota esperada 100 y nivel de aceptación Satisfactorio. La nota obtenida es la final vigente, "
+                    "con los ajustes manuales justificados. Ítems NO_APLICA y excepciones no puntúan.", small)]
+
     s.append(Paragraph("3. Observaciones", h1))
     if not body["observations"]:
         s.append(_p("No se identificaron observaciones.", body_st))
@@ -225,6 +271,18 @@ def build_pdf(body: dict, state: dict | None = None) -> bytes:
         st += [("SPAN", (0, i), (1, i)) for i in range(1, len(rows))]
         t.setStyle(TableStyle(st)); s += [KeepTogether([t]), Spacer(1, 6)]
 
+    if body.get("observation_changes"):
+        s.append(Paragraph("Observaciones modificadas después de su registro original", h2))
+        rows = [[Paragraph(x, hdr) for x in ("Obs.", "Registro original", "Rev.", "Fecha / usuario", "Campos", "Motivo")]]
+        for oc in body["observation_changes"]:
+            orig = oc["original"]
+            for i, ch in enumerate(oc["changes"]):
+                rows.append([_p(oc["n"] if i == 0 else "", cell),
+                             _p(f"{orig.get('title') or ''} — {orig.get('condition') or ''} (riesgo {orig.get('risk') or '—'})" if i == 0 else "", cell),
+                             _p(ch["revision"], cell), _p(f"{_d(ch['date'])} · {ch.get('user') or '—'}", cell),
+                             _p(", ".join(ch["fields"]), cell), _p(ch["reason"], cell)])
+        s.append(table(rows, [1 * cm, 5 * cm, 1 * cm, 3 * cm, 2.6 * cm, 4.9 * cm]))
+
     s.append(Paragraph("4. Limitaciones al alcance (información no recibida)", h1))
     if body["limitations"]:
         s.append(table([[Paragraph(x, hdr) for x in ("Cédula", "Referencia", "Detalle de la excepción")]] +
@@ -236,7 +294,62 @@ def build_pdf(body: dict, state: dict | None = None) -> bytes:
               table([[Paragraph(x, hdr) for x in ("Cédula", "Referencia", "Auto", "Final", "Justificación")]] +
                     [[_p(a["sheet"], cell), _p(a["ref"], cell), _p("—" if a["auto"] is None else f"{a['auto']:.1f}", cell), _p(f"{a['final']:.1f}", cell), _p(a["reason"], cell)]
                      for a in body["adjustments"]], [3.2 * cm, 2.8 * cm, 2 * cm, 1.7 * cm, 7.8 * cm])]
-    s += [Paragraph("6. Conclusión", h1), _p(body["conclusion"], body_st)]
+    if body.get("score_history") is not None:
+        s.append(Paragraph("6. Evolución de la calificación por fase", h1))
+        if not body["score_history"]:
+            s.append(_p("No hay instantáneas de fase registradas para esta auditoría.", body_st))
+        else:
+            rows = [[Paragraph(x, hdr) for x in ("Fecha", "Fase / evento", "Nota", "Nivel", "Variación", "Usuario", "Motivo")]]
+            for hst in body["score_history"]:
+                rows.append([_p(_d(hst["date"]), cell), _p(f"{_label(hst['phase'])} · {hst['event']}", cell), _p(_num(hst["score"]), cell),
+                             _p(_rating(hst["rating"]), cell), _p(_signed(hst["delta"]), cell), _p(hst.get("user") or "—", cell),
+                             _p(hst.get("reason") or "—", cell)])
+            s.append(table(rows, [2.2 * cm, 3.6 * cm, 1.4 * cm, 2.4 * cm, 1.6 * cm, 2.2 * cm, 4.1 * cm]))
+            changed = [(hst, it) for hst in body["score_history"] for it in hst["changed_items"]]
+            if changed:
+                s.append(Paragraph("Ítems que originaron los ajustes", h2))
+                rows = [[Paragraph(x, hdr) for x in ("Fase", "Cédula", "Ref.", "Antes", "Después", "Motivo / sustento")]]
+                rows += [[_p(_label(hst["phase"]), cell), _p(it["sheet"], cell), _p(it["ref"], cell), _p(_num(it["before"]), cell),
+                          _p(_num(it["after"]), cell), _p(it["reason"] or "—", cell)] for hst, it in changed]
+                s.append(table(rows, [2.4 * cm, 3.4 * cm, 2 * cm, 1.4 * cm, 1.6 * cm, 6.7 * cm]))
+            added = [(hst, e) for hst in body["score_history"] for e in hst["evidence_added"]]
+            if added:
+                s.append(_p("Evidencia incorporada entre fases: " + "; ".join(
+                    f"{_label(hst['phase'])}: {e['filename']}" + (f" (anexo {e['n']})" if e.get("n") else "") for hst, e in added), small))
+            versions = sorted({hst["rule_version"] for hst in body["score_history"] if hst.get("rule_version")})
+            if versions:
+                s.append(_p("Regla de cálculo aplicada: " + ", ".join(versions), small))
+
+    if body.get("review_history") is not None:
+        s.append(Paragraph("7. Revisión, devoluciones y aprobaciones", h1))
+        live = (state.get("transitions") or [])
+        history = body["review_history"] + [
+            {"date": str(t.get("created_at")), "action": _action(t["action"]), "report_version": t.get("report_version"),
+             "user": t.get("actor_username"), "comment": t.get("comment") or "", "points": []}
+            for t in live if not any(h.get("date") == _iso(t.get("created_at")) and h.get("code") == t["action"] for h in body["review_history"])
+        ]
+        if not history:
+            s.append(_p("Sin decisiones de revisión registradas.", body_st))
+        else:
+            rows = [[Paragraph(x, hdr) for x in ("Fecha", "Versión", "Decisión", "Usuario", "Comentario y puntos")]]
+            live_points = {pt.get("id"): pt for pt in state.get("review_points") or []}
+            for rv in history:
+                for pt in rv.get("points") or []:
+                    cur = live_points.get(pt.get("id"))
+                    if cur:  # el estado de atención vigente prevalece sobre el del contenido generado
+                        pt["status"], pt["attended_note"] = cur["status"], cur.get("attended_note") or ""
+                detail = rv["comment"] + "".join(
+                    f"\n• {pt['target']}: {pt['description']} [{pt['status']}]" + (f" — {pt['attended_note']}" if pt.get("attended_note") else "")
+                    for pt in rv.get("points") or [])
+                rows.append([_p(_d(rv["date"]), cell), _p(f"v{rv.get('report_version') or '—'}", cell), _p(rv["action"], cell),
+                             _p(rv.get("user") or "—", cell), _p(detail or "—", cell)])
+            s.append(table(rows, [2.4 * cm, 1.4 * cm, 3.6 * cm, 2.4 * cm, 7.7 * cm]))
+        for ro in body.get("reopenings") or []:
+            s.append(_p(f"Reapertura autorizada de la versión v{ro['version']} ({_d(ro['date'])}, {ro.get('user') or '—'}): {ro['reason']}", small))
+
+    s += [Paragraph("8. Conclusión" if body.get("review_history") is not None else "6. Conclusión", h1), _p(body["conclusion"], body_st)]
+    s.append(_p(f"Identificación del documento: {code} · revisión de contenido {body.get('revision', 1)}"
+                + (f" · SHA-256 {state['body_sha256']}" if state.get("body_sha256") else ""), small))
     s.append(Paragraph("Anexo de evidencias", h1))
     if body["evidence"]:
         s.append(table([[Paragraph(x, hdr) for x in ("N°", "Archivo", "Descripción", "Huella SHA-256")]] +
