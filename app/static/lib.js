@@ -104,7 +104,9 @@
     const w = inline ? window.open('', '_blank') : null;
     const r = await S.call(path);
     if (!r.ok || !r.blob) { if (w) w.close(); S.say(S.err(r)); return; }
-    if (w) { w.location = URL.createObjectURL(r.blob); } else S.download(r.blob, filename);
+    // El nombre que indica el servidor (p. ej. código + unidad) prevalece sobre el sugerido por la pantalla.
+    const cd = /filename="([^"]+)"/.exec(r.res.headers.get('Content-Disposition') || '');
+    if (w) { w.location = URL.createObjectURL(r.blob); } else S.download(r.blob, cd ? cd[1] : filename);
   };
 
   S.upload = async (path, formData) => {

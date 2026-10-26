@@ -1416,6 +1416,13 @@ def update_regulatory_catalog(topic):
     return jsonify(status="OK")
 
 
+def file_slug(text_, limit=60):
+    """Texto apto para nombres de archivo (sin acentos ni signos): «Gerencia de TI» -> «Gerencia_de_TI»."""
+    import unicodedata
+    plain = unicodedata.normalize("NFKD", str(text_ or "")).encode("ascii", "ignore").decode()
+    return (re.sub(r"[^A-Za-z0-9]+", "_", plain).strip("_")[:limit].rstrip("_")) or "unidad"
+
+
 def _systems_document(aid, kind):
     """Carta de documentación (fase 2) o programa de pruebas (fase 3) de una auditoría de Sistemas."""
     a, e = load(aid)
@@ -1436,12 +1443,12 @@ def _systems_document(aid, kind):
             return err(str(ex))
         controls = phase_documents.documented_controls(sheets, "LEVANTAMIENTO", systems_domains())
         pdf = phase_documents.documentation_request_pdf(audit=a, team=team, controls=controls, company=company, due=due, today=date.today())
-        action, name = "DOCUMENTATION_REQUEST_ISSUED", f"{a['code']}_solicitud_documentacion.pdf"
+        action, name = "DOCUMENTATION_REQUEST_ISSUED", f"{a['code']}_{file_slug(a.get('unit_name'))}_solicitud_documentacion.pdf"
         changes = {"controls": [c["ref"] for c in controls], "due": due}
     else:
         controls = phase_documents.documented_controls(sheets, "DOCUMENTACION", systems_domains())
         pdf = phase_documents.field_tests_pdf(audit=a, team=team, controls=controls, company=company, today=date.today())
-        action, name = "FIELD_TEST_PROGRAM_ISSUED", f"{a['code']}_programa_pruebas_campo.pdf"
+        action, name = "FIELD_TEST_PROGRAM_ISSUED", f"{a['code']}_{file_slug(a.get('unit_name'))}_programa_pruebas_campo.pdf"
         changes = {"controls": [c["ref"] for c in controls]}
     if repo.is_member(a["id"], me()):
         _change(a, "audit", a["id"], action, {**changes, "sha256": hashlib.sha256(pdf).hexdigest()})
