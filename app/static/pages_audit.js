@@ -16,6 +16,9 @@
   const workPhase = (a) => (isSystems(a) ? true : a?.phase !== 'PLANIFICACION');
   const RES = [['', '—'], ['CUMPLE', 'Cumple'], ['PARCIAL', 'Parcial'], ['NO_CUMPLE', 'No cumple'], ['NO_APLICA', 'No aplica'], ['EXCEPCION', 'Excepción']];
   const L = (v) => (v == null || v === '' ? '—' : (S.label2 || ((x) => x))(S.label(v)));
+  let codes = null;
+  const catalogs = async () => (codes = codes || await S.get(A + '/codification'));
+  const opts = (cat) => Object.entries(cat || {}).map(([k, v]) => [k, `${k} — ${v}`]);
   const closeBtn = (m, t = 'Cerrar') => h('button', { class: 'secondary', onclick: () => m.close() }, t);
   const dlg = (title, body) => { const m = S.modal(title, body); return m; };
 
@@ -62,21 +65,27 @@
   }
 
   async function newFile() {
-    const u = await S.get(A + '/units');
-    if (!u) return;
+    const [u, cat] = await Promise.all([S.get(A + '/units'), catalogs()]);
+    if (!u || !cat) return;
+    const systems = currentDomain() === 'SISTEMAS';
     if (!u.units.length) { S.say('No hay unidades ni sucursales. ' + (can('audit:unit_manage') ? 'Créelas en «Unidades y sucursales».' : 'Pida al Contralor que las registre.')); return; }
     const v = await S.ask('Nuevo expediente', [{ name: 'unit_id', label: 'Unidad / sucursal a auditar', type: 'select', options: u.units.map((x) => [x.id, `${x.name} (${x.code})`]) },
       { name: 'title', label: 'Título del expediente', required: true }, { name: 'objective', label: 'Objetivo general', type: 'textarea' },
-      { name: 'period_from', label: 'Período revisado: desde', type: 'date', required: true }, { name: 'period_to', label: 'Período revisado: hasta', type: 'date', required: true }], 'Crear expediente',
-      'El expediente se crea primero; luego se abre la auditoría dentro de él.');
+      { name: 'period_from', label: 'Período revisado: desde', type: 'date', required: true }, { name: 'period_to', label: 'Período revisado: hasta', type: 'date', required: true },
+      { name: 'audit_type', label: 'Tipo de auditoría (codificación)', type: 'select', options: systems ? [['S', 'S — Sistema']] : opts(cat.audit_types), value: systems ? 'S' : 'A' },
+      { name: 'company', label: 'Compañía', type: 'select', options: opts(cat.companies), value: 'SC' }], 'Crear expediente',
+      'Código: TIPO-COMPAÑÍA-CORRELATIVO-AÑO (p. ej. S-SC-001-2026). El expediente se crea primero; luego se abre la auditoría dentro de él.');
     if (!v) return;
     const r = await S.send(A + '/files', 'POST', { ...v, unit_id: Number(v.unit_id) });
     if (r) { S.say('Expediente creado: ' + r.code, true); route(); }
   }
 
   async function newAudit() {
-    const [f, who] = await Promise.all([S.get(A + '/files'), S.get(A + '/auditors')]);
-    if (!f || !who) return;
+    const [f, who, cat] = await Promise.all([S.get(A + '/files'), S.get(A + '/auditors'), catalogs()]);
+    if (!f || !who || !cat) return;
+    const sel2 = (items, value) => h('select', null, opts(items).map(([v, l]) => h('option', { value: v, selected: v === value }, l)));
+    const planSel = sel2(cat.plan_types, 'P'), procSel = sel2(cat.processes, currentDomain() === 'SISTEMAS' ? 'S' : 'O'),
+      freqSel = sel2(cat.frequencies, 'G'), repCoSel = sel2(cat.report_companies, 'SC');
     const open = f.files.filter((x) => x.status === 'OPEN');
     if (!open.length) { S.say('Primero cree el expediente.'); return; }
     const sel = h('select', null, open.map((x) => h('option', { value: x.id }, `${x.code} — ${x.unit_name} — ${x.title}`)));
@@ -108,6 +117,8 @@
     const members = who.auditors.map((a) => ({ a, el: h('input', { type: 'checkbox' }) }));
     const m = dlg('Nueva auditoría', h('div', null,
       h('label', null, 'Expediente', sel), h('label', null, 'Modalidad', mod), h('label', null, 'Lugar', loc),
+      h('p', { class: 'muted' }, 'Codificación de los informes: SIGLAS-PROCESO-TIPO-COMPAÑÍA-CORRELATIVO-AÑO (p. ej. P-S-G-SC-001-2026). La auditoría toma el código del expediente con el sufijo -A1, -A2…'),
+      h('div', { class: 'toolbar' }, h('label', null, 'Siglas', planSel), h('label', null, 'Proceso', procSel), h('label', null, 'Tipo', freqSel), h('label', null, 'Compañía del informe', repCoSel)),
       lineBox, scopeHint,
       h('label', null, 'Objetivos', obj), h('label', null, 'Alcance', scope), h('label', null, 'Procedimientos', proc),
       h('div', { class: 'toolbar' }, h('label', null, 'Inicio previsto', ps), h('label', null, 'Fin previsto', pe)),
@@ -120,7 +131,8 @@
       const body = { file_id: sel.value, modality: mod.value, location: loc.value,
         lines: system ? [] : lines.filter((x) => x.el.checked).map((x) => x.v),
         objectives: obj.value, scope: scope.value, procedures: proc.value, planned_start: ps.value, planned_end: pe.value,
-        contact_name: cn.value, contact_role: cr.value, member_ids: members.filter((x) => x.el.checked).map((x) => x.a.id) };
+        contact_name: cn.value, contact_role: cr.value, member_ids: members.filter((x) => x.el.checked).map((x) => x.a.id),
+        plan_type: planSel.value, process: procSel.value, frequency: freqSel.value, report_company: repCoSel.value };
       const r = await S.send(A, 'POST', body);
       if (r) { m.close(); S.say('Auditoría creada: ' + r.code, true); location.hash = '#/audits/' + r.id + '/cedulas'; }
     } }, 'Crear auditoría'));
@@ -296,6 +308,7 @@
     const dataPanel = section('Datos de la auditoría', null,
       h('div', { class: 'kv audit-summary-kv' },
         h('b', null, 'Expediente'), `${a.file_code} — ${a.title || ''}`,
+        h('b', null, 'Codificación de informes'), `${a.plan_type}-${a.process}-${a.frequency}-${a.report_company}-NNN-AAAA`,
         h('b', null, 'Unidad'), a.unit_name || '—',
         h('b', null, 'Objetivos'), a.objectives || '—',
         h('b', null, 'Alcance'), a.scope || '—',
@@ -353,7 +366,13 @@
 
   async function editAudit() {
     const a = ctx.d.audit;
+    const cat = await catalogs();
+    if (!cat) return;
     const v = await S.ask('Editar datos de la auditoría', [
+      { name: 'plan_type', label: 'Siglas del informe', type: 'select', options: opts(cat.plan_types), value: a.plan_type },
+      { name: 'process', label: 'Proceso', type: 'select', options: opts(cat.processes), value: a.process },
+      { name: 'frequency', label: 'Tipo (frecuencia)', type: 'select', options: opts(cat.frequencies), value: a.frequency },
+      { name: 'report_company', label: 'Compañía del informe', type: 'select', options: opts(cat.report_companies), value: a.report_company },
       { name: 'objectives', label: 'Objetivos', type: 'textarea', value: a.objectives || '', required: true },
       { name: 'scope', label: 'Alcance', type: 'textarea', value: a.scope || '', required: true },
       { name: 'procedures', label: 'Procedimientos', type: 'textarea', value: a.procedures || '' },
@@ -904,7 +923,7 @@
       if (a.phase === 'INFORME') bar.append(h('button', { onclick: gen('FINAL') }, 'Generar informe final'));
     }
     el.append(bar, a.phase !== 'INFORME' ? h('div', { class: 'warn' }, 'El informe final se genera en la fase Informe. El informe previo puede generarse desde Trabajo de campo.') : null,
-      tbl(['Tipo', 'Versión', 'Estado', 'Generó', 'Creado', 'Enviado / aprobado'], d.reports.map((r) => [r.kind === 'PREVIO' ? 'Previo' : 'Final', 'v' + r.version, S.badge(r.status), r.created_by_name, fmt(r.created_at),
+      tbl(['Código', 'Tipo', 'Versión', 'Estado', 'Generó', 'Creado', 'Enviado / aprobado'], d.reports.map((r) => [r.code || '—', r.kind === 'PREVIO' ? 'Previo' : 'Final', 'v' + r.version, S.badge(r.status), r.created_by_name, fmt(r.created_at),
         r.sent_to ? 'Enviado a ' + r.sent_to : r.approved_by_name ? 'Aprobó ' + r.approved_by_name : '']), (i) => openReport(d.reports[i].id, reload)),
       h('div', { class: 'panel' }, h('h3', null, 'PAC — Plan de Acción Correctiva (anexo en Excel)'),
         h('p', { class: 'muted' }, 'Contiene las observaciones y los campos que completa la unidad. El envío se habilita cuando el informe final está firmado por el Contralor y el Gerente de Control Interno; al enviarlo se cierra la auditoría.'),
@@ -972,7 +991,7 @@
     const reopen = (m) => { m.close(); openReport(rid, after); };
     const holder = {};
     const content = h('div', null,
-      h('div', { class: 'kv' }, h('b', null, 'Tipo'), r.kind === 'PREVIO' ? 'Informe previo (hacia la unidad)' : 'Informe final', h('b', null, 'Versión'), 'v' + r.version, h('b', null, 'Estado'), S.badge(r.status),
+      h('div', { class: 'kv' }, h('b', null, 'Código'), r.code || '—', h('b', null, 'Tipo'), r.kind === 'PREVIO' ? 'Informe previo (hacia la unidad)' : 'Informe final', h('b', null, 'Versión'), 'v' + r.version, h('b', null, 'Estado'), S.badge(r.status),
         h('b', null, 'Calificación'), [S.ratingBadge(b.overall.rating), ' ', b.overall.final != null ? S.score(b.overall.final) + '%' : ''], h('b', null, 'Observaciones'), String((b.observations || []).length),
         h('b', null, 'Limitaciones al alcance'), String((b.limitations || []).length), h('b', null, 'Ajustes manuales'), String((b.adjustments || []).length), r.sent_to ? [h('b', null, 'Enviado a'), r.sent_to] : null),
       r.status === 'RETURNED' ? h('div', { class: 'warn' }, 'Informe devuelto: atienda los puntos indicados, regenere y vuelva a enviar.') : null,

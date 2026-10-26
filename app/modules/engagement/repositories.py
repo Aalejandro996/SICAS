@@ -69,23 +69,63 @@ def create_unit(code, name, kind, audit_domain="GENERAL", responsible_name=None,
     return r["id"]
 
 
-def next_code(prefix, seq, year):
-    n = db.session.execute(text(f"SELECT nextval('engagement.{seq}')")).scalar_one()      # seq: constante interna
-    return f"{prefix}-{year}-{n:04d}"
+def _lock(key):
+    """Serializa la asignación de correlativos de un mismo prefijo y año (se libera al confirmar)."""
+    x("SELECT pg_advisory_xact_lock(hashtext(:k))", k=key)
 
 
-def create_file(code, unit_id, title, objective, pf, pt, user, audit_domain="GENERAL"):
+def next_file_code(audit_type, company, year):
+    """Siguiente código de expediente TIPO-COMPAÑÍA-NNN-AÑO."""
+    from .codification import file_code
+    _lock(f"file:{audit_type}:{company}:{year}")
+    n = db.session.execute(text(
+        "SELECT COALESCE(max(CAST(split_part(substring(code from length(:p) + 2), '-', 1) AS int)), 0) + 1 "
+        "FROM engagement.files WHERE audit_type = :t AND company = :c AND fiscal_year = :y"),
+        {"p": f"{audit_type}-{company}", "t": audit_type, "c": company, "y": year}).scalar_one()
+    return file_code(audit_type, company, n, year)
+
+
+def next_audit_code(file_id):
+    """Código de la auditoría: el del expediente con el sufijo -A<n>."""
+    from .codification import audit_code
+    f = q1("SELECT code FROM engagement.files WHERE id = CAST(:f AS uuid) FOR UPDATE", f=str(file_id))
+    n = db.session.execute(text("SELECT count(*) + 1 FROM engagement.audits WHERE file_id = CAST(:f AS uuid)"),
+                           {"f": str(file_id)}).scalar_one()
+    return audit_code(f["code"], n)
+
+
+def report_code_for(audit_id, kind, year):
+    """Código del informe: se reutiliza para las versiones del mismo tipo; si no existe, se asigna el siguiente."""
+    from .codification import report_code, report_prefix
+    prev = q1("SELECT code FROM engagement.reports WHERE audit_id = CAST(:a AS uuid) AND kind = :k AND code IS NOT NULL "
+              "ORDER BY version LIMIT 1", a=str(audit_id), k=kind)
+    if prev:
+        return prev["code"]
+    a = q1("SELECT plan_type, process, frequency, report_company FROM engagement.audits WHERE id = CAST(:a AS uuid)", a=str(audit_id))
+    prefix = report_prefix(a["plan_type"], a["process"], a["frequency"], a["report_company"])
+    _lock(f"report:{prefix}:{year}")
+    n = db.session.execute(text(
+        "SELECT COALESCE(max(CAST(split_part(substring(code from length(:p) + 2), '-', 1) AS int)), 0) + 1 "
+        "FROM engagement.reports WHERE code LIKE :p || '-%-' || :y"), {"p": prefix, "y": str(year)}).scalar_one()
+    return report_code(prefix, n, year)
+
+
+def create_file(unit_id, title, objective, pf, pt, user, audit_domain="GENERAL", audit_type="C", company="SC", year=None):
+    """Crea el expediente con su código institucional; devuelve (id, código)."""
+    from datetime import date
     if audit_domain not in ("GENERAL", "FINANCIERA", "SISTEMAS"):
         raise ValueError("audit_domain inválido")
+    year = year or date.today().year
     fid = str(uuid.uuid4())
-    x("INSERT INTO engagement.files (id, code, unit_id, title, objective, period_from, period_to, audit_domain, created_by) "
-      "VALUES (CAST(:i AS uuid), :c, :u, :t, :o, :pf, :pt, :d, CAST(:by AS uuid))",
-      i=fid, c=code, u=unit_id, t=title, o=objective, pf=pf, pt=pt, d=audit_domain, by=user)
+    code = next_file_code(audit_type, company, year)
+    x("INSERT INTO engagement.files (id, code, unit_id, title, objective, period_from, period_to, audit_domain, created_by, "
+      "audit_type, company, fiscal_year) VALUES (CAST(:i AS uuid), :c, :u, :t, :o, :pf, :pt, :d, CAST(:by AS uuid), :at, :co, :y)",
+      i=fid, c=code, u=unit_id, t=title, o=objective, pf=pf, pt=pt, d=audit_domain, by=user, at=audit_type, co=company, y=year)
     db.session.commit()
-    return fid
+    return fid, code
 
 
-FILE_SQL = ("SELECT f.id::text, f.code, f.title, f.objective, f.period_from, f.period_to, f.status, f.audit_domain, f.created_at, u.id AS unit_id, "
+FILE_SQL = ("SELECT f.id::text, f.code, f.legacy_code, f.audit_type, f.company, f.fiscal_year, f.title, f.objective, f.period_from, f.period_to, f.status, f.audit_domain, f.created_at, u.id AS unit_id, "
             "u.code AS unit_code, u.name AS unit_name, u.kind AS unit_kind, u.audit_domain AS unit_audit_domain, u.responsible_name, u.responsible_role, "
             "(SELECT count(*) FROM engagement.audits a WHERE a.file_id = f.id) AS audits FROM engagement.files f JOIN engagement.units u ON u.id = f.unit_id ")
 
@@ -109,9 +149,9 @@ def get_file(file_id):
 
 
 # ------------------------------------------------------------------ auditorías
-AUDIT_SQL = ("SELECT a.id::text, a.code, a.file_id::text, a.modality, a.phase, a.status, a.audit_domain, a.objectives, a.scope, a.procedures, a.lines, "
+AUDIT_SQL = ("SELECT a.id::text, a.code, a.legacy_code, a.plan_type, a.process, a.frequency, a.report_company, a.file_id::text, a.modality, a.phase, a.status, a.audit_domain, a.objectives, a.scope, a.procedures, a.lines, "
              "a.planned_start, a.planned_end, a.location, a.contact_name, a.contact_role, a.manual_score, a.manual_reason, a.manual_at, "
-             "a.pac_sent_at, a.pac_sent_to, a.created_at, f.code AS file_code, f.title, f.period_from, f.period_to, "
+             "a.pac_sent_at, a.pac_sent_to, a.created_at, f.code AS file_code, f.audit_type, f.company, f.title, f.period_from, f.period_to, "
              "u.code AS unit_code, u.name AS unit_name, u.kind AS unit_kind, u.audit_domain AS unit_audit_domain, u.responsible_name, u.responsible_role "
              "FROM engagement.audits a JOIN engagement.files f ON f.id = a.file_id JOIN engagement.units u ON u.id = f.unit_id ")
 
@@ -173,21 +213,25 @@ def eligible_auditors(domain="GENERAL"):
              "WHERE r.code = ANY(CAST(:roles AS text[])) AND u.is_active ORDER BY u.full_name", roles=roles)
 
 
-def create_audit(code, file_id, d, members, user):
+def create_audit(file_id, d, members, user):
+    """Crea la auditoría con el código del expediente y sufijo -A<n>; devuelve (id, código)."""
     aid = str(uuid.uuid4())
+    code = next_audit_code(file_id)
     domain = d.get("audit_domain", "GENERAL")
     # Sistemas inicia en Levantamiento de información; el resto, en Planificación.
     first_phase = "LEVANTAMIENTO" if domain == "SISTEMAS" else "PLANIFICACION"
     x("INSERT INTO engagement.audits (id, code, file_id, modality, audit_domain, objectives, scope, procedures, lines, planned_start, planned_end, location, "
-      "contact_name, contact_role, created_by, phase) VALUES (CAST(:i AS uuid), :c, CAST(:f AS uuid), :m, :d, :o, :s, :p, CAST(:l AS text[]), :ps, :pe, :loc, :cn, :cr, CAST(:by AS uuid), :ph)",
+      "contact_name, contact_role, created_by, phase, plan_type, process, frequency, report_company) VALUES (CAST(:i AS uuid), :c, CAST(:f AS uuid), :m, :d, :o, :s, :p, "
+      "CAST(:l AS text[]), :ps, :pe, :loc, :cn, :cr, CAST(:by AS uuid), :ph, :pl, :pr, :fr, :rc)",
       i=aid, c=code, f=str(file_id), m=d["modality"], d=domain, o=d["objectives"], s=d["scope"], p=d.get("procedures"), l=d["lines"], ps=d.get("planned_start"),
-      pe=d.get("planned_end"), loc=d.get("location"), cn=d.get("contact_name"), cr=d.get("contact_role"), by=user, ph=first_phase)
+      pe=d.get("planned_end"), loc=d.get("location"), cn=d.get("contact_name"), cr=d.get("contact_role"), by=user, ph=first_phase,
+      pl=d["plan_type"], pr=d["process"], fr=d["frequency"], rc=d["report_company"])
     for m in members:
         x("INSERT INTO engagement.team (audit_id, user_id, role, initials) VALUES (CAST(:a AS uuid), CAST(:u AS uuid), :r, :i)",
           a=aid, u=m["user_id"], r=m["role"], i=m["initials"])
     x("INSERT INTO engagement.phase_log (audit_id, from_phase, to_phase, changed_by, note) VALUES (CAST(:a AS uuid), NULL, :ph, CAST(:u AS uuid), 'Creación')", a=aid, u=user, ph=first_phase)
     db.session.commit()
-    return aid
+    return aid, code
 
 
 def _insert_phase_score_snapshot(snapshot):
@@ -282,6 +326,7 @@ def set_audit_manual(audit_id, score, reason, user):
 
 
 AUDIT_EDITABLE = ("modality", "objectives", "scope", "procedures", "location", "contact_name", "contact_role",
+                  "plan_type", "process", "frequency", "report_company",
                   "planned_start", "planned_end")
 
 
@@ -737,11 +782,13 @@ def set_ws_manual(ws_id, score, reason, user):
 
 # ------------------------------------------------------------------ observaciones y evidencias
 OBS_SQL = ("SELECT id::text, audit_id::text, item_id::text, seq, title, condition, criteria, cause, effect, recommendation, risk, unit_decision, unit_response, "
-           "unit_response_at, pac_action, pac_owner, pac_due, pac_status, origin FROM engagement.observations ")
+           "unit_response_at, pac_action, pac_owner, pac_due, pac_status, origin, covered_items::text[] AS covered_items, "
+           "superseded_by::text AS superseded_by FROM engagement.observations ")
 
 
 def observations(audit_id):
-    return q(OBS_SQL + "WHERE audit_id = CAST(:a AS uuid) ORDER BY seq", a=str(audit_id))
+    """Observaciones vigentes (las reemplazadas por una consolidación quedan fuera)."""
+    return q(OBS_SQL + "WHERE audit_id = CAST(:a AS uuid) AND superseded_by IS NULL ORDER BY seq", a=str(audit_id))
 
 
 def get_observation(oid):
@@ -760,20 +807,42 @@ def _insert_observation_revision(oid, user, changed_fields=(), reason=None, repo
 def add_observation(audit_id, d, user, origin="MANUAL", commit=True):
     oid = str(uuid.uuid4())
     seq = db.session.execute(text("SELECT COALESCE(max(seq), 0) + 1 FROM engagement.observations WHERE audit_id = CAST(:a AS uuid)"), {"a": str(audit_id)}).scalar_one()
-    x("INSERT INTO engagement.observations (id, audit_id, item_id, seq, title, condition, criteria, cause, effect, recommendation, risk, created_by, origin) "
-      "VALUES (CAST(:i AS uuid), CAST(:a AS uuid), CAST(:it AS uuid), :s, :t, :c, :cr, :ca, :e, :r, :k, CAST(:u AS uuid), :o)",
+    covered = d.get("covered_items") or ([d["item_id"]] if d.get("item_id") else [])
+    x("INSERT INTO engagement.observations (id, audit_id, item_id, seq, title, condition, criteria, cause, effect, recommendation, risk, created_by, origin, "
+      "covered_items) VALUES (CAST(:i AS uuid), CAST(:a AS uuid), CAST(:it AS uuid), :s, :t, :c, :cr, :ca, :e, :r, :k, CAST(:u AS uuid), :o, CAST(:cov AS uuid[]))",
       i=oid, a=str(audit_id), it=d.get("item_id"), s=seq, t=d["title"], c=d["condition"], cr=d.get("criteria"), ca=d.get("cause"), e=d.get("effect"),
-      r=d.get("recommendation"), k=d["risk"], u=user, o=origin)
+      r=d.get("recommendation"), k=d["risk"], u=user, o=origin, cov=[str(c) for c in covered])
     _insert_observation_revision(oid, user, reason="Registro original" if origin == "MANUAL" else "Redactada por el motor de reglas al cargar la cédula")
     if commit:
         db.session.commit()
     return oid, seq
 
 
-def observed_item_ids(audit_id):
-    """Ítems que ya tienen al menos una observación vinculada (no se generan duplicadas)."""
-    return {r["item_id"] for r in q("SELECT DISTINCT item_id::text AS item_id FROM engagement.observations "
-                                     "WHERE audit_id = CAST(:a AS uuid) AND item_id IS NOT NULL", a=str(audit_id))}
+def observed_item_ids(audit_id, exclude=()):
+    """Ítems ya cubiertos por una observación vigente (no se generan duplicadas)."""
+    rows = q("SELECT id::text AS id, item_id::text AS item_id, covered_items::text[] AS covered FROM engagement.observations "
+             "WHERE audit_id = CAST(:a AS uuid) AND superseded_by IS NULL", a=str(audit_id))
+    out = set()
+    for r in rows:
+        if r["id"] in exclude:
+            continue
+        out.update(c for c in (r["covered"] or []) if c)
+        if r["item_id"]:
+            out.add(r["item_id"])
+    return out
+
+
+def consolidable_auto_observations(audit_id):
+    """Observaciones automáticas vigentes que nadie editó (solo tienen su revisión original)."""
+    return q("SELECT o.id::text AS id, o.covered_items::text[] AS covered FROM engagement.observations o "
+             "WHERE o.audit_id = CAST(:a AS uuid) AND o.origin = 'AUTO' AND o.superseded_by IS NULL "
+             "AND cardinality(o.covered_items) <= 1 "
+             "AND (SELECT count(*) FROM engagement.observation_revisions r WHERE r.observation_id = o.id) = 1", a=str(audit_id))
+
+
+def supersede_observations(ids, new_id):
+    x("UPDATE engagement.observations SET superseded_by = CAST(:n AS uuid), updated_at = now() "
+      "WHERE id = ANY(CAST(:ids AS uuid[])) AND superseded_by IS NULL", n=str(new_id), ids=list(ids))
 
 
 def audit_phase_scores(audit_id):
@@ -825,7 +894,7 @@ def get_evidence(eid):
 
 
 # ------------------------------------------------------------------ informes
-REP_SQL = ("SELECT r.id::text, r.audit_id::text, r.kind, r.version, r.status, r.body, r.body_sha256, r.created_at, r.updated_at, r.submitted_at, "
+REP_SQL = ("SELECT r.id::text, r.audit_id::text, r.kind, r.code, r.version, r.status, r.body, r.body_sha256, r.created_at, r.updated_at, r.submitted_at, "
            "r.approved_at, r.approved_by::text, r.approved_body_sha256, "
            "r.jefe_approved_by::text AS jefe_approved_by, r.jefe_approved_body_sha256, "
            "r.gerente_approved_by::text AS gerente_approved_by, r.gerente_approved_body_sha256, "
@@ -857,10 +926,11 @@ def _insert_body_revision(rid, body, sha, user, reason):
       i=str(rid), b=json.dumps(body, default=str), h=sha, r=reason, u=user)
 
 
-def create_report(audit_id, kind, version, body, sha, user, reason="Generación inicial"):
+def create_report(audit_id, kind, version, body, sha, user, reason="Generación inicial", code=None):
     rid = str(uuid.uuid4())
-    x("INSERT INTO engagement.reports (id, audit_id, kind, version, body, body_sha256, created_by) VALUES (CAST(:i AS uuid), CAST(:a AS uuid), :k, :v, CAST(:b AS jsonb), :h, CAST(:u AS uuid))",
-      i=rid, a=str(audit_id), k=kind, v=version, b=json.dumps(body, default=str), h=sha, u=user)
+    x("INSERT INTO engagement.reports (id, audit_id, kind, version, body, body_sha256, created_by, code) "
+      "VALUES (CAST(:i AS uuid), CAST(:a AS uuid), :k, :v, CAST(:b AS jsonb), :h, CAST(:u AS uuid), :c)",
+      i=rid, a=str(audit_id), k=kind, v=version, b=json.dumps(body, default=str), h=sha, u=user, c=code)
     _insert_body_revision(rid, body, sha, user, reason)
     db.session.commit()
     return rid

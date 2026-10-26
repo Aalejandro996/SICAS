@@ -40,7 +40,7 @@ def build_pac(audit: dict, observations: list[dict], generated_at: datetime) -> 
     ws.row_dimensions[hdr].height = 32
     for i, o in enumerate(observations, 1):
         r = hdr + i
-        vals = [o["seq"], o["title"], o["risk"], o.get("recommendation") or "", o.get("unit_decision") or "",
+        vals = [i, o["title"], o["risk"], o.get("recommendation") or "", o.get("unit_decision") or "",
                 o.get("pac_action") or "", o.get("pac_owner") or "", o.get("pac_due"), o.get("pac_status") or "PENDIENTE"]
         for j, v in enumerate(vals, 1):
             c = _s(ws, r, j, v)

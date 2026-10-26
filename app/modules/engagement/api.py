@@ -13,6 +13,7 @@ from app.core.audit.audit_service import audit as log
 from app.core.security.rbac import permission_required
 
 from . import assemble as asm
+from . import codification
 from . import score_snapshots
 from . import evidence_rules, observation_rules, offline, phase_documents, scoring, storage, system_questionnaire
 from . import repositories as repo
@@ -193,6 +194,13 @@ def _change(a, entity_type, entity_id, action, changes=None, reason=None, report
 
 
 # ------------------------------------------------------------------ catálogos y expedientes
+@bp.get("/codification")
+@permission_required("audit:read", "audit:manage")
+def codification_catalogs():
+    """Catálogos de la codificación institucional para los formularios."""
+    return jsonify(codification.catalogs())
+
+
 @bp.get("/units")
 @permission_required("audit:read", "audit:manage")
 def units():
@@ -283,10 +291,12 @@ def new_file():
             409,
         )
 
-    code = repo.next_code("EXP", "file_seq", date.today().year)
     try:
-        fid = repo.create_file(
-            code,
+        codes = codification.file_fields(d, domain, unit.get("kind"))
+    except codification.CodeError as ex:
+        return err(str(ex))
+    try:
+        fid, code = repo.create_file(
             unit_id,
             title,
             objective,
@@ -294,6 +304,8 @@ def new_file():
             pt,
             me(),
             domain,
+            audit_type=codes["audit_type"],
+            company=codes["company"],
         )
     except IntegrityError:
         repo.db.session.rollback()
@@ -374,8 +386,11 @@ def new_audit():
     if me() not in ids:
         return err("Usted debe formar parte del equipo que crea la auditoría")
     team = [{"user_id": i, "role": "LIDER" if i == leader else "AUDITOR", "initials": initials_of(eligible[i]["name"])} for i in ids]
-    code = repo.next_code("AUD", "audit_seq", date.today().year)
-    aid = repo.create_audit(code, f["id"], data, team, me())
+    try:
+        data.update(codification.report_fields(d, domain))
+    except codification.CodeError as ex:
+        return err(str(ex))
+    aid, code = repo.create_audit(f["id"], data, team, me())
     if domain == "SISTEMAS":
         try:
             repo.system_worksheet(aid, me())
@@ -438,6 +453,12 @@ def edit_audit(aid):
                           ("contact_name", 0, 120), ("contact_role", 0, 120)):
             if k in d:
                 upd[k] = txt(d, k, lo, hi)
+        coding = {k: d[k] for k in ("plan_type", "process", "frequency", "report_company") if k in d}
+        if coding:
+            try:
+                upd.update({k: v for k, v in codification.report_fields({**a, **coding}, a.get("audit_domain")).items() if k in coding})
+            except codification.CodeError as ex:
+                raise ValueError(str(ex))
         if "planned_start" in d:
             upd["planned_start"] = parse_date(d["planned_start"], "Inicio previsto")
         if "planned_end" in d:
@@ -1096,33 +1117,49 @@ def import_system_questionnaire(wid):
 
 
 def _auto_observations(a, ws):
-    """Crea, en una transacción, una observación por cada control con brecha que aún no tenga una vinculada."""
+    """Redacta las observaciones de las brechas de la cédula, agrupadas por dominio de control, en una transacción.
+
+    Las observaciones automáticas individuales que nadie editó se reemplazan por las consolidadas;
+    los controles cubiertos por observaciones manuales o ya editadas no se vuelven a redactar.
+    """
     criteria = {c["code"]: c for c in ws["criteria"]}
-    observed = repo.observed_item_ids(a["id"])
-    drafts = []
+    replaceable = repo.consolidable_auto_observations(a["id"])
+    replace_ids = {o["id"] for o in replaceable}
+    covered = repo.observed_item_ids(a["id"], exclude=replace_ids)
+    rows = []
     for it in ws["items"]:
         crit = criteria.get(it["ref"])
         result = (it.get("results") or {}).get(it["ref"])
-        if crit is None or not isinstance(result, dict) or it["id"] in observed:
+        if crit is None or not isinstance(result, dict) or it["id"] in covered:
             continue
-        o = observation_rules.draft(crit, result, it.get("observation"))
-        if o:
-            drafts.append((it, o))
+        rows.append((crit, result, it.get("observation"), it["id"]))
+    drafts = observation_rules.consolidate(rows)
     if not drafts:
         return 0
+    item_ids = {i for d in drafts for i in d["covered_items"]}
+    superseded = [o["id"] for o in replaceable if set(o["covered"] or []) & item_ids]
     try:
-        for it, o in drafts:
+        first_id = None
+        for o in drafts:
             fields = {k: o[k] for k in ("title", "condition", "criteria", "cause", "effect", "recommendation", "risk")}
-            fields["item_id"] = it["id"]
+            fields.update(item_id=o["item_id"], covered_items=o["covered_items"])
             _change(a, "observation", None, "OBSERVATION_AUTO_CREATED",
-                    {"item": it["ref"], "gap": o["gap"], "domain": o["domain"], "risk": o["risk"]},
-                    reason="Redactada por el motor de reglas a partir de la cédula")
-            repo.add_observation(a["id"], fields, me(), origin="AUTO", commit=False)
+                    {"controls": o["controls"], "gap": o["gap"], "domain": o["domain"], "risk": o["risk"]},
+                    reason="Redactada por el motor de reglas a partir de la cédula (consolidada por dominio)")
+            oid, _ = repo.add_observation(a["id"], fields, me(), origin="AUTO", commit=False)
+            first_id = first_id or oid
+            replaced = [r for r in replaceable if set(r["covered"] or []) & set(o["covered_items"])]
+            if replaced:
+                repo.supersede_observations([r["id"] for r in replaced], oid)
+                _change(a, "observation", oid, "OBSERVATIONS_CONSOLIDATED",
+                        {"replaced": [r["id"] for r in replaced], "controls": o["controls"]},
+                        reason="Observaciones automáticas individuales agrupadas por dominio de control")
         repo.db.session.commit()
     except Exception:
         repo.db.session.rollback()
         raise
-    log("OBSERVATIONS_AUTO_CREATED", entity_type="worksheet", entity_id=ws["id"], after_data={"creadas": len(drafts)}, request_id=g.request_id)
+    log("OBSERVATIONS_AUTO_CREATED", entity_type="worksheet", entity_id=ws["id"],
+        after_data={"creadas": len(drafts), "reemplazadas": len(superseded)}, request_id=g.request_id)
     return len(drafts)
 
 
@@ -1623,7 +1660,7 @@ def _team_info(aid):
              "system_role": t.get("system_role")} for t in repo.team(aid)]
 
 
-def _make_body(a, kind, version, conclusion, revision=1):
+def _make_body(a, kind, version, conclusion, revision=1, report_code=None):
     """Cuerpo del informe con los datos vigentes y su trazabilidad.
 
     El historial (instantáneas por fase, revisiones de observaciones y decisiones de revisión
@@ -1645,7 +1682,7 @@ def _make_body(a, kind, version, conclusion, revision=1):
         unit={"code": a["unit_code"], "name": a["unit_name"], "kind": a["unit_kind"]}, team=team,
         worksheets=repo.worksheets_with_items(a["id"]), observations=repo.observations(a["id"]), evidence=repo.evidence(a["id"]),
         thresholds=thresholds(), company=repo.company() or current_app.config["COMPANY_NAME"], version=version, today=date.today(), conclusion=conclusion,
-        history=history, revision=revision, overall_for=lambda pairs, th: overall_for(a, pairs, th))
+        history=history, revision=revision, overall_for=lambda pairs, th: overall_for(a, pairs, th), report_code=report_code)
 
 
 def _transition(rep, status, action, **kw):
@@ -1802,10 +1839,11 @@ def new_report(aid):
         reopened = repo.reopening(previous["id"]) if previous and previous["status"] == "SIGNED" else None
         if reopened:
             reason = f"Nueva versión autorizada por Contraloría tras la firma de la v{previous['version']}: {reopened['reason']}"
-    body = _make_body(a, kind, version, conclusion)
-    _change(a, "audit_report", None, "AUDIT_REPORT_GENERATED", {"kind": kind, "version": version, "sha256": body_hash(body)},
-            reason=reason)
-    rid = repo.create_report(a["id"], kind, version, body, body_hash(body), me(), reason=reason)
+    code = repo.report_code_for(a["id"], kind, date.today().year)
+    body = _make_body(a, kind, version, conclusion, report_code=code)
+    _change(a, "audit_report", None, "AUDIT_REPORT_GENERATED",
+            {"kind": kind, "version": version, "code": code, "sha256": body_hash(body)}, reason=reason)
+    rid = repo.create_report(a["id"], kind, version, body, body_hash(body), me(), reason=reason, code=code)
     log("AUDIT_REPORT_GENERATED", entity_type="audit_report", entity_id=rid, after_data={"kind": kind, "version": version, "sha256": body_hash(body)}, request_id=g.request_id)
     return jsonify(id=rid, version=version), 201
 
@@ -1920,7 +1958,7 @@ def regenerate(rid):
     reason = str(d.get("reason") or "").strip()[:1000] or (
         "Corrección tras devolución" if rep["status"] == "RETURNED" else "Regeneración del borrador")
     revision = len(repo.body_revisions(rid)) + 1
-    body = _make_body(a, rep["kind"], rep["version"], conclusion, revision=revision)
+    body = _make_body(a, rep["kind"], rep["version"], conclusion, revision=revision, report_code=rep.get("code"))
     _change(a, "audit_report", str(rid), "AUDIT_REPORT_REGENERATED",
             {"body_sha256": {"before": rep["body_sha256"], "after": body_hash(body)}, "revision": revision},
             reason=reason, report=rep)

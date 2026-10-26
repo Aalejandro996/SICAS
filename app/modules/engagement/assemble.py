@@ -18,7 +18,7 @@ def summarize_sheets(worksheets: list[dict], thresholds: dict | None) -> list[tu
 
 def assemble(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dict], worksheets: list[dict], observations: list[dict],
              evidence: list[dict], thresholds: dict | None, company: str, version: int, today: date, conclusion: str | None = None,
-             history: dict | None = None, revision: int = 1, overall_for=None) -> dict:
+             history: dict | None = None, revision: int = 1, overall_for=None, report_code: str | None = None) -> dict:
     pairs = summarize_sheets(worksheets, thresholds)
     sheets = [{"title": sheet_title(ws), "kind": ws["kind"], "line": ws["line"], "items": s.items, "scored": s.scored, "exceptions": s.exceptions,
                "auto": s.auto, "final": s.final, "manual_override": s.manual_override, "rating": s.rating} for ws, s in pairs]
@@ -36,10 +36,10 @@ def assemble(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dict]
         if ws.get("manual_score") is not None:
             adjustments.append({"sheet": sheet_title(ws), "ref": "(toda la cédula)", "auto": scoring.worksheet_summary(ws["criteria"], ws["items"], None, thresholds).auto,
                                 "final": float(ws["manual_score"]), "reason": ws.get("manual_reason") or ""})
-    obs = [{"n": o["seq"], "title": o["title"], "condition": o["condition"], "criteria": o.get("criteria") or "", "cause": o.get("cause") or "",
+    obs = [{"n": n, "controls": len(o.get("covered_items") or []), "title": o["title"], "condition": o["condition"], "criteria": o.get("criteria") or "", "cause": o.get("cause") or "",
             "effect": o.get("effect") or "", "recommendation": o.get("recommendation") or "", "risk": o["risk"],
             "unit_decision": o.get("unit_decision"), "unit_response": o.get("unit_response") or "", "pac_action": o.get("pac_action") or "",
-            "pac_owner": o.get("pac_owner") or "", "pac_due": str(o["pac_due"]) if o.get("pac_due") else ""} for o in sorted(observations, key=lambda x: x["seq"])]
+            "pac_owner": o.get("pac_owner") or "", "pac_due": str(o["pac_due"]) if o.get("pac_due") else ""} for n, o in enumerate(sorted(observations, key=lambda x: x["seq"]), 1)]
     ev = [{"n": i, "filename": e["filename"], "description": e.get("description") or "", "sha256": e["sha256"]} for i, e in enumerate(evidence, 1)]
     body = build_body(kind=kind, audit=audit, file=file, unit=unit, team=team, sheets=sheets, overall=overall, observations=obs,
                       limitations=limitations, adjustments=adjustments, evidence=ev, company=company, version=version, today=today,
@@ -47,6 +47,7 @@ def assemble(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dict]
     if audit.get("manual_score") is not None:
         body["overall_reason"] = audit.get("manual_reason") or ""
     body["revision"] = revision
+    body["report_code"] = report_code
     body["indicators"] = scoring.evaluation_indicators(
         [{**ws, "title": ws.get("title") or sheet_title(ws)} for ws in worksheets], overall, thresholds)
     if history is not None:
@@ -88,13 +89,13 @@ def trace_sections(history: dict, observations: list[dict], evidence: list[dict]
     for r in history.get("observation_revisions") or []:
         revs.setdefault(r["observation_id"], []).append(r)
     obs_trace = []
-    for o in sorted(observations, key=lambda x: x["seq"]):
+    for n, o in enumerate(sorted(observations, key=lambda x: x["seq"]), 1):
         rows = revs.get(o["id"]) or []
         if len(rows) <= 1:
             continue
         first = rows[0].get("data") or {}
         obs_trace.append({
-            "n": o["seq"], "title": o["title"],
+            "n": n, "title": o["title"],
             "original": {k: first.get(k) for k in ("title", "condition", "risk")},
             "changes": [{"revision": r["revision"], "date": _iso(r.get("created_at")), "user": r.get("username"),
                          "fields": r.get("changed_fields") or [], "reason": r.get("reason") or ""} for r in rows[1:]],

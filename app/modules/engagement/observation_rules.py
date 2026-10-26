@@ -415,3 +415,70 @@ def field_test_for(criterion: dict) -> str:
     """Procedimiento sugerido para la prueba de campo de un control documentado."""
     dom = domain_for(criterion.get("section") or "", criterion.get("text") or "")
     return dom.test
+
+
+GAP_LABEL = {"INEXISTENTE": "no existe", "SIN_SOPORTE": "sin soporte documental",
+             "SIN_EVIDENCIA": "sin evidencia de ejecución", "DESACTUALIZADO": "evidencia desactualizada"}
+GROUP_TITLE = {
+    "INEXISTENTE": "Ausencia de controles de",
+    "SIN_SOPORTE": "Controles de {} sin soporte documental",
+    "SIN_EVIDENCIA": "Controles de {} sin evidencia de ejecución",
+    "DESACTUALIZADO": "Documentación desactualizada de los controles de",
+}
+MAX_CONDITION = 3000
+
+
+def consolidate(rows: list[tuple[dict, dict, str | None, str]]) -> list[dict]:
+    """Agrupa las brechas por dominio de control: una observación por dominio con sus controles afectados.
+
+    rows: (criterio, respuesta, observación del auditor, id del ítem). Un dominio con un único control
+    conserva la redacción individual. El riesgo del grupo es el mayor de sus controles.
+    """
+    groups: dict[str, list[tuple[dict, dict, dict, str]]] = {}
+    order: list[str] = []
+    for crit, result, observation, item_id in rows:
+        d = draft(crit, result, observation)
+        if d is None:
+            continue
+        if d["domain"] not in groups:
+            order.append(d["domain"])
+        groups.setdefault(d["domain"], []).append((crit, result, d, item_id))
+
+    out = []
+    for key in order:
+        members = groups[key]
+        if len(members) == 1:
+            crit, _, d, item_id = members[0]
+            out.append({**d, "item_id": item_id, "covered_items": [item_id], "controls": [crit.get("code")]})
+            continue
+        dom = next(x for x in DOMAINS + (DEFAULT_DOMAIN,) if x.key == key)
+        risk = max((d["risk"] for _, _, d, _ in members), key=RISK_ORDER.index)
+        gaps = {d["gap"] for _, _, d, _ in members}
+        if len(gaps) == 1:
+            prefix = GROUP_TITLE[next(iter(gaps))]
+            title = prefix.format(dom.label) if "{}" in prefix else f"{prefix} {dom.label}"
+        else:
+            title = f"Brechas en los controles de {dom.label}"
+        codes = [c.get("code") for c, _, _, _ in members]
+        counts = {g: sum(1 for _, _, d, _ in members if d["gap"] == g) for g in GAP_LABEL}
+        summary = ", ".join(f"{n} {GAP_LABEL[g]}" for g, n in counts.items() if n)
+        condition = (f"En el levantamiento de información se identificaron {len(members)} controles de {dom.label} "
+                     f"con brechas ({summary}):")
+        listed = 0
+        for crit, _, d, _ in members:
+            line = f"\n• {crit.get('code')} ({GAP_LABEL[d['gap']]}): {_short(crit.get('text') or '', 110)}"
+            if len(condition) + len(line) > MAX_CONDITION - 120:
+                break
+            condition += line
+            listed += 1
+        if listed < len(members):
+            condition += f"\n• Además: {', '.join(codes[listed:])}."
+        out.append({
+            "risk": risk, "title": _short(f"{title} ({len(members)} controles)", 200), "condition": condition[:MAX_CONDITION],
+            "criteria": dom.criteria, "cause": dom.cause, "effect": dom.effect,
+            "recommendation": f"{dom.recommendation} Aplica a los controles: {', '.join(codes)}."[:MAX_CONDITION],
+            "domain": key, "gap": "MULTIPLE" if len(gaps) > 1 else next(iter(gaps)),
+            "item_id": members[0][3], "covered_items": [m[3] for m in members], "controls": codes,
+        })
+    out.sort(key=lambda o: -RISK_ORDER.index(o["risk"]))
+    return out
