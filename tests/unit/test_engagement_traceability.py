@@ -152,7 +152,7 @@ class EditRulesApiTests(unittest.TestCase):
             g.request_id = "00000000-0000-0000-0000-0000000000fe"
 
         self.client = self.app.test_client()
-        self.audit = {"id": AUDIT_ID, "audit_domain": "SISTEMAS", "status": "IN_PROGRESS", "phase": "TRABAJO_CAMPO"}
+        self.audit = {"id": AUDIT_ID, "audit_domain": "SISTEMAS", "status": "IN_PROGRESS", "phase": "LEVANTAMIENTO"}
         self.obs = {"id": "00000000-0000-0000-0000-000000000501", "audit_id": AUDIT_ID, "seq": 1, "title": "Gestión de cambios",
                     "condition": "No existe manual vigente", "risk": "ALTO"}
         for target, kw in [

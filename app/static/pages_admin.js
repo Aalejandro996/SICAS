@@ -708,7 +708,7 @@
       }
     }
   });
-  S.label2 = (p) => ({ PLANIFICACION: 'Planificación', TRABAJO_CAMPO: 'Trabajo de campo', INFORME: 'Informe' })[p] || p;
+  S.label2 = (p) => ({ PLANIFICACION: 'Planificación', TRABAJO_CAMPO: 'Trabajo de campo', INFORME: 'Informe', LEVANTAMIENTO: 'Levantamiento de información', DOCUMENTACION: 'Documentación', PRUEBAS_CAMPO: 'Pruebas de campo' })[p] || p;
 
   // ------------------------------------------------------------------ Usuarios
   S.pages.push({ id: 'users', title: 'Usuarios', perms: ['user:read'], render: async (el) => {

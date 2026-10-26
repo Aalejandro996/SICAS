@@ -495,13 +495,15 @@ def get_workflow_pipeline(filters: dict[str, Any]) -> dict[str, Any]:
         LEFT JOIN LATERAL (SELECT max(pl.changed_at) AS changed_at FROM engagement.phase_log pl WHERE pl.audit_id=s.id) lp ON TRUE
         WHERE upper(coalesce(s.status,'')) NOT IN ('CLOSED','COMPLETED','SIGNED','CERRADO','CERRADA')
     ), phase_list AS (
-        SELECT 'PLANIFICACION'::text AS phase UNION ALL SELECT 'TRABAJO_CAMPO' UNION ALL SELECT 'INFORME' UNION ALL SELECT 'SIN_FASE'
+        SELECT 'PLANIFICACION'::text AS phase UNION ALL SELECT 'TRABAJO_CAMPO' UNION ALL SELECT 'LEVANTAMIENTO'
+        UNION ALL SELECT 'DOCUMENTACION' UNION ALL SELECT 'PRUEBAS_CAMPO' UNION ALL SELECT 'INFORME' UNION ALL SELECT 'SIN_FASE'
     )
     SELECT p.phase, count(c.id)::integer AS audits,
            count(c.id) FILTER (WHERE c.planned_end IS NOT NULL AND c.planned_end < CURRENT_DATE)::integer AS overdue,
            round(avg(greatest(extract(epoch FROM (CURRENT_TIMESTAMP-c.entered_at))/3600.0,0))::numeric,2) AS average_phase_hours
     FROM phase_list p LEFT JOIN current_phase c ON upper(c.phase)=upper(p.phase)
-    GROUP BY p.phase ORDER BY CASE p.phase WHEN 'PLANIFICACION' THEN 1 WHEN 'TRABAJO_CAMPO' THEN 2 WHEN 'INFORME' THEN 3 ELSE 4 END
+    GROUP BY p.phase ORDER BY CASE p.phase WHEN 'PLANIFICACION' THEN 1 WHEN 'TRABAJO_CAMPO' THEN 2 WHEN 'LEVANTAMIENTO' THEN 3
+        WHEN 'DOCUMENTACION' THEN 4 WHEN 'PRUEBAS_CAMPO' THEN 5 WHEN 'INFORME' THEN 6 ELSE 7 END
     """, params)
     report_statuses = _mappings(CURRENT_SCOPE_CTE + """
         SELECT coalesce(nullif(trim(r.status),''),'SIN_ESTADO') AS status,
@@ -595,7 +597,7 @@ def get_activity_options(user_id: str) -> dict[str, Any]:
         LEFT JOIN engagement.units u ON u.id=f.unit_id
         JOIN engagement.team t ON t.audit_id=a.id AND t.user_id=CAST(:user_id AS uuid)
         WHERE upper(coalesce(a.status,'')) IN ('IN_PROGRESS','IN PROGRESS','EN_CURSO','EN CURSO','RUNNING')
-          AND upper(coalesce(a.phase,'')) IN ('TRABAJO_CAMPO','INFORME')
+          AND upper(coalesce(a.phase,'')) IN ('TRABAJO_CAMPO','INFORME','LEVANTAMIENTO','DOCUMENTACION','PRUEBAS_CAMPO')
         ORDER BY a.planned_end NULLS LAST, a.created_at, a.code
     """, {"user_id": user})
     current = get_current_activity_session(user)
@@ -651,7 +653,7 @@ def start_activity_session(audit_id: str, user_id: str) -> dict[str, Any]:
         JOIN engagement.team t ON t.audit_id=a.id
         WHERE a.id=CAST(:audit_id AS uuid) AND t.user_id=CAST(:user_id AS uuid)
           AND upper(coalesce(a.status,'')) IN ('IN_PROGRESS','IN PROGRESS','EN_CURSO','EN CURSO','RUNNING')
-          AND upper(coalesce(a.phase,'')) IN ('TRABAJO_CAMPO','INFORME')
+          AND upper(coalesce(a.phase,'')) IN ('TRABAJO_CAMPO','INFORME','LEVANTAMIENTO','DOCUMENTACION','PRUEBAS_CAMPO')
         LIMIT 1
     """), {"audit_id": audit, "user_id": user}).mappings().first()
     if not eligible:

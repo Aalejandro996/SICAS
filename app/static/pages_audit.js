@@ -7,6 +7,13 @@
   const KINDS = [['SUSCRIPCION', 'Suscripción'], ['RECLAMO', 'Reclamo / indemnización'], ['SISTEMAS', 'Auditoría de Sistemas']];
   const LINE = Object.fromEntries(LINES), KIND = Object.fromEntries(KINDS);
   const PHASES = ['PLANIFICACION', 'TRABAJO_CAMPO', 'INFORME'];
+  // Auditoría de Sistemas: 1 Levantamiento, 2 Documentación, 3 Pruebas de campo, 4 Informe.
+  const SYSTEM_PHASES = ['LEVANTAMIENTO', 'DOCUMENTACION', 'PRUEBAS_CAMPO', 'INFORME'];
+  const isSystems = (a) => a?.audit_domain === 'SISTEMAS';
+  const phasesFor = (a) => (isSystems(a) ? SYSTEM_PHASES : PHASES);
+  // Fases en las que se responden los controles (Sistemas: 1 a 3; resto: Trabajo de campo e Informe).
+  const itemsPhase = (a) => (isSystems(a) ? SYSTEM_PHASES.slice(0, 3) : PHASES.slice(1)).includes(a?.phase);
+  const workPhase = (a) => (isSystems(a) ? true : a?.phase !== 'PLANIFICACION');
   const RES = [['', '—'], ['CUMPLE', 'Cumple'], ['PARCIAL', 'Parcial'], ['NO_CUMPLE', 'No cumple'], ['NO_APLICA', 'No aplica'], ['EXCEPCION', 'Excepción']];
   const L = (v) => (v == null || v === '' ? '—' : (S.label2 || ((x) => x))(S.label(v)));
   const closeBtn = (m, t = 'Cerrar') => h('button', { class: 'secondary', onclick: () => m.close() }, t);
@@ -98,7 +105,6 @@
     const ta = (ph) => h('textarea', { placeholder: ph });
     const obj = ta('Objetivos de la auditoría'), scope = ta('Alcance'), proc = ta('Procedimientos / metodología (opcional)');
     const ps = h('input', { type: 'date' }), pe = h('input', { type: 'date' });
-    const leader = h('select', null, who.auditors.map((a) => h('option', { value: a.id }, a.name)));
     const members = who.auditors.map((a) => ({ a, el: h('input', { type: 'checkbox' }) }));
     const m = dlg('Nueva auditoría', h('div', null,
       h('label', null, 'Expediente', sel), h('label', null, 'Modalidad', mod), h('label', null, 'Lugar', loc),
@@ -106,7 +112,7 @@
       h('label', null, 'Objetivos', obj), h('label', null, 'Alcance', scope), h('label', null, 'Procedimientos', proc),
       h('div', { class: 'toolbar' }, h('label', null, 'Inicio previsto', ps), h('label', null, 'Fin previsto', pe)),
       h('div', { class: 'toolbar' }, h('label', null, 'Responsable de la unidad', cn), h('label', null, 'Cargo', cr)),
-      h('label', null, 'Auditor líder', leader), h('p', { class: 'muted' }, 'Otros auditores del equipo (usted debe formar parte):'),
+      h('p', { class: 'muted' }, 'Otros auditores del equipo (usted forma parte automáticamente):'),
       h('div', { class: 'checklist' }, members.map((x) => h('label', null, x.el, x.a.name)))));
     m.footer.append(closeBtn(m, 'Cancelar'), h('button', { onclick: async () => {
       const file = open.find((x) => x.id === sel.value),
@@ -114,7 +120,7 @@
       const body = { file_id: sel.value, modality: mod.value, location: loc.value,
         lines: system ? [] : lines.filter((x) => x.el.checked).map((x) => x.v),
         objectives: obj.value, scope: scope.value, procedures: proc.value, planned_start: ps.value, planned_end: pe.value,
-        contact_name: cn.value, contact_role: cr.value, leader_id: leader.value, member_ids: members.filter((x) => x.el.checked).map((x) => x.a.id) };
+        contact_name: cn.value, contact_role: cr.value, member_ids: members.filter((x) => x.el.checked).map((x) => x.a.id) };
       const r = await S.send(A, 'POST', body);
       if (r) { m.close(); S.say('Auditoría creada: ' + r.code, true); location.hash = '#/audits/' + r.id + '/cedulas'; }
     } }, 'Crear auditoría'));
@@ -178,7 +184,8 @@
   function resumen(el) {
     const { d } = ctx, a = d.audit;
     const sheets = Array.isArray(d.sheets) ? d.sheets : [];
-    const phasePos = PHASES.indexOf(a.phase);
+    const PH = phasesFor(a);
+    const phasePos = PH.indexOf(a.phase);
     const idx = phasePos < 0 ? 0 : phasePos;
     const phaseLog = Array.isArray(d.phase_log) ? d.phase_log : [];
     const team = Array.isArray(d.team) ? d.team : [];
@@ -199,11 +206,11 @@
 
     // ---- fases
     const stepper = h('div', { class: 'stepper audit-phase-stepper' },
-      PHASES.map((p, i) => h('div', { class: 'step ' + (i < idx ? 'done' : i === idx ? 'cur' : '') }, `${i + 1}. ${S.label2(p)}`)));
+      PH.map((p, i) => h('div', { class: 'step ' + (i < idx ? 'done' : i === idx ? 'cur' : '') }, `${i + 1}. ${S.label2(p)}`)));
     const phaseBtns = h('div', { class: 'row audit-phase-actions' });
     if (ctx.canWrite) {
-      if (idx < 2) phaseBtns.append(h('button', { onclick: () => movePhase(PHASES[idx + 1]) }, 'Avanzar a ' + S.label2(PHASES[idx + 1])));
-      if (idx > 0) phaseBtns.append(h('button', { class: 'secondary', onclick: () => movePhase(PHASES[idx - 1]) }, 'Volver a ' + S.label2(PHASES[idx - 1])));
+      if (idx < PH.length - 1) phaseBtns.append(h('button', { onclick: () => movePhase(PH[idx + 1]) }, (isSystems(a) && idx < 3 ? 'Cerrar fase y avanzar a ' : 'Avanzar a ') + S.label2(PH[idx + 1])));
+      if (idx > 0) phaseBtns.append(h('button', { class: 'secondary', onclick: () => movePhase(PH[idx - 1]) }, 'Volver a ' + S.label2(PH[idx - 1])));
     }
 
     // ---- resultado de la evaluación
@@ -214,7 +221,7 @@
     const excellent = d.thresholds?.excelente ?? 90;
     const hero = h('section', { class: 'panel audit-hero' },
       h('div', { class: 'audit-hero-main' },
-        h('span', { class: 'audit-hero-label' }, 'Calificación final'),
+        h('span', { class: 'audit-hero-label' }, isSystems(a) && a.phase !== 'INFORME' ? 'Calificación de la fase en curso' : 'Calificación final'),
         h('div', { class: 'audit-hero-score' }, scoreText(d.overall.final)),
         S.ratingBadge(d.overall.rating),
         h('div', { class: 'audit-hero-note' }, `${totalItems} controles · ${scoredItems} calificados · ${completion}% completado`),
@@ -229,8 +236,51 @@
       h('div', { class: 'audit-hero-foot' },
         h('span', { class: 'muted' }, `Escala: Excelente > ${excellent}; Satisfactorio 70–90; Aceptable 60–69; Necesita mejoras 50–59; No satisfactoria ≤ 49`),
         a.manual_reason ? h('span', { class: 'audit-manual-reason' }, h('b', null, 'Justificación del ajuste: '), a.manual_reason) : null,
-        can('audit:rate') && ctx.canWrite && a.phase !== 'PLANIFICACION'
+        can('audit:rate') && ctx.canWrite && workPhase(a)
           ? h('button', { class: 'sm', onclick: () => manual('/audits/' + a.id + '/rating', 'Calificación global', a.manual_score) }, 'Ajustar calificación global') : null));
+
+    // ---- Sistemas: nota de cada fase y acciones de la fase en curso
+    let phasesPanel = null;
+    if (isSystems(a)) {
+      const ps = d.overall.phase_scores || [];
+      const finalCard = h('div', { class: 'audit-phase-score final' },
+        h('span', null, '4. Nota final (promedio)'),
+        h('strong', null, a.phase === 'INFORME' ? scoreText(d.overall.final) : '—'),
+        a.phase === 'INFORME' ? S.ratingBadge(d.overall.rating) : h('span', { class: 'muted' }, 'Se calcula en la fase Informe'));
+      const actions = h('div', { class: 'row' });
+      const sysSheet = sheets.find((x) => x.kind === 'SISTEMAS');
+      if (ctx.canWrite && a.phase === 'LEVANTAMIENTO' && sysSheet) {
+        actions.append(h('button', { class: 'sm', onclick: async () => {
+          const r = await S.send(`${A}/worksheets/${sysSheet.id}/auto-observations`, 'POST', {});
+          if (r) { S.say(r.note, true); reload(); }
+        } }, 'Generar observaciones de las brechas'));
+      }
+      if (['DOCUMENTACION', 'PRUEBAS_CAMPO', 'INFORME'].includes(a.phase)) {
+        actions.append(h('button', { class: 'sm secondary', onclick: async () => {
+          const v = await S.ask('Carta de solicitud de documentación', [{ name: 'due', label: 'Fecha límite de entrega', type: 'date' }], 'Generar carta',
+            'Incluye los controles que la unidad declaró documentados en el levantamiento, estén actualizados o no.');
+          if (v) S.openFile(`${A}/${a.id}/documentation-request.pdf${v.due ? '?due=' + encodeURIComponent(v.due) : ''}`, `${a.code}_solicitud_documentacion.pdf`, false);
+        } }, 'Carta de solicitud de documentación'));
+      }
+      if (['PRUEBAS_CAMPO', 'INFORME'].includes(a.phase)) {
+        actions.append(h('button', { class: 'sm secondary', onclick: () => S.openFile(`${A}/${a.id}/field-tests.pdf`, `${a.code}_programa_pruebas_campo.pdf`, false) },
+          'Programa de pruebas de campo'));
+      }
+      const hint = {
+        LEVANTAMIENTO: 'Fase 1: responda o cargue la cédula. Las brechas generan observaciones con riesgo, criterio, causa, efecto y recomendación.',
+        DOCUMENTACION: 'Fase 2: solicite la documentación y verifique el soporte documental y la evidencia. La existencia del control se mantiene.',
+        PRUEBAS_CAMPO: 'Fase 3: pruebe en campo solo los controles documentados (SI). Los demás conservan el resultado de Documentación.',
+        INFORME: 'Fase 4: la nota final es el promedio de las fases 1, 2 y 3. Genere el informe final.'
+      }[a.phase];
+      phasesPanel = section('Notas por fase', hint,
+        h('div', { class: 'audit-phase-scores' },
+          ps.map((p, i) => h('div', { class: 'audit-phase-score' + (p.phase === a.phase ? ' current' : '') },
+            h('span', null, `${i + 1}. ${S.label2(p.phase)}`),
+            h('strong', null, p.score == null ? '—' : scoreText(p.score)),
+            p.closed ? h('span', { class: 'muted' }, 'Cerrada ' + fmt(p.closed_at)) : p.score != null ? h('span', { class: 'muted' }, 'En curso') : h('span', { class: 'muted' }, 'Pendiente'))),
+          finalCard),
+        actions.childNodes.length ? actions : null);
+    }
 
     // ---- indicadores por cédula (los mismos del cuestionario y del informe)
     const indicatorCards = (indicators.worksheets || []).map((w) => h('div', { class: 'audit-indicator-block' },
@@ -262,8 +312,7 @@
         h('div', { class: 'audit-team-initials' }, t.initials || '—'),
         h('div', { class: 'audit-team-info' },
           h('b', null, t.name),
-          h('span', null, h('span', { class: 'muted' }, 'Rol: '), t.system_role || '—'),
-          h('span', null, h('span', { class: 'muted' }, 'Función: '), t.role === 'LIDER' ? 'Líder de la auditoría' : 'Auditor del equipo')))))
+          h('span', null, h('span', { class: 'muted' }, 'Rol: '), t.system_role || 'Auditor')))))
         : h('p', { class: 'muted' }, 'Sin integrantes registrados.'));
 
     // ---- evolución por fase
@@ -296,6 +345,7 @@
     el.replaceChildren(h('div', { class: 'audit-phase-bar' }, stepper, phaseBtns),
       h('div', { class: 'audit-summary-dashboard' },
         hero,
+        phasesPanel,
         indicatorsPanel,
         h('div', { class: 'audit-summary-layout' }, dataPanel, teamPanel),
         evolution));
@@ -321,7 +371,8 @@
   }
 
   async function movePhase(to) {
-    const back = PHASES.indexOf(to) < PHASES.indexOf(ctx.d.audit.phase);
+    const seq = phasesFor(ctx.d.audit);
+    const back = seq.indexOf(to) < seq.indexOf(ctx.d.audit.phase);
     const v = await S.ask('Cambiar de fase: ' + S.label2(to), [{ name: 'note', label: back ? 'Motivo (obligatorio)' : 'Nota (opcional)', type: 'textarea', required: back }], 'Confirmar');
     if (v && await S.send(`${A}/${ctx.aid}/phase`, 'POST', { to, note: v.note })) { S.say('Fase actualizada.', true); reload(); }
   }
@@ -369,7 +420,8 @@
           const r = await S.upload(`${A}/worksheets/${wid}/system-questionnaire/import`, form);
           input.value = '';
           if (!r.ok) return S.say(S.err(r));
-          S.say(`Excel cargado. ${r.data.statistics.respondidas}/${r.data.statistics.total} controles respondidos.`, true);
+          S.say(`Excel cargado. ${r.data.statistics.respondidas}/${r.data.statistics.total} controles respondidos.` +
+            (r.data.observations_created ? ` Se redactaron ${r.data.observations_created} observaciones a partir de las brechas.` : ''), true);
           reload();
         });
         bar.append(h('button', { onclick: () => input.click() }, 'Cargar plantilla Excel'), input);
@@ -382,9 +434,9 @@
       const section = h('div', { class: 'panel' }, h('b', null, 'Estadísticas del cuestionario'),
         h('p', { class: 'muted' }, `Cumplimiento: ${S.score(st.cumplimiento)}% · Exposición: ${S.score(st.exposicion)}% · Pendientes: ${st.pendientes ?? 0}`));
       const criteria = Object.fromEntries(ws.criteria.map((c) => [c.code, c]));
-      const rows = ws.items.map((it) => systemQuestionRow(it, criteria[it.ref], edit, paint, wid));
+      const rows = ws.items.map((it) => systemQuestionRow(it, criteria[it.ref], edit, paint, wid, d.phase_rules || {}));
       el.append(bar, h('div', { class: 'row' }, sum), stats, section,
-        ...(!edit ? [h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'El cuestionario se califica en Trabajo de campo.' : 'Solo lectura.')] : []),
+        ...(!edit ? [h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'El cuestionario se califica en Trabajo de campo.' : d.audit.phase === 'INFORME' ? 'Fase de Informe: los controles quedaron cerrados en las fases 1 a 3.' : 'Solo lectura.')] : []),
         h('div', { class: 'grid-wrap audit-system-questionnaire' }, h('table', null, h('thead', null, h('tr', null, ['ID', 'Sección', 'Pregunta de auditoría', 'Existencia', 'Soporte documental', 'Evidencia / entregable', 'Puntaje', 'Observación', ''].map((x) => h('th', null, x)))), h('tbody', null, rows))));
       return;
     }
@@ -445,8 +497,12 @@
     el.append(...worksheetContent);
   }
 
-  function systemQuestionRow(it, criterion, edit, paint, wid) {
+  function systemQuestionRow(it, criterion, edit, paint, wid, rules = {}) {
     const code = it.ref, cur = (it.results && it.results[code]) || {};
+    const closedDoc = it.phase_results?.DOCUMENTACION?.results?.[code]?.documental;
+    const notTestable = rules.only_documented && closedDoc && closedDoc !== 'SI';
+    const lockControl = rules.lock_control;
+    edit = edit && !notTestable;
     const state = { results: { [code]: { control: cur.control || '', documental: cur.documental || '', evidencia: cur.evidencia || '' } }, observation: it.observation || '' };
     const auto = h('td'), saving = h('span', { class: 'saving' });
     const setScore = (v) => { auto.textContent = S.score(v); };
@@ -462,7 +518,7 @@
       }, 350);
     };
     const select = (key, options) => {
-      const sel = h('select', { disabled: !edit }, [['', '—'], ...options].map(([v, l]) => h('option', { value: v, selected: v === state.results[code][key] }, l)));
+      const sel = h('select', { disabled: !edit || (key === 'control' && lockControl) }, [['', '—'], ...options].map(([v, l]) => h('option', { value: v, selected: v === state.results[code][key] }, l)));
       sel.addEventListener('change', () => { state.results[code][key] = sel.value; save(); });
       return sel;
     };
@@ -476,7 +532,8 @@
       }
     }
     if (edit) actions.append(h('button', { class: 'sm', onclick: () => obsForm({ item_id: it.id, title: '', condition: it.observation || '' }) }, '+ Obs.'));
-    return h('tr', null, h('td', null, h('b', null, code)), h('td', null, criterion?.section || '—'), h('td', { title: criterion?.text || '' }, criterion?.text || 'Pregunta no disponible'),
+    return h('tr', { class: notTestable ? 'audit-row-muted' : '' }, h('td', null, h('b', null, code), notTestable ? h('div', { class: 'muted' }, 'No documentado: conserva Documentación') : null),
+      h('td', null, criterion?.section || '—'), h('td', { title: criterion?.text || '' }, criterion?.text || 'Pregunta no disponible'),
       h('td', null, select('control', [['SI', 'Sí'], ['NO', 'No']])),
       h('td', null, select('documental', [['SI', 'Sí'], ['NO', 'No']])),
       h('td', null, select('evidencia', [['ACTUALIZADO', 'Actualizado'], ['DESACTUALIZADO', 'Desactualizado'], ['INEXISTENTE', 'Inexistente']])),
@@ -522,7 +579,7 @@
     if (!d) return;
 
     const observations = Array.isArray(d.observations) ? d.observations : [];
-    const phaseOk = ctx.d.audit.phase !== 'PLANIFICACION';
+    const phaseOk = workPhase(ctx.d.audit);
     const canEdit = Boolean(ctx.canWrite && phaseOk);
 
     const riskOf = (o) => String(o.risk || 'BAJO').toUpperCase();
@@ -815,10 +872,10 @@
     el.append(h('div', { class: 'panel' }, h('h3', null, 'Trabajar fuera de la oficina'),
       h('ol', null, h('li', null, 'Con conexión, descargue el paquete de trabajo (Excel) con sus cédulas y muestras.'), h('li', null, 'Trabaje sin conexión en el Excel: califique cada criterio, anote observaciones y excepciones de información.'),
         h('li', null, 'Al volver a tener conexión, cárguelo aquí. Verá una vista previa de lo que cambiará antes de aplicarlo.')),
-      ctx.canWrite && ctx.d.audit.phase !== 'PLANIFICACION' ? h('div', { class: 'toolbar' }, h('button', { onclick: () => S.openFile(`${A}/${ctx.aid}/offline-template`, `SICAS_${ctx.d.audit.code}_sin_conexion.xlsx`, false) }, 'Descargar paquete de trabajo (.xlsx)'))
+      ctx.canWrite && itemsPhase(ctx.d.audit) ? h('div', { class: 'toolbar' }, h('button', { onclick: () => S.openFile(`${A}/${ctx.aid}/offline-template`, `SICAS_${ctx.d.audit.code}_sin_conexion.xlsx`, false) }, 'Descargar paquete de trabajo (.xlsx)'))
         : h('div', { class: 'warn' }, 'Disponible para el equipo auditor desde Trabajo de campo, con cédulas creadas.'),
       h('p', { class: 'muted' }, 'El archivo está firmado por el servidor: si se altera su estructura o los identificadores, se rechaza. Las evidencias (fotos y documentos) se adjuntan en la pestaña Evidencias al conectarse.')));
-    if (ctx.canWrite && ctx.d.audit.phase !== 'PLANIFICACION') el.append(h('div', { class: 'panel' }, h('h3', null, 'Cargar el paquete trabajado'), h('div', { class: 'toolbar' }, h('label', null, 'Archivo .xlsx', file),
+    if (ctx.canWrite && itemsPhase(ctx.d.audit)) el.append(h('div', { class: 'panel' }, h('h3', null, 'Cargar el paquete trabajado'), h('div', { class: 'toolbar' }, h('label', null, 'Archivo .xlsx', file),
       h('button', { onclick: (e) => S.busy(e.target, () => preview(false)) }, 'Ver vista previa')), out));
     const preview = async (apply, overwrite) => {
       if (!file.files[0]) { S.say('Seleccione el archivo.'); return; }
@@ -843,7 +900,7 @@
     const a = ctx.d.audit, bar = h('div', { class: 'toolbar' });
     const gen = (kind) => async () => { const r = await S.send(`${A}/${ctx.aid}/reports`, 'POST', { kind }); if (r) { S.say('Informe generado automáticamente.', true); reload(); } };
     if (ctx.d.is_member && a.status === 'IN_PROGRESS' && can('audit:report_draft') && !ctx.d.locked) {
-      if (a.phase !== 'PLANIFICACION') bar.append(h('button', { onclick: gen('PREVIO') }, 'Generar informe previo (hacia la unidad)'));
+      if (workPhase(a)) bar.append(h('button', { onclick: gen('PREVIO') }, 'Generar informe previo (hacia la unidad)'));
       if (a.phase === 'INFORME') bar.append(h('button', { onclick: gen('FINAL') }, 'Generar informe final'));
     }
     el.append(bar, a.phase !== 'INFORME' ? h('div', { class: 'warn' }, 'El informe final se genera en la fase Informe. El informe previo puede generarse desde Trabajo de campo.') : null,

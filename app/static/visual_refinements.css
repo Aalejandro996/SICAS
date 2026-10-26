@@ -2788,3 +2788,13 @@ body {
 }
 #page[data-sicas-view="audit"] .audit-team-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 #page[data-sicas-view="audit"] .audit-team-info > span { font-size: .85rem; }
+#page[data-sicas-view="audit"] .audit-phase-scores { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 12px; }
+#page[data-sicas-view="audit"] .audit-phase-score {
+  display: flex; flex-direction: column; gap: 5px; padding: 14px; border: 1px solid #dce5ee;
+  border-top: 4px solid #9fb3c8; border-radius: 12px; background: #fff;
+}
+#page[data-sicas-view="audit"] .audit-phase-score > span:first-child { color: #4f6378; font-size: .82rem; font-weight: 650; }
+#page[data-sicas-view="audit"] .audit-phase-score > strong { color: #1d3552; font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+#page[data-sicas-view="audit"] .audit-phase-score.current { border-top-color: #3479b8; background: #f5f9fd; }
+#page[data-sicas-view="audit"] .audit-phase-score.final { border-top-color: #1f3864; background: #eef3fa; }
+#page[data-sicas-view="audit"] tr.audit-row-muted td { opacity: .62; }

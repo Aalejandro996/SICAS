@@ -18,11 +18,12 @@ def summarize_sheets(worksheets: list[dict], thresholds: dict | None) -> list[tu
 
 def assemble(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dict], worksheets: list[dict], observations: list[dict],
              evidence: list[dict], thresholds: dict | None, company: str, version: int, today: date, conclusion: str | None = None,
-             history: dict | None = None, revision: int = 1) -> dict:
+             history: dict | None = None, revision: int = 1, overall_for=None) -> dict:
     pairs = summarize_sheets(worksheets, thresholds)
     sheets = [{"title": sheet_title(ws), "kind": ws["kind"], "line": ws["line"], "items": s.items, "scored": s.scored, "exceptions": s.exceptions,
                "auto": s.auto, "final": s.final, "manual_override": s.manual_override, "rating": s.rating} for ws, s in pairs]
-    overall = scoring.audit_summary([s for _, s in pairs], audit.get("manual_score"), thresholds)
+    overall = (overall_for(pairs, thresholds) if overall_for
+               else scoring.audit_summary([s for _, s in pairs], audit.get("manual_score"), thresholds))
     limitations, adjustments = [], []
     for ws in worksheets:
         for it in ws["items"]:

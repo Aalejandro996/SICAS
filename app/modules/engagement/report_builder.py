@@ -54,6 +54,9 @@ def auto_conclusion(modality: str, unit: str, overall: dict, observations: list[
     if overall.get("exceptions"):
         t += (f"Se registraron {overall['exceptions']} excepciones por información no recibida; constituyen limitaciones al alcance "
               "y se detallan en este informe. ")
+    if overall.get("final_method") == "PROMEDIO_FASES":
+        t += ("La nota final corresponde al promedio de las fases de levantamiento de información, documentación y "
+              "pruebas de campo. ")
     if overall.get("manual_override"):
         t += "La calificación global fue ajustada manualmente por el auditor, con la justificación indicada en este informe."
     return t.strip()
@@ -79,6 +82,11 @@ def build_body(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dic
 
 
 # ---------------------------------------------------------------------------------------- PDF
+def _team_role(t):
+    """Rol del integrante en SICAS (Jefe o Auditor); no se usa la función interna del equipo."""
+    return t.get("system_role") or "Auditor"
+
+
 def _num(v):
     return "—" if v is None else f"{float(v):.1f}"
 
@@ -92,7 +100,9 @@ def _rating(code):
 
 
 def _label(code):
-    return {"PLANIFICACION": "Planificación", "TRABAJO_CAMPO": "Trabajo de campo", "INFORME": "Informe"}.get(code, code or "—")
+    return {"PLANIFICACION": "Planificación", "TRABAJO_CAMPO": "Trabajo de campo", "INFORME": "Informe",
+            "LEVANTAMIENTO": "Levantamiento de información", "DOCUMENTACION": "Documentación",
+            "PRUEBAS_CAMPO": "Pruebas de campo"}.get(code, code or "—")
 
 
 def _iso(v):
@@ -159,7 +169,7 @@ def build_pdf(body: dict, state: dict | None = None) -> bytes:
             canvas.setStrokeColor(colors.grey); canvas.rect(x, y, 66, 36)
             if mark_txt:
                 canvas.setFont("Helvetica-Bold", 16); canvas.drawCentredString(x + 33, y + 12, mark_txt)
-            canvas.setFont("Helvetica", 6.5); canvas.drawCentredString(x + 33, y - 9, t["role"].capitalize())
+            canvas.setFont("Helvetica", 6.5); canvas.drawCentredString(x + 33, y - 9, "Jefe" if "Jefe" in _team_role(t) else "Auditor")
             canvas.drawCentredString(x + 33, y - 17, t["initials"] if not mark_txt else "")
             x += 76
             if x > 520:
@@ -207,24 +217,29 @@ def build_pdf(body: dict, state: dict | None = None) -> bytes:
     if body["procedures"]:
         s += [Paragraph("Procedimientos aplicados", h2), _p(body["procedures"], body_st)]
     s += [Paragraph("Equipo auditor", h2),
-          table([[Paragraph(x, hdr) for x in ("Nombre", "Rol", "Función en la auditoría", "Iniciales")]] +
-                [[_p(t["name"], cell), _p(t.get("system_role") or "—", cell),
-                  _p("Líder" if t["role"] == "LIDER" else "Auditor", cell), _p(t["initials"], cell)] for t in body["team"]],
-                [6 * cm, 5 * cm, 4 * cm, 2.5 * cm])]
+          table([[Paragraph(x, hdr) for x in ("Nombre", "Rol", "Iniciales")]] +
+                [[_p(t["name"], cell), _p(_team_role(t), cell), _p(t["initials"], cell)] for t in body["team"]],
+                [7.5 * cm, 7 * cm, 3 * cm])]
 
-    s.append(Paragraph("2. Resultados por cédula", h1))
-    rows = [[Paragraph(x, hdr) for x in ("Cédula", "Ítems", "Excep.", "Nota auto.", "Nota final", "Calificación")]]
-    for sh in body["sheets"]:
-        rows.append([_p(sh["title"], cell), _p(sh["items"], cell), _p(sh["exceptions"], cell),
-                     _p("—" if sh["auto"] is None else f"{sh['auto']:.1f}", cell),
-                     _p("—" if sh["final"] is None else f"{sh['final']:.1f}" + (" (manual)" if sh["manual_override"] else ""), cell),
-                     _p(RATING_LABEL.get(sh["rating"], str(sh["rating"]).replace("_", " ").capitalize()), cell)])
+    s.append(Paragraph("2. Resultados de la evaluación", h1))
     ov = body["overall"]
-    rows.append([_p("CALIFICACIÓN GLOBAL", cell), _p(ov["items"], cell), _p(ov["exceptions"], cell), _p("—" if ov["auto"] is None else f"{ov['auto']:.1f}", cell),
-                 _p("—" if ov["final"] is None else f"{ov['final']:.1f}" + (" (manual)" if ov["manual_override"] else ""), cell), _p(RATING_LABEL.get(ov["rating"], str(ov["rating"]).replace("_", " ").capitalize()), cell)])
-    t = table(rows, [5.2 * cm, 1.6 * cm, 2.2 * cm, 2.6 * cm, 2.9 * cm, 3.0 * cm])
-    t.setStyle(TableStyle([("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"), ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E8EEF7"))]))
-    s += [t, Spacer(1, 4)]
+    final_txt = "—" if ov.get("final") is None else f"{ov['final']:.1f}%"
+    phases = ov.get("phase_scores") or []
+    if phases:
+        rows = [[Paragraph(x, hdr) for x in ("Fase", "Nota", "Calificación", "Estado")]]
+        for i, ph in enumerate(phases, 1):
+            rows.append([_p(f"{i}. {_label(ph['phase'])}", cell), _p(_num(ph.get("score")), cell), _p(_rating(ph.get("rating")), cell),
+                         _p(f"Cerrada {_d(ph.get('closed_at'))}" if ph.get("closed") else "En curso" if ph.get("score") is not None else "Pendiente", cell)])
+        method = ("Nota final: promedio simple de las fases 1, 2 y 3" if ov.get("final_method") == "PROMEDIO_FASES"
+                  else "Nota vigente (fase en curso)")
+        rows.append([_p(method + (" — ajustada manualmente" if ov.get("manual_override") else ""), cell), _p(final_txt.rstrip("%"), cell),
+                     _p(_rating(ov.get("rating")), cell), _p("", cell)])
+        t = table(rows, [7.5 * cm, 2.5 * cm, 3.5 * cm, 4 * cm])
+        t.setStyle(TableStyle([("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"), ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E8EEF7"))]))
+        s += [t, Spacer(1, 4)]
+    else:
+        s.append(Paragraph(f"<b>Calificación global:</b> {final_txt} · {escape(_rating(ov.get('rating')))}"
+                           + (" (ajustada manualmente)" if ov.get("manual_override") else ""), body_st))
     th = body.get("thresholds") or {}
     excelente = th.get("excelente", 90)
     satisfactorio = th.get("satisfactorio", 70)

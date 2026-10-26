@@ -14,7 +14,7 @@ from app.core.security.rbac import permission_required
 
 from . import assemble as asm
 from . import score_snapshots
-from . import evidence_rules, offline, scoring, storage, system_questionnaire
+from . import evidence_rules, observation_rules, offline, phase_documents, scoring, storage, system_questionnaire
 from . import repositories as repo
 from . import workflow as wf
 from .pac import build_pac
@@ -27,6 +27,29 @@ from app.modules.notifications.service import (
 bp = Blueprint("engagement", __name__)
 EMAIL_RX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHASES = ("PLANIFICACION", "TRABAJO_CAMPO", "INFORME")
+# Auditoría de Sistemas: 1 Levantamiento, 2 Documentación, 3 Pruebas de campo, 4 Informe.
+SYSTEM_PHASES = scoring.SYSTEM_PHASES
+
+
+def is_systems(a) -> bool:
+    return str(a.get("audit_domain") or "").upper() == "SISTEMAS"
+
+
+def phases_for(a):
+    return SYSTEM_PHASES if is_systems(a) else PHASES
+
+
+def phase_group(a, group):
+    """Fases en las que se permite cada tipo de trabajo, según el dominio de la auditoría.
+
+    PLAN  : crear cédulas.
+    WORK  : observaciones, evidencias, ajustes y trabajo sin conexión.
+    ITEMS : responder y calificar los controles de las cédulas.
+    """
+    if is_systems(a):
+        return {"PLAN": SYSTEM_PHASES[:1], "WORK": SYSTEM_PHASES, "ITEMS": scoring.SYSTEM_SCORED_PHASES}[group]
+    return {"PLAN": ("PLANIFICACION", "TRABAJO_CAMPO"), "WORK": ("TRABAJO_CAMPO", "INFORME"),
+            "ITEMS": ("TRABAJO_CAMPO", "INFORME")}[group]
 # Estados del informe final en los que la auditoría queda bloqueada para el equipo.
 LOCKING = ("IN_REVIEW", "GERENCIA", "CONTRALOR", "APPROVED", "SIGNED")
 
@@ -109,6 +132,8 @@ def load(aid, write=False, phases=None):
             return None, err("Solo el equipo auditor puede modificar esta auditoría", 403)
         if a["status"] != "IN_PROGRESS":
             return None, err("La auditoría está cerrada", 409)
+        if isinstance(phases, str):
+            phases = phase_group(a, phases)
         if phases and a["phase"] not in phases:
             return None, err("No disponible en la fase actual (" + a["phase"] + ")", 409)
         if final_locked(a["id"]):
@@ -341,7 +366,8 @@ def new_audit():
     if data["planned_start"] and data["planned_end"] and data["planned_end"] < data["planned_start"]:
         return err("La fecha de fin no puede ser anterior a la de inicio")
     eligible = {a["id"]: a for a in repo.eligible_auditors(domain)}
-    leader, members = str(d.get("leader_id", "")), [str(m) for m in d.get("member_ids", [])]
+    # No existe el rol de líder: quien crea la auditoría queda como responsable interno del equipo.
+    leader, members = str(d.get("leader_id") or me()), [str(m) for m in d.get("member_ids", [])]
     ids = list(dict.fromkeys([leader, *members]))
     if leader not in eligible or any(i not in eligible for i in ids):
         return err("El líder y los miembros deben ser auditores activos")
@@ -360,11 +386,19 @@ def new_audit():
     return jsonify(id=aid, code=code), 201
 
 
+def overall_for(a, pairs, th):
+    """Calificación global: promedio de cédulas (o ajuste manual); en Sistemas, además, por fases."""
+    base = scoring.audit_summary([s for _, s in pairs], a.get("manual_score"), th)
+    if not is_systems(a):
+        return base
+    return scoring.systems_overall(base, repo.audit_phase_scores(a["id"]), a.get("phase"), a.get("manual_score"), th)
+
+
 def audit_overview(a):
     sheets = repo.worksheets_with_items(a["id"])
     th = thresholds()
     pairs = asm.summarize_sheets(sheets, th)
-    overall = scoring.audit_summary([s for _, s in pairs], a.get("manual_score"), th)
+    overall = overall_for(a, pairs, th)
     reps = repo.reports(a["id"])
     obs = repo.observations(a["id"])
     return {"audit": a, "team": repo.team(a["id"]), "phase_log": repo.phase_log(a["id"]),
@@ -436,21 +470,37 @@ def phase(aid):
         return e
     d = request.get_json(silent=True) or {}
     to, note = str(d.get("to", "")).upper(), str(d.get("note") or "").strip()[:500]
-    cur = PHASES.index(a["phase"])
-    if to not in PHASES or abs(PHASES.index(to) - cur) != 1:
+    seq = phases_for(a)
+    if a["phase"] not in seq:
+        return err(f"La fase actual ({a['phase']}) no corresponde al tipo de auditoría", 409)
+    cur = seq.index(a["phase"])
+    if to not in seq or abs(seq.index(to) - cur) != 1:
         return err("Solo se avanza o retrocede una fase a la vez")
+    forward = seq.index(to) > cur
     sheets = repo.worksheets_with_items(a["id"])
     if to == "TRABAJO_CAMPO" and a["phase"] == "PLANIFICACION" and not sheets:
         return err("Para pasar a Trabajo de campo cree al menos una cédula en Planificación")
-    if to == "INFORME":
+    scored_check = (forward and is_systems(a)) or to == "INFORME"
+    if scored_check:
         empty = [ws["title"] for ws in sheets if not any(scoring.item_score(ws["criteria"], i["results"]) is not None for i in ws["items"])]
         if not sheets or empty:
-            return err("Para pasar a Informe, cada cédula debe tener al menos un ítem calificado" + (": " + ", ".join(empty) if empty else ""))
-    if PHASES.index(to) < cur and not note:
+            return err("Para cerrar la fase, cada cédula debe tener al menos un control calificado" + (": " + ", ".join(empty) if empty else ""))
+    if not forward and not note:
         return err("Para retroceder de fase indique el motivo")
     snapshot = _phase_snapshot(a, "PHASE_CHANGE", reason=note)
-    _change(a, "audit", a["id"], "PHASE_CHANGED", {"phase": {"before": a["phase"], "after": to}}, reason=note or None)
-    repo.change_phase(a["id"], a["phase"], to, me(), note, phase_snapshot=snapshot)
+    phase_score = None
+    if forward and is_systems(a) and a["phase"] in scoring.SYSTEM_SCORED_PHASES:
+        # Nota oficial de la fase que se cierra: la calificación vigente con la fórmula actual.
+        card = snapshot["scorecard"]["overall"]
+        phase_score = {"score": card.get("final"), "rating": card.get("rating") or "SIN_CALIFICAR",
+                       "detail": {"auto": card.get("auto"), "items": card.get("items"), "scored": card.get("scored"),
+                                  "worksheets": [{"id": w["id"], "title": w["title"], "final": w["final"], "rating": w["rating"]}
+                                                 for w in snapshot["scorecard"]["worksheets"]]}}
+    _change(a, "audit", a["id"], "PHASE_CHANGED",
+            {"phase": {"before": a["phase"], "after": to},
+             **({"phase_score": {"phase": a["phase"], "score": phase_score["score"]}} if phase_score else {})},
+            reason=note or None)
+    repo.change_phase(a["id"], a["phase"], to, me(), note, phase_snapshot=snapshot, phase_score=phase_score)
     log("AUDIT_PHASE_CHANGED", entity_type="audit", entity_id=a["id"], before_data={"phase": a["phase"]}, after_data={"phase": to, "note": note}, request_id=g.request_id)
     return jsonify(phase=to)
 
@@ -458,7 +508,7 @@ def phase(aid):
 @bp.put("/<uuid:aid>/rating")
 @permission_required("audit:rate")
 def audit_rating(aid):
-    a, e = load(aid, write=True, phases=("TRABAJO_CAMPO", "INFORME"))
+    a, e = load(aid, write=True, phases="WORK")
     if e:
         return e
     d = request.get_json(silent=True) or {}
@@ -549,7 +599,7 @@ def new_worksheet(aid):
     a, e = load(
         aid,
         write=True,
-        phases=("PLANIFICACION", "TRABAJO_CAMPO"),
+        phases="PLAN",
     )
 
     if e:
@@ -666,11 +716,43 @@ def new_worksheet(aid):
         )
 
 
+def _phase_rules(a):
+    """Reglas de edición de controles de Sistemas según la fase (verificación progresiva)."""
+    phase = a.get("phase")
+    return {
+        "phase": phase,
+        "lock_control": is_systems(a) and phase == "DOCUMENTACION",
+        "only_documented": is_systems(a) and phase == "PRUEBAS_CAMPO",
+    }
+
+
+def _closed_answer(it, phase, code, field):
+    """Respuesta de un control al cierre de una fase anterior (o None si la fase no se cerró)."""
+    closed = ((it.get("phase_results") or {}).get(phase) or {}).get("results") or {}
+    value = closed.get(code)
+    return str(value.get(field) or "").upper() if isinstance(value, dict) else None
+
+
+def _item_phase_guard(a, it, results=None):
+    """Error (respuesta) si la fase no permite este cambio en el control, o None."""
+    rules = _phase_rules(a)
+    code = it.get("ref")
+    if rules["only_documented"] and _closed_answer(it, "DOCUMENTACION", code, "documental") not in (None, "SI"):
+        return err("En Pruebas de campo solo se prueban los controles documentados (SI) en la fase de Documentación", 409)
+    if rules["lock_control"] and results:
+        before = _closed_answer(it, "LEVANTAMIENTO", code, "control")
+        for k, v in results.items():
+            if before in ("SI", "NO") and isinstance(v, dict) and str(v.get("control") or "").upper() not in ("", before):
+                return err("En Documentación la existencia del control se mantiene como en el Levantamiento; "
+                           "aquí se verifican el soporte documental y la evidencia", 409)
+    return None
+
+
 def ws_for(ws_id, write=False):
     ws = repo.get_worksheet(ws_id)
     if ws is None:
         return None, None, err("No encontrada", 404)
-    a, e = load(ws["audit_id"], write=write, phases=("TRABAJO_CAMPO", "INFORME") if write else None)
+    a, e = load(ws["audit_id"], write=write, phases="ITEMS" if write else None)
     return (ws, a, None) if not e else (None, None, e)
 
 
@@ -686,7 +768,9 @@ def worksheet(wid):
     s = scoring.worksheet_summary(ws["criteria"], ws["items"], ws["manual_score"], thresholds())
     stats = scoring.system_statistics(ws["criteria"], ws["items"]) if ws["kind"] == "SISTEMAS" else None
     return jsonify(worksheet=ws, summary=s.__dict__, statistics=stats, audit={"id": a["id"], "code": a["code"], "phase": a["phase"], "status": a["status"]},
-                   editable=repo.is_member(a["id"], me()) and a["status"] == "IN_PROGRESS" and a["phase"] != "PLANIFICACION")
+                   editable=repo.is_member(a["id"], me()) and a["status"] == "IN_PROGRESS" and a["phase"] in phase_group(a, "ITEMS")
+                   and not final_locked(a["id"]),
+                   phase_rules=_phase_rules(a))
 
 @bp.post("/worksheets/<uuid:wid>/system-questionnaire/import")
 @permission_required("audit:manage", "audit:systems_execute")
@@ -976,6 +1060,9 @@ def import_system_questionnaire(wid):
         fresh["items"],
     )
 
+    # Fase 1: las brechas de la cédula se convierten en observaciones redactadas por el motor de reglas.
+    created_obs = _auto_observations(a, fresh) if a.get("phase") == "LEVANTAMIENTO" else 0
+
     log(
         "SYSTEM_QUESTIONNAIRE_IMPORTED",
         entity_type="worksheet",
@@ -995,6 +1082,7 @@ def import_system_questionnaire(wid):
 
     return jsonify(
         imported=True,
+        observations_created=created_obs,
         questionnaire_type=parsed["questionnaire_type"],
         questionnaire_name=parsed.get("questionnaire_name"),
         source_filename=name,
@@ -1005,6 +1093,99 @@ def import_system_questionnaire(wid):
         statistics=stats,
     )
 
+
+
+def _auto_observations(a, ws):
+    """Crea, en una transacción, una observación por cada control con brecha que aún no tenga una vinculada."""
+    criteria = {c["code"]: c for c in ws["criteria"]}
+    observed = repo.observed_item_ids(a["id"])
+    drafts = []
+    for it in ws["items"]:
+        crit = criteria.get(it["ref"])
+        result = (it.get("results") or {}).get(it["ref"])
+        if crit is None or not isinstance(result, dict) or it["id"] in observed:
+            continue
+        o = observation_rules.draft(crit, result, it.get("observation"))
+        if o:
+            drafts.append((it, o))
+    if not drafts:
+        return 0
+    try:
+        for it, o in drafts:
+            fields = {k: o[k] for k in ("title", "condition", "criteria", "cause", "effect", "recommendation", "risk")}
+            fields["item_id"] = it["id"]
+            _change(a, "observation", None, "OBSERVATION_AUTO_CREATED",
+                    {"item": it["ref"], "gap": o["gap"], "domain": o["domain"], "risk": o["risk"]},
+                    reason="Redactada por el motor de reglas a partir de la cédula")
+            repo.add_observation(a["id"], fields, me(), origin="AUTO", commit=False)
+        repo.db.session.commit()
+    except Exception:
+        repo.db.session.rollback()
+        raise
+    log("OBSERVATIONS_AUTO_CREATED", entity_type="worksheet", entity_id=ws["id"], after_data={"creadas": len(drafts)}, request_id=g.request_id)
+    return len(drafts)
+
+
+@bp.post("/worksheets/<uuid:wid>/auto-observations")
+@permission_required("audit:manage")
+def auto_observations(wid):
+    """Genera las observaciones de las brechas de una cédula de Sistemas ya cargada (fase de Levantamiento)."""
+    ws, a, e = ws_for(wid, write=True)
+    if e:
+        return e
+    if ws["kind"] != "SISTEMAS" or not is_systems(a):
+        return err("Disponible solo para cédulas de Auditoría de Sistemas", 400)
+    if a["phase"] != "LEVANTAMIENTO":
+        return err("Las observaciones automáticas se generan en la fase de Levantamiento de información", 409)
+    n = _auto_observations(a, ws)
+    return jsonify(created=n, note=f"Se crearon {n} observación(es). Revíselas y ajústelas antes del informe." if n
+                   else "No hay brechas nuevas sin observación.")
+
+
+def _systems_document(aid, kind):
+    """Carta de documentación (fase 2) o programa de pruebas (fase 3) de una auditoría de Sistemas."""
+    a, e = load(aid)
+    if e:
+        return e
+    if not is_systems(a):
+        return err("Disponible solo para Auditoría de Sistemas", 400)
+    needed = "DOCUMENTACION" if kind == "documentation" else "PRUEBAS_CAMPO"
+    if SYSTEM_PHASES.index(a["phase"]) < SYSTEM_PHASES.index(needed):
+        return err(f"Disponible desde la fase {needed.replace('_', ' ').title()}", 409)
+    sheets = repo.worksheets_with_items(a["id"])
+    team = _team_info(a["id"])
+    company = repo.company() or current_app.config["COMPANY_NAME"]
+    if kind == "documentation":
+        try:
+            due = parse_date(request.args.get("due"), "Fecha límite")
+        except ValueError as ex:
+            return err(str(ex))
+        controls = phase_documents.documented_controls(sheets, "LEVANTAMIENTO")
+        pdf = phase_documents.documentation_request_pdf(audit=a, team=team, controls=controls, company=company, due=due, today=date.today())
+        action, name = "DOCUMENTATION_REQUEST_ISSUED", f"{a['code']}_solicitud_documentacion.pdf"
+        changes = {"controls": [c["ref"] for c in controls], "due": due}
+    else:
+        controls = phase_documents.documented_controls(sheets, "DOCUMENTACION")
+        pdf = phase_documents.field_tests_pdf(audit=a, team=team, controls=controls, company=company, today=date.today())
+        action, name = "FIELD_TEST_PROGRAM_ISSUED", f"{a['code']}_programa_pruebas_campo.pdf"
+        changes = {"controls": [c["ref"] for c in controls]}
+    if repo.is_member(a["id"], me()):
+        _change(a, "audit", a["id"], action, {**changes, "sha256": hashlib.sha256(pdf).hexdigest()})
+        repo.db.session.commit()
+    log(action, entity_type="audit", entity_id=a["id"], after_data={"controles": len(controls)}, request_id=g.request_id)
+    return Response(pdf, mimetype="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@bp.get("/<uuid:aid>/documentation-request.pdf")
+@permission_required("audit:read")
+def documentation_request(aid):
+    return _systems_document(aid, "documentation")
+
+
+@bp.get("/<uuid:aid>/field-tests.pdf")
+@permission_required("audit:read")
+def field_tests(aid):
+    return _systems_document(aid, "tests")
 
 
 @bp.post("/worksheets/<uuid:wid>/system-controls")
@@ -1103,6 +1284,9 @@ def update_item(iid):
     else:
         valid = set(scoring.POINTS) | {"NO_APLICA", "EXCEPCION"}
         results = {k: v for k, v in raw_results.items() if k in codes and v in valid}
+    guard = _item_phase_guard(a, it, results)
+    if guard:
+        return guard
     obs = str(d.get("observation") or "").strip()[:2000] or None
     exc = str(d.get("info_exception") or "").strip()[:2000] or None
     if "EXCEPCION" in results.values() and not exc:
@@ -1180,6 +1364,8 @@ def item_rating(iid):
     if it is None:
         return err("No encontrado", 404)
     ws, a, e = ws_for(it["worksheet_id"], write=True)
+    if not e:
+        e = _item_phase_guard(a, it)
     return e or _rate("ITEM", str(iid), it["manual_score"], it.get("manual_reason"), lambda s, r: repo.set_item_manual(iid, s, r, me()), a)
 
 
@@ -1217,7 +1403,7 @@ def observations(aid):
 @bp.post("/<uuid:aid>/observations")
 @permission_required("audit:manage")
 def new_observation(aid):
-    a, e = load(aid, write=True, phases=("TRABAJO_CAMPO", "INFORME"))
+    a, e = load(aid, write=True, phases="WORK")
     if e:
         return e
     d = request.get_json(silent=True) or {}
@@ -1255,7 +1441,7 @@ def edit_observation(oid):
     o = repo.get_observation(oid)
     if o is None:
         return err("No encontrada", 404)
-    a, e = load(o["audit_id"], write=True, phases=("TRABAJO_CAMPO", "INFORME"))
+    a, e = load(o["audit_id"], write=True, phases="WORK")
     if e:
         return e
     d = request.get_json(silent=True) or {}
@@ -1375,7 +1561,7 @@ def _offline_key() -> bytes:
 @bp.get("/<uuid:aid>/offline-template")
 @permission_required("audit:manage")
 def offline_template(aid):
-    a, e = load(aid, write=True, phases=("TRABAJO_CAMPO", "INFORME"))
+    a, e = load(aid, write=True, phases="WORK")
     if e:
         return e
     sheets = repo.worksheets_with_items(a["id"])
@@ -1391,7 +1577,7 @@ def offline_template(aid):
 @bp.post("/<uuid:aid>/offline-import")
 @permission_required("audit:manage")
 def offline_import(aid):
-    a, e = load(aid, write=True, phases=("TRABAJO_CAMPO", "INFORME"))
+    a, e = load(aid, write=True, phases="WORK")
     if e:
         return e
     f = request.files.get("file")
@@ -1459,7 +1645,7 @@ def _make_body(a, kind, version, conclusion, revision=1):
         unit={"code": a["unit_code"], "name": a["unit_name"], "kind": a["unit_kind"]}, team=team,
         worksheets=repo.worksheets_with_items(a["id"]), observations=repo.observations(a["id"]), evidence=repo.evidence(a["id"]),
         thresholds=thresholds(), company=repo.company() or current_app.config["COMPANY_NAME"], version=version, today=date.today(), conclusion=conclusion,
-        history=history, revision=revision)
+        history=history, revision=revision, overall_for=lambda pairs, th: overall_for(a, pairs, th))
 
 
 def _transition(rep, status, action, **kw):
@@ -1599,7 +1785,7 @@ def new_report(aid):
     kind = str(d.get("kind", "")).upper()
     if kind not in ("PREVIO", "FINAL"):
         return err("Tipo de informe: PREVIO o FINAL")
-    a, e = load(aid, write=True, phases=("INFORME",) if kind == "FINAL" else ("TRABAJO_CAMPO", "INFORME"))
+    a, e = load(aid, write=True, phases=("INFORME",) if kind == "FINAL" else "WORK")
     if e:
         return e
     existing = [r for r in repo.reports(a["id"]) if r["kind"] == kind]

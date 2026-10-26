@@ -176,14 +176,16 @@ def eligible_auditors(domain="GENERAL"):
 def create_audit(code, file_id, d, members, user):
     aid = str(uuid.uuid4())
     domain = d.get("audit_domain", "GENERAL")
+    # Sistemas inicia en Levantamiento de información; el resto, en Planificación.
+    first_phase = "LEVANTAMIENTO" if domain == "SISTEMAS" else "PLANIFICACION"
     x("INSERT INTO engagement.audits (id, code, file_id, modality, audit_domain, objectives, scope, procedures, lines, planned_start, planned_end, location, "
-      "contact_name, contact_role, created_by) VALUES (CAST(:i AS uuid), :c, CAST(:f AS uuid), :m, :d, :o, :s, :p, CAST(:l AS text[]), :ps, :pe, :loc, :cn, :cr, CAST(:by AS uuid))",
+      "contact_name, contact_role, created_by, phase) VALUES (CAST(:i AS uuid), :c, CAST(:f AS uuid), :m, :d, :o, :s, :p, CAST(:l AS text[]), :ps, :pe, :loc, :cn, :cr, CAST(:by AS uuid), :ph)",
       i=aid, c=code, f=str(file_id), m=d["modality"], d=domain, o=d["objectives"], s=d["scope"], p=d.get("procedures"), l=d["lines"], ps=d.get("planned_start"),
-      pe=d.get("planned_end"), loc=d.get("location"), cn=d.get("contact_name"), cr=d.get("contact_role"), by=user)
+      pe=d.get("planned_end"), loc=d.get("location"), cn=d.get("contact_name"), cr=d.get("contact_role"), by=user, ph=first_phase)
     for m in members:
         x("INSERT INTO engagement.team (audit_id, user_id, role, initials) VALUES (CAST(:a AS uuid), CAST(:u AS uuid), :r, :i)",
           a=aid, u=m["user_id"], r=m["role"], i=m["initials"])
-    x("INSERT INTO engagement.phase_log (audit_id, from_phase, to_phase, changed_by, note) VALUES (CAST(:a AS uuid), NULL, 'PLANIFICACION', CAST(:u AS uuid), 'Creación')", a=aid, u=user)
+    x("INSERT INTO engagement.phase_log (audit_id, from_phase, to_phase, changed_by, note) VALUES (CAST(:a AS uuid), NULL, :ph, CAST(:u AS uuid), 'Creación')", a=aid, u=user, ph=first_phase)
     db.session.commit()
     return aid
 
@@ -208,9 +210,21 @@ def _insert_phase_score_snapshot(snapshot):
     )
 
 
-def change_phase(audit_id, from_phase, to_phase, user, note, phase_snapshot=None):
+def change_phase(audit_id, from_phase, to_phase, user, note, phase_snapshot=None, phase_score=None):
+    """Cambia la fase; con phase_score (Sistemas, al avanzar) congela las respuestas y la nota de la fase cerrada."""
     x("UPDATE engagement.audits SET phase=:t WHERE id = CAST(:a AS uuid)",
       t=to_phase, a=str(audit_id))
+    if phase_score:
+        x("UPDATE engagement.items i SET phase_results = i.phase_results || jsonb_build_object(CAST(:p AS text), "
+          "jsonb_build_object('results', i.results, 'manual_score', i.manual_score, 'manual_reason', i.manual_reason)) "
+          "FROM engagement.worksheets w WHERE w.id = i.worksheet_id AND w.audit_id = CAST(:a AS uuid)",
+          p=from_phase, a=str(audit_id))
+        x("INSERT INTO engagement.audit_phase_scores (audit_id, phase, score, rating, detail, closed_by) "
+          "VALUES (CAST(:a AS uuid), :p, :s, :r, CAST(:d AS jsonb), CAST(:u AS uuid)) "
+          "ON CONFLICT (audit_id, phase) DO UPDATE SET score = EXCLUDED.score, rating = EXCLUDED.rating, "
+          "detail = EXCLUDED.detail, closed_by = EXCLUDED.closed_by, closed_at = clock_timestamp()",
+          a=str(audit_id), p=from_phase, s=phase_score["score"], r=phase_score["rating"],
+          d=json.dumps(phase_score.get("detail") or {}, ensure_ascii=False, default=str), u=user)
     phase_log_id = x(
         "INSERT INTO engagement.phase_log "
         "(audit_id, from_phase, to_phase, changed_by, note) "
@@ -615,8 +629,8 @@ def update_system_item(item_id, results, observation, info_exception, auto_score
 
 WS_SQL = ("SELECT id::text, audit_id::text, kind, line, title, criteria, template_version, status, manual_score, manual_reason, updated_at "
           "FROM engagement.worksheets ")
-ITEM_SQL = ("SELECT id::text, worksheet_id::text, ref, results, auto_score, manual_score, manual_reason, observation, info_exception, source, updated_at "
-            "FROM engagement.items ")
+ITEM_SQL = ("SELECT id::text, worksheet_id::text, ref, results, auto_score, manual_score, manual_reason, observation, info_exception, source, updated_at, "
+            "phase_results FROM engagement.items ")
 
 
 FINANCIAL_TEMPLATE_CODES = {
@@ -723,7 +737,7 @@ def set_ws_manual(ws_id, score, reason, user):
 
 # ------------------------------------------------------------------ observaciones y evidencias
 OBS_SQL = ("SELECT id::text, audit_id::text, item_id::text, seq, title, condition, criteria, cause, effect, recommendation, risk, unit_decision, unit_response, "
-           "unit_response_at, pac_action, pac_owner, pac_due, pac_status FROM engagement.observations ")
+           "unit_response_at, pac_action, pac_owner, pac_due, pac_status, origin FROM engagement.observations ")
 
 
 def observations(audit_id):
@@ -743,16 +757,29 @@ def _insert_observation_revision(oid, user, changed_fields=(), reason=None, repo
       i=str(oid), f=list(changed_fields), r=reason, st=report_status, u=user)
 
 
-def add_observation(audit_id, d, user):
+def add_observation(audit_id, d, user, origin="MANUAL", commit=True):
     oid = str(uuid.uuid4())
     seq = db.session.execute(text("SELECT COALESCE(max(seq), 0) + 1 FROM engagement.observations WHERE audit_id = CAST(:a AS uuid)"), {"a": str(audit_id)}).scalar_one()
-    x("INSERT INTO engagement.observations (id, audit_id, item_id, seq, title, condition, criteria, cause, effect, recommendation, risk, created_by) "
-      "VALUES (CAST(:i AS uuid), CAST(:a AS uuid), CAST(:it AS uuid), :s, :t, :c, :cr, :ca, :e, :r, :k, CAST(:u AS uuid))",
+    x("INSERT INTO engagement.observations (id, audit_id, item_id, seq, title, condition, criteria, cause, effect, recommendation, risk, created_by, origin) "
+      "VALUES (CAST(:i AS uuid), CAST(:a AS uuid), CAST(:it AS uuid), :s, :t, :c, :cr, :ca, :e, :r, :k, CAST(:u AS uuid), :o)",
       i=oid, a=str(audit_id), it=d.get("item_id"), s=seq, t=d["title"], c=d["condition"], cr=d.get("criteria"), ca=d.get("cause"), e=d.get("effect"),
-      r=d.get("recommendation"), k=d["risk"], u=user)
-    _insert_observation_revision(oid, user, reason="Registro original")
-    db.session.commit()
+      r=d.get("recommendation"), k=d["risk"], u=user, o=origin)
+    _insert_observation_revision(oid, user, reason="Registro original" if origin == "MANUAL" else "Redactada por el motor de reglas al cargar la cédula")
+    if commit:
+        db.session.commit()
     return oid, seq
+
+
+def observed_item_ids(audit_id):
+    """Ítems que ya tienen al menos una observación vinculada (no se generan duplicadas)."""
+    return {r["item_id"] for r in q("SELECT DISTINCT item_id::text AS item_id FROM engagement.observations "
+                                     "WHERE audit_id = CAST(:a AS uuid) AND item_id IS NOT NULL", a=str(audit_id))}
+
+
+def audit_phase_scores(audit_id):
+    return {r["phase"]: r for r in q("SELECT s.phase, s.score, s.rating, s.detail, s.closed_at, u.username AS closed_by_name "
+                                      "FROM engagement.audit_phase_scores s LEFT JOIN iam.users u ON u.id = s.closed_by "
+                                      "WHERE s.audit_id = CAST(:a AS uuid)", a=str(audit_id))}
 
 
 OBS_FIELDS = ("title", "condition", "criteria", "cause", "effect", "recommendation", "risk", "unit_decision", "unit_response", "unit_response_at",

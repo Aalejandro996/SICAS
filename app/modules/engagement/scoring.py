@@ -338,3 +338,40 @@ def evaluation_indicators(worksheets: list[dict], overall: dict, thresholds: dic
     return {"overall": {"score": overall.get("final"), "rating": overall.get("rating", "SIN_CALIFICAR"),
                         "items": sum(s["items"] for s in sheets)},
             "worksheets": sheets}
+
+
+# ------------------------------------------------------------------ Auditoría de Sistemas: notas por fase
+SYSTEM_PHASES = ("LEVANTAMIENTO", "DOCUMENTACION", "PRUEBAS_CAMPO", "INFORME")
+SYSTEM_SCORED_PHASES = SYSTEM_PHASES[:3]
+
+
+def systems_overall(base: dict, phase_scores: dict, current_phase: str | None, manual: float | None = None,
+                    thresholds: dict | None = None) -> dict:
+    """Calificación de una auditoría de Sistemas a partir de sus fases.
+
+    Cada fase se califica con la fórmula vigente (40/30/30) al cerrarse. En la fase INFORME la
+    nota final es el promedio simple de las fases cerradas 1, 2 y 3; antes de llegar a INFORME
+    la nota vigente es la de la fase en curso. El ajuste manual global, si existe, prevalece.
+    """
+    phases = []
+    for p in SYSTEM_SCORED_PHASES:
+        closed = phase_scores.get(p)
+        if closed is not None:
+            score = None if closed.get("score") is None else float(closed["score"])
+            phases.append({"phase": p, "score": score, "rating": rating(score, thresholds), "closed": True,
+                           "closed_at": closed.get("closed_at")})
+        elif current_phase == p:
+            phases.append({"phase": p, "score": base.get("final"), "rating": base.get("rating"), "closed": False, "closed_at": None})
+        else:
+            phases.append({"phase": p, "score": None, "rating": "SIN_CALIFICAR", "closed": False, "closed_at": None})
+    out = dict(base)
+    if current_phase == "INFORME":
+        auto = mean(ph["score"] for ph in phases if ph["closed"])
+        auto = base.get("auto") if auto is None else auto
+        final = float(manual) if manual is not None else auto
+        out.update(auto=auto, final=final, rating=rating(final, thresholds), manual_override=manual is not None,
+                   final_method="PROMEDIO_FASES")
+    else:
+        out["final_method"] = "FASE_EN_CURSO"
+    out["phase_scores"] = phases
+    return out
