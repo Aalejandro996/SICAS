@@ -16,3 +16,4 @@ qrcode[pil]>=7.4,<9
 boto3>=1.37.32
 openpyxl>=3.1,<4
 reportlab>=4.4,<5
+tzdata>=2024.1          # zona horaria America/Caracas aunque la imagen no traiga la base del sistema
