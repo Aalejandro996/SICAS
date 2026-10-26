@@ -63,8 +63,115 @@ def me():
     return get_jwt_identity()
 
 
-def perms():
+def own_perms():
+    """Permisos del token (roles propios del usuario)."""
     return set(g.claims.get("perms", []))
+
+
+# ------------------------------------------------------------------ suplencias temporales
+# El suplente recibe solo los permisos de la etapa del flujo del informe que cubre; el flujo de
+# estados no cambia y cada transición queda registrada "en nombre de" el titular.
+STAGE_PERMS = {
+    "JEFE": {"audit:read", "report:read", "audit:report_approve_jefe"},
+    "GERENCIA": {"audit:read_final", "audit:report_approve_gerente", "audit:sign_gerente"},
+    "CONTRALOR": {"audit:read_final", "audit:report_approve", "audit:sign_contralor"},
+}
+DOMAIN_REVIEW = {
+    "FINANCIERA": {"audit:financial_read", "audit:financial_review"},
+    "SISTEMAS": {"audit:systems_read", "audit:systems_review"},
+}
+STAGE_OWN_PERM = {"JEFE": "audit:report_approve_jefe", "GERENCIA": "audit:sign_gerente", "CONTRALOR": "audit:sign_contralor"}
+STAGE_AUTHORIZER = {"JEFE": "audit:report_approve", "GERENCIA": "audit:report_approve", "CONTRALOR": "audit:report_approve_gerente"}
+STAGE_LABEL = {"JEFE": "Jefe de Auditoría", "GERENCIA": "Gerencia", "CONTRALOR": "Contralor"}
+STATUS_STAGE = {"IN_REVIEW": "JEFE", "GERENCIA": "GERENCIA", "CONTRALOR": "CONTRALOR"}
+MAX_DELEGATION_DAYS = 90
+
+
+def stage_perms(stage, domain=None):
+    return set(STAGE_PERMS.get(stage, set())) | (DOMAIN_REVIEW.get(domain, set()) if stage == "JEFE" else set())
+
+
+def sod_conflicts(granted):
+    from app.core.security.permissions import SOD_CONFLICTS
+    return [c for c in SOD_CONFLICTS if c[0] in granted and c[1] in granted]
+
+
+def holds_stage(granted, stage, domain=None):
+    """El conjunto de permisos ya cubre la etapa (y, para el Jefe, el dominio)."""
+    if STAGE_OWN_PERM[stage] not in granted:
+        return False
+    return stage != "JEFE" or DOMAIN_REVIEW.get(domain, {"-"}) <= granted
+
+
+def active_delegations():
+    """Suplencias vigentes del usuario, una vez por petición. Si la consulta falla no se concede nada (falla cerrada)."""
+    cached = getattr(g, "_delegations", None)
+    if cached is not None:
+        return cached
+    rows = []
+    try:
+        uid = me()
+        own = own_perms()
+        for d in (repo.active_delegations(uid) if uid else []):
+            # Una suplencia que hoy violaría la segregación de funciones (p. ej. por un rol nuevo) no se aplica.
+            if not sod_conflicts(own | stage_perms(d["stage"], d.get("audit_domain"))):
+                rows.append(d)
+    except Exception:  # noqa: BLE001
+        try:
+            repo.db.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        rows = []
+    g._delegations = rows
+    return rows
+
+
+def delegated_perms():
+    out = set()
+    for d in active_delegations():
+        out |= stage_perms(d["stage"], d.get("audit_domain"))
+    return out
+
+
+def perms():
+    """Permisos efectivos: los propios más los de las suplencias vigentes."""
+    return own_perms() | delegated_perms()
+
+
+def acting_delegation(stage, domain=None):
+    """La suplencia con que actúa el usuario en la etapa, o None si la cubre con sus propios roles."""
+    if stage is None or holds_stage(own_perms(), stage, domain):
+        return None
+    return next((d for d in active_delegations()
+                 if d["stage"] == stage and (stage != "JEFE" or d.get("audit_domain") == domain)), None)
+
+
+def stage_required(*needed, step_up=False):
+    """Como permission_required, pero acepta también los permisos recibidos por suplencia."""
+    from functools import wraps
+
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            import time
+
+            from flask_jwt_extended import get_jwt, verify_jwt_in_request
+
+            from app.core.security.rbac import _deny
+            verify_jwt_in_request()
+            claims = get_jwt()
+            if not claims.get("mfa"):
+                return _deny("MFA requerido")
+            g.claims = claims
+            if not set(needed) & perms():
+                return _deny("Permiso insuficiente")
+            if step_up:
+                max_age = current_app.config.get("STEP_UP_MAX_AGE_SECONDS", 300)
+                if time.time() - claims.get("mfa_at", 0) > max_age:
+                    return jsonify(error="Reautenticación MFA requerida", step_up_required=True), 401
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 def txt(d, key, lo=0, hi=2000):
@@ -1155,6 +1262,16 @@ def import_system_questionnaire(wid):
 
 
 
+def systems_domains():
+    """Catálogo vigente del motor de Sistemas; si la tabla aún no existe o está vacía, el incorporado."""
+    try:
+        return observation_rules.domains_from_rows(repo.systems_rule_catalog())
+    except Exception:  # noqa: BLE001
+        repo.db.session.rollback()
+        current_app.logger.exception("No se pudo leer el catálogo del motor de Sistemas; se usa el incorporado")
+        return None
+
+
 def _auto_observations(a, ws):
     """Redacta las observaciones de las brechas de la cédula, agrupadas por dominio de control, en una transacción.
 
@@ -1174,7 +1291,7 @@ def _auto_observations(a, ws):
         if crit is None or not isinstance(result, dict) or it["id"] in covered:
             continue
         rows.append((crit, result, it.get("observation"), it["id"]))
-    drafts = observation_rules.consolidate(rows)
+    drafts = observation_rules.consolidate(rows, systems_domains())
     # Un control que queda solo en su dominio y ya tiene su observación automática no se rehace:
     # solo se reemplazan las individuales que efectivamente se agrupan con otras.
     replaceable_items = {i for o in replaceable for i in (o["covered"] or [])}
@@ -1316,12 +1433,12 @@ def _systems_document(aid, kind):
             due = parse_date(request.args.get("due"), "Fecha límite")
         except ValueError as ex:
             return err(str(ex))
-        controls = phase_documents.documented_controls(sheets, "LEVANTAMIENTO")
+        controls = phase_documents.documented_controls(sheets, "LEVANTAMIENTO", systems_domains())
         pdf = phase_documents.documentation_request_pdf(audit=a, team=team, controls=controls, company=company, due=due, today=date.today())
         action, name = "DOCUMENTATION_REQUEST_ISSUED", f"{a['code']}_solicitud_documentacion.pdf"
         changes = {"controls": [c["ref"] for c in controls], "due": due}
     else:
-        controls = phase_documents.documented_controls(sheets, "DOCUMENTACION")
+        controls = phase_documents.documented_controls(sheets, "DOCUMENTACION", systems_domains())
         pdf = phase_documents.field_tests_pdf(audit=a, team=team, controls=controls, company=company, today=date.today())
         action, name = "FIELD_TEST_PROGRAM_ISSUED", f"{a['code']}_programa_pruebas_campo.pdf"
         changes = {"controls": [c["ref"] for c in controls]}
@@ -1804,14 +1921,19 @@ def _make_body(a, kind, version, conclusion, revision=1, report_code=None):
         history=history, revision=revision, overall_for=lambda pairs, th: overall_for(a, pairs, th), report_code=report_code)
 
 
-def _transition(rep, status, action, **kw):
-    """Aplica la transición validada sobre el estado y contenido leídos; None si se aplicó, o la respuesta 409."""
+def _transition(rep, status, action, delegation=None, **kw):
+    """Aplica la transición validada sobre el estado y contenido leídos; None si se aplicó, o la respuesta 409.
+
+    Si quien actúa es un suplente, la transición registra la suplencia y el titular ("en nombre de").
+    """
     claims = getattr(g, "claims", {}) or {}
     try:
         repo.transition_report(
             rep["id"], expected_status=rep["status"], expected_sha256=rep["body_sha256"],
             status=status, action=action, actor=me(), report_version=rep["version"],
-            actor_username=claims.get("username"), actor_roles=claims.get("roles", []), **kw,
+            actor_username=claims.get("username"), actor_roles=claims.get("roles", []),
+            delegation_id=delegation["id"] if delegation else None,
+            on_behalf_of=delegation["titular_id"] if delegation else None, **kw,
         )
     except repo.StaleReportState as ex:
         log(
@@ -1968,7 +2090,7 @@ def new_report(aid):
 
 
 @bp.get("/reports/<uuid:rid>")
-@permission_required("audit:read", "audit:read_final")
+@stage_required("audit:read", "audit:read_final")
 def report_detail(rid):
     rep, a, team, e = get_rep(rid, final_viewer=True)
     if e:
@@ -2030,7 +2152,11 @@ def report_detail(rid):
             latest_for_role[role] = dct
     visible_signatures = list(reversed(list(latest_for_role.values())))
 
+    acting = acting_delegation(STATUS_STAGE.get(st.status), domain) if st.kind == "FINAL" else None
     return jsonify(
+        acting_for=({"titular": acting["titular_name"], "stage": STAGE_LABEL[acting["stage"]], "ends_on": acting["ends_on"],
+                     "needs_certificate": acting["stage"] in ("GERENCIA", "CONTRALOR") and repo.signing_certificate(me()) is None}
+                    if acting else None),
         report=rep, team=team, comments=repo.comments(rid),
         transitions=repo.report_transitions(rid),
         body_revisions=repo.body_revisions(rid),
@@ -2204,7 +2330,7 @@ def comment(rid):
 
 
 @bp.post("/reports/<uuid:rid>/return")
-@permission_required(
+@stage_required(
     "audit:report_approve", "audit:financial_review", "audit:systems_review",
     "audit:report_approve_jefe", "audit:report_approve_gerente",
 )
@@ -2246,7 +2372,8 @@ def return_report(rid):
     # Los PDF firmados históricos se conservan, pero no se presentan como actuales;
     # las aprobaciones invalidadas siguen constando en report_transitions.
     conflict = _transition(
-        rep, "RETURNED", "RETURN", comment=t, comment_kind="DEVOLUCION", review_points=points,
+        rep, "RETURNED", "RETURN", delegation=acting_delegation(STATUS_STAGE[stage], a.get("audit_domain", "GENERAL")),
+        comment=t, comment_kind="DEVOLUCION", review_points=points,
         approved_by=None, approved_at=None, approved_body_sha256=None,
         jefe_approved_by=None, jefe_approved_at=None, jefe_approved_body_sha256=None,
         gerente_approved_by=None, gerente_approved_at=None, gerente_approved_body_sha256=None,
@@ -2380,7 +2507,7 @@ def audit_history(aid):
 
 
 @bp.post("/reports/<uuid:rid>/approve/jefe")
-@permission_required("audit:report_approve_jefe", step_up=True)
+@stage_required("audit:report_approve_jefe", step_up=True)
 def approve_jefe(rid):
     rep, a, team, e = get_rep(rid, final_viewer=True)
     if e:
@@ -2395,7 +2522,7 @@ def approve_jefe(rid):
         return err(str(ex), 409)
 
     conflict = _transition(
-        rep, "GERENCIA", "APPROVE_JEFE",
+        rep, "GERENCIA", "APPROVE_JEFE", delegation=acting_delegation("JEFE", a.get("audit_domain", "GENERAL")),
         approved_by=None, approved_at=None, approved_body_sha256=None,
         jefe_approved_by=me(), jefe_approved_at="now",
         jefe_approved_body_sha256=rep["body_sha256"],
@@ -2472,12 +2599,25 @@ def _sign(rid, role):
         box, field, label = SIG_BOX_CONTRALOR, "FirmaContralor", "Contralor"
 
     cfg = current_app.config
+    delegation = acting_delegation("GERENCIA" if role == "GERENTE_CI" else "CONTRALOR")
+    signer_name = g.claims.get("username", me())
+    reason = f"Informe de auditoría {a['code']} — {label}"
+    try:
+        if delegation:
+            # El suplente firma con su propio certificado, en nombre del titular.
+            signer = _delegate_signer()
+            signer_name = f"{signer_name} (suplente de {delegation['titular_name']})"
+            reason += f" — por suplencia de {delegation['titular_name']}"
+        else:
+            signer = signing.load_signer(cfg, role)
+    except DelegateCertificateError as ex:
+        return err(str(ex), 409)
     try:
         signed = signing.sign_pdf(
-            base, signing.load_signer(cfg, role),
-            reason=f"Informe de auditoría {a['code']} — {label}",
+            base, signer,
+            reason=reason,
             location=cfg.get("SIGNING_LOCATION", "Venezuela"),
-            signer_name=g.claims.get("username", me()),
+            signer_name=signer_name,
             field_name=field, box=box, tsa_url=cfg.get("TSA_URL"),
         )
         key = f"reports/{rid}/v{version}/{uuid.uuid4()}.pdf"
@@ -2515,7 +2655,7 @@ def _sign(rid, role):
     # si el informe cambió mientras se firmaba, no queda ninguno de los dos.
     try:
         conflict = _transition(
-            rep, new_status, action,
+            rep, new_status, action, delegation=delegation,
             signed_doc={"role": role, "version": version, "signed": signed, "key": key},
             **approval,
         )
@@ -2550,6 +2690,8 @@ def _sign(rid, role):
             "role": role, "version": version,
             "sha256_signed": signed.sha256_signed,
             "cert_serial": signed.cert_serial,
+            "delegation": delegation["id"] if delegation else None,
+            "on_behalf_of": delegation["titular_id"] if delegation else None,
         },
         request_id=g.request_id,
     )
@@ -2560,20 +2702,45 @@ def _sign(rid, role):
     )
 
 
+class DelegateCertificateError(Exception):
+    pass
+
+
+def _delegate_signer():
+    """Firmante con el certificado propio del suplente, descifrado con el anillo de claves (aad = id del usuario)."""
+    from app.core.security.crypto import CryptoError, KeyRing
+    from app.modules.reporting.signing import service as signing
+
+    cert = repo.signing_certificate(me())
+    if cert is None:
+        raise DelegateCertificateError("Como suplente debe firmar con su propio certificado: súbalo en «Suplencias › Mi certificado»")
+    if cert.get("not_after") and cert["not_after"] < datetime.now(timezone.utc):
+        raise DelegateCertificateError("Su certificado de firma está vencido; suba uno vigente")
+    try:
+        ring = KeyRing.from_env()
+        aad = str(me()).encode()
+        p12 = ring.decrypt(cert["p12_encrypted"], aad=aad)
+        passphrase = ring.decrypt(cert["passphrase_encrypted"], aad=aad)
+        return signing.load_signer_from_pkcs12(p12, passphrase)
+    except (CryptoError, signing.SigningError, KeyError) as ex:
+        current_app.logger.warning("No se pudo cargar el certificado del suplente: %s", type(ex).__name__)
+        raise DelegateCertificateError("No se pudo usar su certificado de firma; vuelva a subirlo") from ex
+
+
 @bp.post("/reports/<uuid:rid>/sign/contralor")
-@permission_required("audit:sign_contralor", step_up=True)
+@stage_required("audit:sign_contralor", step_up=True)
 def sign_contralor(rid):
     return _sign(rid, "CONTRALOR")
 
 
 @bp.post("/reports/<uuid:rid>/sign/gerente")
-@permission_required("audit:sign_gerente", step_up=True)
+@stage_required("audit:sign_gerente", step_up=True)
 def sign_gerente(rid):
     return _sign(rid, "GERENTE_CI")
 
 
 @bp.get("/reports/<uuid:rid>/pdf")
-@permission_required("audit:read", "audit:read_final")
+@stage_required("audit:read", "audit:read_final")
 def report_pdf(rid):
     rep, a, team, e = get_rep(rid, final_viewer=True)
     if e:
@@ -2655,7 +2822,7 @@ def pac_send(aid):
 
 
 @bp.get("/final-reports")
-@permission_required(
+@stage_required(
     "audit:report_approve", "audit:sign_gerente", "audit:read_final",
     "audit:financial_review", "audit:systems_review",
     "audit:report_approve_jefe", "audit:report_approve_gerente",
@@ -2730,3 +2897,188 @@ def final_reports():
         ]
 
     return jsonify(reports=rows)
+
+
+# ------------------------------------------------------------------ suplencias: administración
+AUTHORIZER_PERMS = ("audit:report_approve", "audit:report_approve_gerente")
+
+
+def _delegation_view(d):
+    open_ = d["revoked_at"] is None and d["ends_on"] >= date.today()
+    return {**d, "stage_label": STAGE_LABEL.get(d["stage"], d["stage"]),
+            "can_revoke": open_ and (STAGE_AUTHORIZER[d["stage"]] in own_perms() or d["titular_id"] == me())}
+
+
+@bp.get("/delegations")
+@stage_required("audit:read", "audit:read_final", *AUTHORIZER_PERMS)
+def delegations():
+    """Suplencias: quien autoriza las ve todas; el resto, las suyas (como titular, suplente o autorizador)."""
+    authorizer = bool(set(AUTHORIZER_PERMS) & own_perms())
+    rows = repo.list_delegations(None if authorizer else me(), include_past=request.args.get("all") == "1")
+    cert = repo.signing_certificate(me())
+    return jsonify(
+        delegations=[_delegation_view(d) for d in rows],
+        can_authorize=sorted(st for st, p in STAGE_AUTHORIZER.items() if p in own_perms()),
+        my_certificate=({k: cert[k] for k in ("subject", "serial", "not_after", "uploaded_at")} if cert else None),
+        needs_certificate=any(d["delegate_id"] == me() and d["stage"] in ("GERENCIA", "CONTRALOR") for d in rows),
+    )
+
+
+@bp.get("/delegations/candidates")
+@permission_required(*AUTHORIZER_PERMS)
+def delegation_candidates():
+    """Titulares y suplentes posibles por etapa, ya filtrados por segregación de funciones."""
+    from app.core.security.permissions import ROLE_LABELS, permissions_for_roles
+    out = {"JEFE_FINANCIERA": {"titulars": [], "delegates": []}, "JEFE_SISTEMAS": {"titulars": [], "delegates": []},
+           "GERENCIA": {"titulars": [], "delegates": []}, "CONTRALOR": {"titulars": [], "delegates": []}}
+    allowed = {st for st, p in STAGE_AUTHORIZER.items() if p in own_perms()}
+    for u in repo.delegation_candidates():
+        granted = permissions_for_roles(u["roles"])
+        brief = {"id": u["id"], "name": u["name"], "username": u["username"],
+                 "roles": [ROLE_LABELS.get(r, r) for r in u["roles"]]}
+        for key, stage, domain in (("JEFE_FINANCIERA", "JEFE", "FINANCIERA"), ("JEFE_SISTEMAS", "JEFE", "SISTEMAS"),
+                                   ("GERENCIA", "GERENCIA", None), ("CONTRALOR", "CONTRALOR", None)):
+            if stage not in allowed:
+                continue
+            if holds_stage(granted, stage, domain):
+                out[key]["titulars"].append(brief)
+            elif _delegate_problem(u, granted, stage, domain) is None and u["id"] != me():
+                out[key]["delegates"].append(brief)
+    return jsonify(candidates={k: v for k, v in out.items() if v["titulars"] or v["delegates"]})
+
+
+def _delegate_problem(user, granted, stage, domain):
+    """Motivo por el que el usuario no puede ser suplente de la etapa, o None."""
+    from app.core.security.permissions import SYS_ADMIN
+    if SYS_ADMIN in (user.get("roles") or []):
+        return "El Administrador del Sistema no participa en el flujo del informe"
+    if holds_stage(granted, stage, domain):
+        return "Esa persona ya cumple esa función con sus propios roles"
+    if stage == "JEFE" and not ({"audit:financial_read"} if domain == "FINANCIERA" else {"audit:systems_read"}) <= granted:
+        return "El suplente del Jefe de Auditoría debe pertenecer al mismo dominio de auditoría"
+    v = sod_conflicts(granted | stage_perms(stage, domain))
+    if v:
+        return "Segregación de funciones: " + "; ".join(why for _, _, why in v)
+    return None
+
+
+@bp.post("/delegations")
+@permission_required(*AUTHORIZER_PERMS, step_up=True)
+def new_delegation():
+    """Suplencia temporal (máximo 90 días). Jefe y Gerencia los autoriza el Contralor; al Contralor, Gerencia."""
+    from app.core.security.permissions import permissions_for_roles
+    d = request.get_json(silent=True) or {}
+    stage = str(d.get("stage") or "").upper()
+    if stage not in STAGE_PERMS:
+        return err("Etapa inválida: JEFE, GERENCIA o CONTRALOR")
+    if STAGE_AUTHORIZER[stage] not in own_perms():
+        return err(f"La suplencia de {STAGE_LABEL[stage]} la autoriza "
+                   + ("Gerencia" if stage == "CONTRALOR" else "el Contralor"), 403)
+    domain = str(d.get("audit_domain") or "").upper() or None
+    if stage == "JEFE":
+        if domain not in DOMAIN_REVIEW:
+            return err("Indique el dominio del Jefe de Auditoría: FINANCIERA o SISTEMAS")
+    else:
+        domain = None
+    try:
+        starts_on = parse_date(d.get("starts_on"), "Desde", required=True)
+        ends_on = parse_date(d.get("ends_on"), "Hasta", required=True)
+        reason = txt(d, "reason", 10, 1000)
+    except ValueError as ex:
+        return err(str(ex))
+    if starts_on < date.today():
+        return err("La suplencia no puede comenzar en una fecha pasada")
+    if ends_on < starts_on or (ends_on - starts_on).days > MAX_DELEGATION_DAYS:
+        return err(f"El plazo debe ser de 0 a {MAX_DELEGATION_DAYS} días")
+    titular = repo.user_brief(str(d.get("titular_id") or "")) if _is_uuid(d.get("titular_id")) else None
+    delegate = repo.user_brief(str(d.get("delegate_id") or "")) if _is_uuid(d.get("delegate_id")) else None
+    if titular is None or delegate is None:
+        return err("Titular o suplente no encontrado", 404)
+    if titular["id"] == delegate["id"]:
+        return err("El suplente debe ser distinto del titular")
+    if delegate["id"] == me():
+        return err("No puede autorizarse a sí mismo como suplente", 403)
+    if not delegate["is_active"] or delegate["removed_at"]:
+        return err("El suplente debe tener una cuenta activa")
+    if not holds_stage(permissions_for_roles(titular["roles"]), stage, domain):
+        return err(f"El titular indicado no cumple la función de {STAGE_LABEL[stage]}" + (f" de {domain.title()}" if domain else ""))
+    problem = _delegate_problem(delegate, permissions_for_roles(delegate["roles"]), stage, domain)
+    if problem:
+        return err(problem, 409)
+    if repo.overlapping_delegation(stage, domain, titular["id"], starts_on, ends_on):
+        return err("Ese titular ya tiene una suplencia vigente que se superpone con esas fechas; revóquela primero", 409)
+    did = repo.create_delegation({"stage": stage, "audit_domain": domain, "titular_id": titular["id"],
+                                  "delegate_id": delegate["id"], "starts_on": starts_on, "ends_on": ends_on,
+                                  "reason": reason}, me())
+    log("DELEGATION_CREATED", entity_type="delegation", entity_id=did,
+        after_data={"stage": stage, "domain": domain, "titular": titular["id"], "delegate": delegate["id"],
+                    "starts_on": starts_on.isoformat(), "ends_on": ends_on.isoformat(), "reason": reason},
+        request_id=g.request_id)
+    return jsonify(id=did, note=f"{delegate['name']} actuará como {STAGE_LABEL[stage]} en nombre de {titular['name']} "
+                                f"del {starts_on.isoformat()} al {ends_on.isoformat()}."), 201
+
+
+def _is_uuid(v):
+    try:
+        uuid.UUID(str(v))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+@bp.post("/delegations/<uuid:did>/revoke")
+@stage_required("audit:read", "audit:read_final", *AUTHORIZER_PERMS, step_up=True)
+def revoke_delegation(did):
+    """La revoca quien puede autorizarla o el propio titular (por ejemplo, al regresar antes de lo previsto)."""
+    dl = repo.get_delegation(did)
+    if dl is None:
+        return err("Suplencia no encontrada", 404)
+    if not (STAGE_AUTHORIZER[dl["stage"]] in own_perms() or dl["titular_id"] == me()):
+        return err("Solo el titular o quien autoriza esa etapa puede revocar la suplencia", 403)
+    try:
+        reason = txt(request.get_json(silent=True) or {}, "reason", 5, 500)
+    except ValueError as ex:
+        return err(str(ex))
+    if not repo.revoke_delegation(did, me(), reason):
+        return err("La suplencia ya estaba revocada", 409)
+    log("DELEGATION_REVOKED", entity_type="delegation", entity_id=str(did), after_data={"reason": reason}, request_id=g.request_id)
+    return jsonify(status="REVOKED")
+
+
+MAX_CERT_BYTES = 200 * 1024
+
+
+@bp.post("/signing-certificate")
+@stage_required("audit:read", "audit:read_final", step_up=True)
+def upload_signing_certificate():
+    """Certificado propio (.p12/.pfx) del suplente de Gerencia o del Contralor; se guarda cifrado (AES-256-GCM)."""
+    from app.core.security.crypto import CryptoError, KeyRing
+    from app.modules.reporting.signing import service as signing
+
+    mine = [dl for dl in repo.list_delegations(me()) if dl["delegate_id"] == me() and dl["stage"] in ("GERENCIA", "CONTRALOR")]
+    if not mine:
+        return err("Solo los suplentes de Gerencia o del Contralor registran su certificado de firma", 403)
+    f = request.files.get("file")
+    passphrase = (request.form.get("passphrase") or "").encode()
+    if f is None or not (f.filename or "").lower().endswith((".p12", ".pfx")):
+        return err("Adjunte el certificado en formato .p12 o .pfx")
+    data = f.read(MAX_CERT_BYTES + 1)
+    if not data or len(data) > MAX_CERT_BYTES:
+        return err("El certificado debe pesar como máximo 200 KB")
+    try:
+        info = signing.certificate_info(signing.load_signer_from_pkcs12(data, passphrase))
+    except signing.SigningError as ex:
+        return err(str(ex))
+    if info["not_after"] and info["not_after"] < datetime.now(timezone.utc):
+        return err("El certificado está vencido")
+    try:
+        ring = KeyRing.from_env()
+        aad = str(me()).encode()
+        repo.save_signing_certificate(me(), ring.encrypt(data, aad=aad), ring.encrypt(passphrase, aad=aad), info)
+    except CryptoError:
+        current_app.logger.exception("Anillo de claves no disponible para cifrar el certificado")
+        return err("El servidor no tiene configurado el cifrado de certificados; avise al Administrador del Sistema", 503)
+    log("SIGNING_CERTIFICATE_UPLOADED", entity_type="user", entity_id=str(me()),
+        after_data={"subject": info["subject"], "serial": info["serial"],
+                    "not_after": info["not_after"].isoformat() if info["not_after"] else None}, request_id=g.request_id)
+    return jsonify(subject=info["subject"], serial=info["serial"], not_after=info["not_after"])

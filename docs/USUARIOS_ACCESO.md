@@ -6,7 +6,21 @@
 2. **Primer ingreso**: cambio obligatorio de contraseña y alta de MFA.
 3. **Roles** (doble control): el SYS_ADMIN *solicita* (`role:assign`) con un motivo de al menos 10 caracteres; **otra persona** con `role:approve` (CONTRALOR) lo aprueba o rechaza. No pueden resolver la solicitud ni el solicitante ni la persona afectada. Al aprobar se revalida la segregación de funciones con el estado actual y se **revocan las sesiones** del usuario.
 4. **Operación**: bloqueo automático, desbloqueo por SYS_ADMIN, reset de MFA (con revocación de sesiones).
-5. **Baja**: desactivación (nunca borrado); revoca sesiones. El historial queda en el audit trail.
+5. **Desactivación**: temporal y reversible; revoca sesiones. El historial queda en el audit trail.
+6. **Baja definitiva** (doble control): el SYS_ADMIN la *solicita* (`user:deactivate`, MFA reciente) con una justificación de al menos 15 caracteres; el CONTRALOR (`role:approve`) la aprueba o rechaza. Es lógica, nunca un borrado: la cuenta queda desactivada, sin roles ni sesiones y fuera de las listas, porque la bitácora y las firmas la referencian. No puede reactivarse ni dejar el sistema sin un SYS_ADMIN activo.
+
+## Suplencias temporales del flujo del informe final
+
+Cuando falta el titular de una etapa (Jefe de Auditoría, Gerencia o Contralor), otra persona actúa en su nombre por un máximo de **90 días** con un motivo registrado. El flujo Auditor → Jefe → Gerente → Contralor **no cambia**.
+
+- **Quién autoriza**: las suplencias de Jefe y de Gerencia, el Contralor (`audit:report_approve`); la del Contralor, Gerencia (`audit:report_approve_gerente`). Nadie se autoriza a sí mismo. La revocan quien la autoriza o el propio titular.
+- **Qué recibe el suplente**: solo los permisos de esa etapa, mientras la suplencia está vigente. Si la combinación con sus roles viola la segregación de funciones, la suplencia no se crea ni se aplica. Por ejemplo, quien ejecuta auditorías no cubre al Contralor ni a Gerencia, y el suplente del Jefe debe pertenecer al mismo dominio. El Administrador del Sistema no puede ser suplente.
+- **Trazabilidad**: cada decisión del suplente queda en `report_transitions` con la suplencia (`delegation_id`) y el titular (`on_behalf_of`). Se muestra como «en nombre de» en el historial y en el PDF.
+- **Firma**: el suplente de Gerencia o del Contralor firma con **su propio certificado** (.p12/.pfx). Lo sube desde «Suplencias › Mi certificado» y se guarda cifrado con AES-256-GCM (`SICAS_KEYS`).
+
+## Reglas de los motores (doble control)
+
+El SYS_ADMIN propone (`rule:propose`) reglas nuevas o cambios para los motores SUDEASEG, de Sistemas y analítico. Cada propuesta lleva un motivo de al menos 10 caracteres. El CONTRALOR las aprueba (`rule:configure`). Quien propone no aprueba (`SOD_CONFLICTS` y `CHECK` en la base de datos). Al aprobar se vuelve a validar el cambio y se rechaza si la regla cambió después de la propuesta. Las reglas del motor analítico están en el código: desde la aplicación solo se ajustan sus parámetros y se activan o desactivan.
 
 ## Reglas que el sistema impone
 
@@ -35,8 +49,18 @@ Redactor + aprobador/firmante de informes · cargar datos + cerrar hallazgos · 
 | `POST /admin/role-requests` | `role:assign` | — |
 | `GET /admin/role-requests` | `role:read`/`role:approve`/`role:assign` | — |
 | `POST /admin/role-requests/<id>/decision` | `role:approve` | Sí |
+| `POST /admin/users/<id>/removal-request` | `user:deactivate` | Sí |
+| `GET /admin/removal-requests` | `user:read`/`role:approve` | — |
+| `POST /admin/removal-requests/<id>/decision` | `role:approve` | Sí |
+| `GET /rules-admin/catalogs` · `/requests` | `rule:propose`/`rule:configure` | — |
+| `POST /rules-admin/requests` | `rule:propose` | Sí |
+| `POST /rules-admin/requests/<id>/decision` | `rule:configure` | Sí |
+| `GET /audits/delegations` | lectura de auditorías | — |
+| `POST /audits/delegations` · `GET /audits/delegations/candidates` | `audit:report_approve`/`audit:report_approve_gerente` | Sí (alta) |
+| `POST /audits/delegations/<id>/revoke` | quien autoriza o el titular | Sí |
+| `POST /audits/signing-certificate` | suplente de Gerencia o del Contralor | Sí |
 
-Todo queda en el audit trail: `USER_CREATED`, `ROLE_CHANGE_REQUESTED/APPROVED/REJECTED`, `ROLE_DECISION_REJECTED`, `USER_DEACTIVATED`, `USER_MFA_RESET`, `LOGIN_OK/FAILED/REJECTED`, `MFA_FAILED`, etc.
+Todo queda en el audit trail: `USER_CREATED`, `USER_REMOVAL_REQUESTED`, `USER_REMOVED`, `RULE_CHANGE_REQUESTED/APPROVED/REJECTED`, `DELEGATION_CREATED/REVOKED`, `SIGNING_CERTIFICATE_UPLOADED`, `ROLE_CHANGE_REQUESTED/APPROVED/REJECTED`, `ROLE_DECISION_REJECTED`, `USER_DEACTIVATED`, `USER_MFA_RESET`, `LOGIN_OK/FAILED/REJECTED`, `MFA_FAILED`, etc.
 
 ## Primer arranque
 

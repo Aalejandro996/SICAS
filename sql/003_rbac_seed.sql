@@ -29,7 +29,8 @@ INSERT INTO iam.permissions(code, module, description) VALUES ('ingestion:read',
 INSERT INTO iam.permissions(code, module, description) VALUES ('ingestion:review_rejects', 'ingestion', 'Revisar filas rechazadas') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('ingestion:cancel', 'ingestion', 'Cancelar una carga en curso') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('rule:read', 'audit_engine', 'Ver reglas y parámetros') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
-INSERT INTO iam.permissions(code, module, description) VALUES ('rule:configure', 'audit_engine', 'Modificar umbrales/parámetros de reglas') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
+INSERT INTO iam.permissions(code, module, description) VALUES ('rule:configure', 'audit_engine', 'Modificar umbrales/parámetros de reglas y aprobar los cambios propuestos a los motores') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
+INSERT INTO iam.permissions(code, module, description) VALUES ('rule:propose', 'audit_engine', 'Proponer reglas nuevas o cambios a los motores de reglas (los aprueba el Contralor)') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('rule:execute', 'audit_engine', 'Ejecutar el motor de reglas') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('finding:read', 'audit_engine', 'Ver hallazgos con detalle') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('finding:read_summary', 'audit_engine', 'Ver hallazgos agregados (sin datos personales)') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
@@ -92,6 +93,7 @@ INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM 
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='SYS_ADMIN' AND p.code='param:update' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='SYS_ADMIN' AND p.code='role:assign' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='SYS_ADMIN' AND p.code='role:read' ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='SYS_ADMIN' AND p.code='rule:propose' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='SYS_ADMIN' AND p.code='session:revoke' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='SYS_ADMIN' AND p.code='user:create' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='SYS_ADMIN' AND p.code='user:deactivate' ON CONFLICT DO NOTHING;
@@ -270,6 +272,7 @@ INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('backu
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('param:update', 'rule:configure', 'Parámetros de plataforma y reglas de auditoría separados.') ON CONFLICT DO NOTHING;
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('role:assign', 'report:approve', 'Quien asigna roles no aprueba informes.') ON CONFLICT DO NOTHING;
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('role:assign', 'role:approve', 'Quien solicita un cambio de roles no lo aprueba.') ON CONFLICT DO NOTHING;
+INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('rule:propose', 'rule:configure', 'Quien propone un cambio de reglas no lo aprueba.') ON CONFLICT DO NOTHING;
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('user:create', 'role:approve', 'Quien crea usuarios no aprueba sus roles.') ON CONFLICT DO NOTHING;
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('audit:manage', 'audit:report_approve', 'Quien ejecuta la auditoría no aprueba su informe.') ON CONFLICT DO NOTHING;
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('audit:report_draft', 'audit:sign_contralor', 'Quien genera el informe no lo firma como Contralor.') ON CONFLICT DO NOTHING;

@@ -47,12 +47,27 @@
       S.say('No se pudo mostrar el QR. Puede usar la clave manual.');
     }
   }
+  function whoami(user) {
+    const acting = (user.delegations || []).map((d) => `suplente de ${d.titular} (${d.stage}) hasta ${d.ends_on}`);
+    $('whoami').textContent = `${user.username} (${(user.roles || []).map(S.roleLabel).join(', ') || 'sin roles'})` +
+      (acting.length ? ' · ' + acting.join(' · ') : '');
+  }
   function enter(user) {
     S.user = user;
     S.perms = new Set(user.permissions || []);
-    $('whoami').textContent = `${user.username} (${(user.roles || []).map(S.roleLabel).join(', ') || 'sin roles'})`;
+    whoami(user);
     show('app'); S.say('');
     buildNav(); navigate();
+    // Las suplencias vigentes agregan permisos de una etapa del flujo; /auth/me los incluye.
+    if (!user.delegations) {
+      S.call('/auth/me').then((r) => {
+        if (!r.ok || S.user !== user) return;
+        user.delegations = r.data.delegations || [];
+        whoami(user);
+        const extra = (r.data.permissions || []).filter((p) => !S.perms.has(p));
+        if (extra.length) { extra.forEach((p) => S.perms.add(p)); buildNav(); }
+      }).catch(() => {});
+    }
     if (typeof S.refreshNotificationCount === 'function') {
       S.refreshNotificationCount();
       if (!S.notificationTimer) {
@@ -347,6 +362,6 @@
   (async () => {
     let r = await S.call('/auth/me');
     if (!r.ok && await S.tryRefresh()) r = await S.call('/auth/me');
-    if (r.ok) enter({ username: r.data.username, roles: r.data.roles, permissions: r.data.permissions });
+    if (r.ok) enter({ username: r.data.username, roles: r.data.roles, permissions: r.data.permissions, delegations: r.data.delegations || [] });
   })();
 })();

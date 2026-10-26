@@ -302,11 +302,38 @@ def _answers(result: dict) -> tuple[str, str, str]:
     return tuple(_norm(result.get(k) or "").strip().upper() for k in ("control", "documental", "evidencia"))
 
 
-def domain_for(section: str, question: str) -> Domain:
+def domains_from_rows(rows: list[dict]) -> tuple[Domain, ...]:
+    """Catálogo vigente (engagement.systems_rule_catalog, editable con doble control) como dominios del motor.
+
+    Solo entran los dominios activos, en su orden; el dominio "general" queda al final como respaldo.
+    Sin filas, se usa el catálogo incorporado.
+    """
+    out = [
+        Domain(r["domain_key"], r["label"], tuple(_norm(k) for k in (r.get("keywords") or [])), r["criteria"], r["cause"],
+               r["effect"], r["recommendation"], r["field_test"], bool(r.get("critical")))
+        for r in sorted(rows or [], key=lambda r: (r.get("sort_order", 100), r["domain_key"]))
+        if r.get("active", True)
+    ]
+    if not out:
+        return DOMAINS + (DEFAULT_DOMAIN,)
+    general = [d for d in out if d.key == DEFAULT_DOMAIN.key] or [DEFAULT_DOMAIN]
+    return tuple(d for d in out if d.key != DEFAULT_DOMAIN.key) + (general[0],)
+
+
+def _split(domains: tuple[Domain, ...] | None) -> tuple[tuple[Domain, ...], Domain]:
+    """(dominios específicos, dominio de respaldo) del catálogo indicado o del incorporado."""
+    if not domains:
+        return DOMAINS, DEFAULT_DOMAIN
+    default = next((d for d in domains if d.key == DEFAULT_DOMAIN.key), DEFAULT_DOMAIN)
+    return tuple(d for d in domains if d.key != DEFAULT_DOMAIN.key), default
+
+
+def domain_for(section: str, question: str, domains: tuple[Domain, ...] | None = None) -> Domain:
     """Dominio con más coincidencias en la pregunta (la sección solo desempata o suple); en empate, el del catálogo."""
     q, s = f" {_norm(question)} ", f" {_norm(section)} "
-    best, best_score = DEFAULT_DOMAIN, 0
-    for d in DOMAINS:
+    specific, default = _split(domains)
+    best, best_score = default, 0
+    for d in specific:
         score = 2 * sum(1 for k in d.keywords if k in q) + sum(1 for k in d.keywords if k in s)
         if d.key == "gobierno":
             score /= 2   # dominio genérico: solo gana si no hay uno específico
@@ -369,7 +396,8 @@ def _short(text: str, n: int) -> str:
     return text if len(text) <= n else text[: n - 1].rsplit(" ", 1)[0] + "…"
 
 
-def draft(criterion: dict, result: dict, observation: str | None = None) -> dict | None:
+def draft(criterion: dict, result: dict, observation: str | None = None,
+          domains: tuple[Domain, ...] | None = None) -> dict | None:
     """Observación de siete campos para una fila de la cédula, o None si no hay brecha."""
     gap = gap_of(result or {})
     if gap is None:
@@ -377,7 +405,7 @@ def draft(criterion: dict, result: dict, observation: str | None = None) -> dict
     code = criterion.get("code") or ""
     question = criterion.get("text") or criterion.get("question") or code
     section = criterion.get("section") or ""
-    dom = domain_for(section, question)
+    dom = domain_for(section, question, domains)
     control, doc, evidence = _answers(result)
 
     prefix = TITLE_PREFIX[gap]
@@ -411,9 +439,9 @@ def draft(criterion: dict, result: dict, observation: str | None = None) -> dict
     }
 
 
-def field_test_for(criterion: dict) -> str:
+def field_test_for(criterion: dict, domains: tuple[Domain, ...] | None = None) -> str:
     """Procedimiento sugerido para la prueba de campo de un control documentado."""
-    dom = domain_for(criterion.get("section") or "", criterion.get("text") or "")
+    dom = domain_for(criterion.get("section") or "", criterion.get("text") or "", domains)
     return dom.test
 
 
@@ -428,7 +456,7 @@ GROUP_TITLE = {
 MAX_CONDITION = 3000
 
 
-def consolidate(rows: list[tuple[dict, dict, str | None, str]]) -> list[dict]:
+def consolidate(rows: list[tuple[dict, dict, str | None, str]], domains: tuple[Domain, ...] | None = None) -> list[dict]:
     """Agrupa las brechas por dominio de control: una observación por dominio con sus controles afectados.
 
     rows: (criterio, respuesta, observación del auditor, id del ítem). Un dominio con un único control
@@ -437,7 +465,7 @@ def consolidate(rows: list[tuple[dict, dict, str | None, str]]) -> list[dict]:
     groups: dict[str, list[tuple[dict, dict, dict, str]]] = {}
     order: list[str] = []
     for crit, result, observation, item_id in rows:
-        d = draft(crit, result, observation)
+        d = draft(crit, result, observation, domains)
         if d is None:
             continue
         if d["domain"] not in groups:
@@ -451,7 +479,8 @@ def consolidate(rows: list[tuple[dict, dict, str | None, str]]) -> list[dict]:
             crit, _, d, item_id = members[0]
             out.append({**d, "item_id": item_id, "covered_items": [item_id], "controls": [crit.get("code")]})
             continue
-        dom = next(x for x in DOMAINS + (DEFAULT_DOMAIN,) if x.key == key)
+        specific, default = _split(domains)
+        dom = next(x for x in specific + (default,) if x.key == key)
         risk = max((d["risk"] for _, _, d, _ in members), key=RISK_ORDER.index)
         gaps = {d["gap"] for _, _, d, _ in members}
         if len(gaps) == 1:

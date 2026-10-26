@@ -173,11 +173,35 @@
     if (first) first.focus();
   });
 
+  // Paginación de tablas: como máximo S.PAGE_SIZE filas visibles. Las filas ocultas siguen en el DOM
+  // (sus campos editables conservan el estado). Devuelve la barra de páginas, o null si cabe en una.
+  S.PAGE_SIZE = 10;
+  S.paginate = (tbody, size = S.PAGE_SIZE) => {
+    const rows = Array.from(tbody.children);
+    if (rows.length <= size) return null;
+    const pages = Math.ceil(rows.length / size);
+    let page = 0;
+    const info = h('span', { class: 'pager-info' });
+    const prev = h('button', { class: 'sm secondary', type: 'button', 'aria-label': 'Página anterior' }, '‹ Anterior');
+    const next = h('button', { class: 'sm secondary', type: 'button', 'aria-label': 'Página siguiente' }, 'Siguiente ›');
+    const show = (p) => {
+      page = Math.max(0, Math.min(pages - 1, p));
+      rows.forEach((tr, i) => { tr.hidden = Math.floor(i / size) !== page; });
+      info.textContent = `Página ${page + 1} de ${pages} · ${rows.length} registros`;
+      prev.disabled = page === 0;
+      next.disabled = page === pages - 1;
+    };
+    prev.addEventListener('click', () => show(page - 1));
+    next.addEventListener('click', () => show(page + 1));
+    show(0);
+    return h('div', { class: 'pager', role: 'navigation', 'aria-label': 'Paginación' }, prev, info, next);
+  };
+
   S.tbl = (headers, rows, onRow) => {
     if (!rows.length) return h('div', { class: 'empty panel' }, 'Sin registros');
+    const body = h('tbody', null, rows.map((r, i) => h('tr', onRow ? { class: 'clickable', onclick: () => onRow(i) } : null, r.map((c) => h('td', null, c)))));
     return h('div', { class: 'tablewrap' }, h('table', null,
-      h('thead', null, h('tr', null, headers.map((x) => h('th', null, x)))),
-      h('tbody', null, rows.map((r, i) => h('tr', onRow ? { class: 'clickable', onclick: () => onRow(i) } : null, r.map((c) => h('td', null, c)))))));
+      h('thead', null, h('tr', null, headers.map((x) => h('th', null, x)))), body), S.paginate(body));
   };
 
   S.busy = async (btn, fn) => {

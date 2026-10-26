@@ -68,7 +68,8 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "ingestion:cancel": ("ingestion", "Cancelar una carga en curso"),
     # Motor de auditoría
     "rule:read": ("audit_engine", "Ver reglas y parámetros"),
-    "rule:configure": ("audit_engine", "Modificar umbrales/parámetros de reglas"),
+    "rule:configure": ("audit_engine", "Modificar umbrales/parámetros de reglas y aprobar los cambios propuestos a los motores"),
+    "rule:propose": ("audit_engine", "Proponer reglas nuevas o cambios a los motores de reglas (los aprueba el Contralor)"),
     "rule:execute": ("audit_engine", "Ejecutar el motor de reglas"),
     "finding:read": ("audit_engine", "Ver hallazgos con detalle"),
     "finding:read_summary": ("audit_engine", "Ver hallazgos agregados (sin datos personales)"),
@@ -134,7 +135,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     SYS_ADMIN: {
         "user:read", "user:create", "user:update", "user:deactivate", "user:unlock",
         "user:reset_mfa", "role:read", "role:assign", "session:revoke",
-        "param:read", "param:update",
+        "param:read", "param:update", "rule:propose",
         "backup:read", "backup:run", "backup:restore", "health:read",
         "auditlog:verify_chain",
     },
@@ -211,6 +212,7 @@ SOD_CONFLICTS: list[tuple[str, str, str]] = [
     ("param:update", "rule:configure", "Parámetros de plataforma y reglas de auditoría separados."),
     ("role:assign", "report:approve", "Quien asigna roles no aprueba informes."),
     ("role:assign", "role:approve", "Quien solicita un cambio de roles no lo aprueba."),
+    ("rule:propose", "rule:configure", "Quien propone un cambio de reglas no lo aprueba."),
     ("user:create", "role:approve", "Quien crea usuarios no aprueba sus roles."),
     ("audit:manage", "audit:report_approve", "Quien ejecuta la auditoría no aprueba su informe."),
     ("audit:report_draft", "audit:sign_contralor", "Quien genera el informe no lo firma como Contralor."),

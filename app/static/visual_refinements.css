@@ -2798,3 +2798,9 @@ body {
 #page[data-sicas-view="audit"] .audit-phase-score.current { border-top-color: #3479b8; background: #f5f9fd; }
 #page[data-sicas-view="audit"] .audit-phase-score.final { border-top-color: #1f3864; background: #eef3fa; }
 #page[data-sicas-view="audit"] tr.audit-row-muted td { opacity: .62; }
+
+/* Paginación de tablas (máximo 10 filas por página) */
+.pager { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin: 8px 0 4px; flex-wrap: wrap; }
+.pager .pager-info { color: #4f6378; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.pager button[disabled] { opacity: .45; cursor: default; }
+tr[hidden] { display: none; }

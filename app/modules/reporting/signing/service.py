@@ -65,6 +65,29 @@ def load_signer(config: dict, role: str = "CONTRALOR"):
     raise SigningError(f"SIGNING_MODE desconocido: {mode}")
 
 
+def load_signer_from_pkcs12(p12: bytes, passphrase: bytes | None):
+    """Firmante a partir de un PKCS#12 en memoria (certificado propio de un suplente)."""
+    from pyhanko.sign import signers
+
+    try:
+        signer = signers.SimpleSigner.load_pkcs12_data(p12, [], passphrase=passphrase or None)
+    except Exception as exc:  # noqa: BLE001 - archivo dañado, contraseña errónea o formato no soportado
+        raise SigningError("No se pudo abrir el certificado: verifique el archivo y la contraseña") from exc
+    if signer is None or getattr(signer, "signing_cert", None) is None:
+        raise SigningError("No se pudo abrir el certificado: verifique el archivo y la contraseña")
+    return signer
+
+
+def certificate_info(signer) -> dict:
+    """Titular, serial y vencimiento del certificado de un firmante."""
+    cert = signer.signing_cert
+    return {
+        "subject": cert.subject.human_friendly,
+        "serial": format(cert.serial_number, "x"),
+        "not_after": cert["tbs_certificate"]["validity"]["not_after"].native,
+    }
+
+
 def sign_pdf(pdf_bytes: bytes, signer, *, reason: str, location: str, signer_name: str,
              field_name: str = "FirmaContralor", tsa_url: str | None = None,
              box: tuple[int, int, int, int] = (57, 62, 312, 130), page: int = -1) -> SignedPdf:

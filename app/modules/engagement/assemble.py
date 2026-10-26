@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 
 from . import scoring
-from .report_builder import build_body
+from .report_builder import actor_label, build_body
 from .templates import KINDS, LINES
 
 
@@ -104,7 +104,7 @@ def trace_sections(history: dict, observations: list[dict], evidence: list[dict]
     points = history.get("review_points") or []
     review = [{"date": _iso(t.get("created_at")), "action": ACTION_LABEL.get(t["action"], t["action"]), "code": t["action"],
                "report_version": t.get("report_version"), "from": t.get("from_status"), "to": t.get("to_status"),
-               "user": t.get("actor_username"), "comment": t.get("comment") or "",
+               "user": actor_label(t), "comment": t.get("comment") or "",
                "points": [{"id": p.get("id"), "target": p.get("target_label") or "General", "description": p["description"], "status": p["status"],
                            "attended_note": p.get("attended_note") or ""}
                           for p in points if p.get("transition_id") == t.get("id")]}

@@ -23,6 +23,17 @@ def _role_user_ids(role_codes: Iterable[str]) -> list[str]:
     return sorted(ids)
 
 
+def _delegate_ids(stage: str, domain: str | None = None) -> list[str]:
+    """Suplentes vigentes de una etapa del flujo (Jefe del dominio, Gerencia o Contralor)."""
+    rows = db.session.execute(text(
+        "SELECT DISTINCT d.delegate_id::text AS id FROM engagement.delegations d "
+        "JOIN iam.users u ON u.id = d.delegate_id "
+        "WHERE d.stage = :stage AND d.revoked_at IS NULL AND current_date BETWEEN d.starts_on AND d.ends_on "
+        "AND u.is_active IS TRUE AND (CAST(:domain AS text) IS NULL OR d.audit_domain = :domain)"
+    ), {"stage": stage, "domain": domain}).all()
+    return [str(r.id) for r in rows]
+
+
 def _report_people(report_id: str, audit_id: str) -> list[str]:
     rows = db.session.execute(text("""
         SELECT DISTINCT users.user_id::text AS id
@@ -99,7 +110,7 @@ def notify_report_submitted(report_id: str, audit: dict, actor_user_id: str,
     if not role:
         return
     def emit():
-        recipients = _role_user_ids([role])
+        recipients = sorted(set(_role_user_ids([role])) | set(_delegate_ids("JEFE", domain)))
         _insert_for_users(recipients, category="REPORT",
             event_key=_event_key("report", report_id, "submitted-to-jefe", request_id),
             title="Informe final recibido para revisión",
@@ -112,7 +123,7 @@ def notify_report_submitted(report_id: str, audit: dict, actor_user_id: str,
 def notify_report_jefe_approved(report_id: str, audit: dict, actor_user_id: str,
                                 request_id: str | None = None) -> None:
     def emit():
-        recipients = _role_user_ids(["GERENCIA"])
+        recipients = sorted(set(_role_user_ids(["GERENCIA"])) | set(_delegate_ids("GERENCIA")))
         _insert_for_users(recipients, category="REPORT",
             event_key=_event_key("report", report_id, "received-by-gerencia", request_id),
             title="Informe final recibido por Gerencia",
@@ -144,7 +155,7 @@ def notify_report_signed(report_id: str, audit: dict, role: str, status: str,
                  "SISTEMAS": "JEFE_AUDITORIA_SISTEMAS"}.get(domain)
     def emit():
         if role == "GERENTE_CI" and status == "CONTRALOR":
-            recipients = _role_user_ids(["CONTRALOR"])
+            recipients = sorted(set(_role_user_ids(["CONTRALOR"])) | set(_delegate_ids("CONTRALOR")))
             title = "Informe final recibido en Contraloría"
             message = f"Gerencia firmó el informe final de {audit.get('code', report_id)}. Está pendiente la revisión/firma de Contraloría."
             event = "received-by-contralor"

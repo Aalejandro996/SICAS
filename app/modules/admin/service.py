@@ -5,6 +5,9 @@ Gestión de usuarios y roles (lógica pura).
   - Se rechaza cualquier combinación de roles que viole la segregación de funciones.
   - Protecciones: nadie se modifica a sí mismo; no se puede dejar el sistema sin administrador activo.
   - Al cambiar roles, desactivar o resetear MFA se revocan las sesiones (los permisos viajan en el token).
+  - Baja definitiva: la solicita quien administra usuarios (user:deactivate) con justificación y la aprueba
+    otra persona con role:approve (Contralor). Es lógica: la cuenta se desactiva, pierde roles y sesiones y
+    se oculta de las listas, pero se conserva porque la bitácora y las firmas la referencian. No se reactiva.
 """
 from __future__ import annotations
 
@@ -47,6 +50,18 @@ class RoleRequest:
     decided_by: str | None = None
 
 
+@dataclass
+class RemovalRequest:
+    id: str
+    target_user_id: str
+    reason: str
+    requested_by: str
+    status: str = "PENDING"
+
+
+REMOVAL_REASON_MIN = 15
+
+
 class AdminRepo(Protocol):
     def find_by_username(self, username: str) -> AdminUser | None: ...
     def get_user(self, user_id: str) -> AdminUser | None: ...
@@ -62,6 +77,12 @@ class AdminRepo(Protocol):
     def revoke_sessions(self, user_id: str) -> None: ...
     def unlock(self, user_id: str) -> None: ...
     def reset_mfa(self, user_id: str) -> None: ...
+    def is_removed(self, user_id: str) -> bool: ...
+    def removal_pending(self, user_id: str) -> bool: ...
+    def create_removal_request(self, req: RemovalRequest) -> None: ...
+    def get_removal_request(self, request_id: str) -> RemovalRequest | None: ...
+    def remove_user(self, user_id: str, removed_by: str, reason: str) -> None: ...
+    def decide_removal(self, request_id: str, status: str, decided_by: str, note: str) -> None: ...
 
 
 def generate_temp_password(n: int = 16) -> str:
@@ -154,6 +175,8 @@ class UserAdminService:
         if actor_id == target_id:
             raise AdminError("SELF_CHANGE", "No puede desactivar su propia cuenta")
         target = self._user(target_id)
+        if active and self.repo.is_removed(target_id):
+            raise AdminError("ALREADY_REMOVED", "La cuenta fue dada de baja definitivamente y no puede reactivarse")
         if not active:
             for r in target.roles:
                 self._check_last_admin(r, target)
@@ -173,6 +196,48 @@ class UserAdminService:
         self.repo.reset_mfa(target_id)
         self.repo.revoke_sessions(target_id)
         self.audit("USER_MFA_RESET", entity_type="user", entity_id=target_id)
+
+    # ---- baja definitiva con doble control ----
+    def request_removal(self, actor_id: str, target_id: str, reason: str) -> str:
+        if actor_id == target_id:
+            raise AdminError("SELF_CHANGE", "No puede solicitar la baja de su propia cuenta")
+        reason = reason.strip()
+        if len(reason) < REMOVAL_REASON_MIN:
+            raise AdminError("REASON_REQUIRED", f"Justifique la baja (mínimo {REMOVAL_REASON_MIN} caracteres)")
+        target = self._user(target_id)
+        if self.repo.is_removed(target_id):
+            raise AdminError("ALREADY_REMOVED", "La cuenta ya fue dada de baja")
+        for r in target.roles:
+            self._check_last_admin(r, target)
+        if self.repo.removal_pending(target_id):
+            raise AdminError("PENDING_EXISTS", "Ya existe una solicitud de baja pendiente para este usuario")
+        rid = self.new_id()
+        self.repo.create_removal_request(RemovalRequest(rid, target_id, reason, actor_id))
+        self.audit("USER_REMOVAL_REQUESTED", entity_type="user", entity_id=target_id,
+                   after_data={"request": rid, "reason": reason})
+        return rid
+
+    def decide_removal(self, actor_id: str, actor_roles: list[str], request_id: str, approve: bool, note: str = "") -> None:
+        if "role:approve" not in permissions_for_roles(actor_roles):
+            raise AdminError("FORBIDDEN", "Sin permiso para aprobar bajas de usuarios")
+        req = self.repo.get_removal_request(request_id)
+        if req is None or req.status != "PENDING":
+            raise AdminError("NOT_PENDING", "Solicitud inexistente o ya resuelta")
+        if actor_id in (req.requested_by, req.target_user_id):
+            self.audit("USER_REMOVAL_DECISION_REJECTED", outcome="DENIED", entity_type="user_removal_request",
+                       entity_id=request_id, metadata={"reason": "DOBLE_CONTROL"})
+            raise AdminError("DUAL_CONTROL", "Doble control: no puede resolver una solicitud propia ni sobre usted")
+        if approve:
+            target = self._user(req.target_user_id)            # se revalida con el estado ACTUAL
+            if self.repo.is_removed(target.id):
+                raise AdminError("ALREADY_REMOVED", "La cuenta ya fue dada de baja")
+            for r in target.roles:
+                self._check_last_admin(r, target)
+            self.repo.remove_user(target.id, actor_id, req.reason)
+            self.repo.revoke_sessions(target.id)
+        self.repo.decide_removal(request_id, "APPROVED" if approve else "REJECTED", actor_id, note)
+        self.audit("USER_REMOVED" if approve else "USER_REMOVAL_REJECTED", entity_type="user",
+                   entity_id=req.target_user_id, after_data={"request": request_id, "reason": req.reason, "note": note or None})
 
     # ---- reglas internas ----
     @staticmethod

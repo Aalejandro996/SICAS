@@ -464,6 +464,12 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
     return doc_io.getvalue(), doc.page
 
 
+def actor_label(t: dict) -> str | None:
+    """Usuario de una decisión de revisión; si actuó un suplente, también el titular («en nombre de»)."""
+    user = t.get("actor_username")
+    return f"{user or '—'} (suplente, en nombre de {t['on_behalf_of']})" if t.get("on_behalf_of") else user
+
+
 def _review_rows(body: dict, state: dict) -> list[dict]:
     """Decisiones de revisión del contenido generado más las registradas después (estado vigente de los puntos)."""
     if body.get("review_history") is None:
@@ -471,7 +477,7 @@ def _review_rows(body: dict, state: dict) -> list[dict]:
     live = state.get("transitions") or []
     history = [dict(h) for h in body["review_history"]] + [
         {"date": str(t.get("created_at")), "action": _action(t["action"]), "report_version": t.get("report_version"),
-         "user": t.get("actor_username"), "comment": t.get("comment") or "", "points": []}
+         "user": actor_label(t), "comment": t.get("comment") or "", "points": []}
         for t in live if not any(h.get("date") == _iso(t.get("created_at")) and h.get("code") == t["action"] for h in body["review_history"])
     ]
     live_points = {pt.get("id"): pt for pt in state.get("review_points") or []}

@@ -205,7 +205,14 @@ def me():
     c = get_jwt()
     if not c.get("mfa"):
         return jsonify(error="No autorizado"), 403
-    return jsonify(username=c.get("username"), roles=c.get("roles", []), permissions=c.get("perms", []))
+    # La interfaz muestra también las pantallas de las suplencias vigentes; el servidor vuelve a
+    # verificar cada permiso delegado en cada acción.
+    from app.modules.engagement.api import STAGE_LABEL, active_delegations, delegated_perms
+    g.claims = c
+    perms = sorted(set(c.get("perms", [])) | delegated_perms())
+    acting = [{"stage": STAGE_LABEL.get(d["stage"], d["stage"]), "titular": d["titular_name"], "ends_on": d["ends_on"].isoformat()}
+              for d in active_delegations()]
+    return jsonify(username=c.get("username"), roles=c.get("roles", []), permissions=perms, delegations=acting)
 
 
 @bp.post("/step-up")

@@ -719,14 +719,24 @@
       const bar = h('div', { class: 'toolbar' });
       if (can('user:create')) bar.append(h('button', { onclick: newUser }, 'Nuevo usuario'));
       el.append(bar, tbl(['Usuario', 'Nombre', 'Correo', 'Roles', 'Estado', 'Último ingreso', 'Acciones'], d.users.map((u) => [
-        u.username, u.full_name, u.email, (u.roles || []).join(', ') || h('span', { class: 'muted' }, 'sin roles'),
+        u.username, u.full_name, u.email, (u.roles || []).map(S.roleLabel).join(', ') || h('span', { class: 'muted' }, 'sin roles'),
         [S.badge(u.is_active ? 'ACTIVE' : 'INACTIVE'), u.locked_until && new Date(u.locked_until) > new Date() ? h('span', { class: 'badge FAILED' }, 'Bloqueado') : null],
         fmt(u.last_login_at),
         h('div', { class: 'actions' },
           can('role:assign') ? h('button', { onclick: () => roleReq(u) }, 'Rol…') : null,
           can('user:unlock') ? h('button', { class: 'secondary', onclick: () => act(u, 'unlock', 'Desbloquear a ' + u.username) }, 'Desbloquear') : null,
           can('user:reset_mfa') ? h('button', { class: 'secondary', onclick: () => act(u, 'reset-mfa', 'Restablecer el MFA de ' + u.username) }, 'Reset MFA') : null,
-          can('user:deactivate') ? h('button', { class: u.is_active ? 'danger' : 'ok', onclick: () => act(u, u.is_active ? 'deactivate' : 'activate', (u.is_active ? 'Desactivar a ' : 'Activar a ') + u.username) }, u.is_active ? 'Desactivar' : 'Activar') : null)])));
+          can('user:deactivate') ? h('button', { class: u.is_active ? 'danger' : 'ok', onclick: () => act(u, u.is_active ? 'deactivate' : 'activate', (u.is_active ? 'Desactivar a ' : 'Activar a ') + u.username) }, u.is_active ? 'Desactivar' : 'Activar') : null,
+          can('user:deactivate') ? h('button', { class: 'danger', title: 'Baja definitiva (requiere aprobación del Contralor)', onclick: () => removal(u) }, 'Baja…') : null)])));
+    };
+    const removal = async (u) => {
+      const v = await S.ask('Baja definitiva: ' + u.username, [
+        { name: 'reason', label: 'Justificación (mínimo 15 caracteres)', type: 'textarea', required: true }], 'Solicitar baja',
+        'La cuenta no se borra: se desactiva, pierde sus roles y sesiones y deja de mostrarse, porque la bitácora y las firmas la referencian. ' +
+        'No podrá reactivarse. La baja se aplica cuando el Contralor la aprueba.');
+      if (!v) return;
+      const d = await S.send(`/admin/users/${u.id}/removal-request`, 'POST', v);
+      if (d) S.say(d.note || 'Solicitud registrada.', true);
     };
     const act = async (u, what, title) => {
       if (!confirm(title + '?')) return;
@@ -760,15 +770,120 @@
       el.replaceChildren(h('h2', null, 'Solicitudes de cambio de rol'));
       const d = await S.get('/admin/role-requests?status=PENDING');
       if (!d) return;
-      el.append(tbl(['Usuario', 'Acción', 'Rol', 'Motivo', 'Solicitó', 'Fecha', ''], d.requests.map((q) => [q.target, S.label(q.action), q.role, q.reason, q.requested_by, fmt(q.created_at),
+      el.append(tbl(['Usuario', 'Acción', 'Rol', 'Motivo', 'Solicitó', 'Fecha', ''], d.requests.map((q) => [q.target, S.label(q.action), S.roleLabel(q.role), q.reason, q.requested_by, fmt(q.created_at),
         can('role:approve') ? h('div', { class: 'actions' }, h('button', { class: 'ok', onclick: () => decide(q, true) }, 'Aprobar'), h('button', { class: 'danger', onclick: () => decide(q, false) }, 'Rechazar')) : ''])));
       if (!d.requests.length) el.append(h('p', { class: 'muted' }, 'No hay solicitudes pendientes.'));
+      if (can('role:approve', 'user:read')) {
+        const rm = await S.get('/admin/removal-requests?status=PENDING');
+        if (rm) {
+          el.append(h('h3', null, 'Solicitudes de baja definitiva de usuarios'),
+            h('p', { class: 'muted' }, 'Las aprueba el Contralor. La cuenta se conserva desactivada y sin roles para preservar la bitácora y las firmas.'),
+            tbl(['Usuario', 'Nombre', 'Justificación', 'Solicitó', 'Fecha', ''], rm.requests.map((q) => [q.target, q.target_name, q.reason, q.requested_by, fmt(q.created_at),
+              can('role:approve') ? h('div', { class: 'actions' }, h('button', { class: 'danger', onclick: () => decideRemoval(q, true) }, 'Aprobar baja'), h('button', { class: 'secondary', onclick: () => decideRemoval(q, false) }, 'Rechazar')) : ''])));
+        }
+      }
+    };
+    const decideRemoval = async (q, approve) => {
+      const v = await S.ask((approve ? 'Aprobar' : 'Rechazar') + ' la baja de ' + q.target, [{ name: 'note', label: 'Nota (opcional)', type: 'textarea' }],
+        approve ? 'Aprobar baja' : 'Rechazar', approve ? 'La baja es definitiva: la cuenta no podrá reactivarse.' : 'La cuenta queda como está.');
+      if (!v) return;
+      if (await S.send(`/admin/removal-requests/${q.id}/decision`, 'POST', { approve, note: v.note })) { S.say('Registrado.', true); draw(); }
     };
     const decide = async (q, approve) => {
       const v = await S.ask((approve ? 'Aprobar' : 'Rechazar') + ' solicitud', [{ name: 'note', label: 'Nota (opcional)', type: 'textarea' }], approve ? 'Aprobar' : 'Rechazar',
         'No puede resolver una solicitud que usted hizo ni una que le afecte (doble control).');
       if (!v) return;
       if (await S.send(`/admin/role-requests/${q.id}/decision`, 'POST', { approve, note: v.note })) { S.say('Registrado.', true); draw(); }
+    };
+    draw();
+  } });
+
+  // ------------------------------------------------------------------ Reglas de los motores
+  // El Administrador del Sistema propone; el Contralor aprueba (doble control). Nada se aplica sin aprobación.
+  S.pages.push({ id: 'rules-admin', title: 'Reglas de los motores', perms: ['rule:propose', 'rule:configure'], render: async (el) => {
+    const ENGINES = [['SUDEASEG', 'Normativa SUDEASEG'], ['SISTEMAS', 'Auditoría de Sistemas'], ['ANALITICO', 'Motor analítico']];
+    let tab = 'SUDEASEG';
+    const kwText = (k) => (k || []).join(', ');
+    const kwList = (t) => String(t || '').split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
+    const draw = async () => {
+      el.replaceChildren(h('h2', null, 'Reglas de los motores'),
+        h('p', { class: 'muted' }, 'Los cambios los propone el Administrador del Sistema y se aplican solo cuando el Contralor los aprueba. Quien propone no puede aprobar.'));
+      const [cat, pend] = await Promise.all([S.get('/rules-admin/catalogs'), S.get('/rules-admin/requests?status=PENDING')]);
+      if (!cat || !pend) return;
+      el.append(h('div', { class: 'toolbar' }, ENGINES.map(([k, l]) => h('button', { class: k === tab ? '' : 'secondary', onclick: () => { tab = k; draw(); } }, l))));
+      if (tab === 'ANALITICO') {
+        el.append(tbl(['Regla', 'Descripción', 'Parámetros vigentes', 'Activa', 'Actualizada', ''], cat.analitico.map((r) => [
+          r.key, r.title, h('code', null, JSON.stringify({ ...r.defaults, ...(r.params || {}) })), r.enabled ? 'Sí' : 'No', fmt(r.updated_at),
+          can('rule:propose') ? h('button', { class: 'sm', onclick: () => proposeAnalytic(r) }, 'Proponer cambio') : ''])));
+      } else {
+        const rows = tab === 'SUDEASEG' ? cat.sudeaseg : cat.sistemas;
+        if (can('rule:propose')) el.append(h('div', { class: 'toolbar' }, h('button', { onclick: () => proposeCatalog(null) }, 'Proponer regla nueva')));
+        el.append(tbl(['Clave', 'Tema', 'Palabras clave', ...(tab === 'SISTEMAS' ? ['Crítico'] : []), 'Orden', 'Activa', 'Actualizada', ''], rows.map((r) => [
+          r.key, r.label, h('span', { title: kwText(r.keywords) }, `${(r.keywords || []).length} palabra(s)`), ...(tab === 'SISTEMAS' ? [r.critical ? 'Sí' : 'No'] : []),
+          r.sort_order, r.active ? 'Sí' : 'No', fmt(r.updated_at),
+          h('div', { class: 'actions' }, h('button', { class: 'sm secondary', onclick: () => showRule(r) }, 'Ver'),
+            can('rule:propose') ? h('button', { class: 'sm', onclick: () => proposeCatalog(r) }, 'Proponer cambio') : null)])));
+      }
+      el.append(h('h3', null, 'Cambios pendientes de aprobación'),
+        tbl(['Motor', 'Regla', 'Tipo', 'Motivo', 'Propuso', 'Fecha', ''], pend.requests.map((q) => [
+          (ENGINES.find(([k]) => k === q.engine) || [0, q.engine])[1], q.rule_key, q.previous ? 'Cambio' : 'Regla nueva', q.reason, q.requested_by, fmt(q.created_at),
+          h('div', { class: 'actions' }, h('button', { class: 'sm secondary', onclick: () => showChange(q) }, 'Ver'),
+            can('rule:configure') && q.requested_by !== S.user?.username
+              ? [h('button', { class: 'sm ok', onclick: () => decide(q, true) }, 'Aprobar'), h('button', { class: 'sm danger', onclick: () => decide(q, false) }, 'Rechazar')] : null)])));
+    };
+    const showRule = (r) => {
+      const fields = [['Tema', r.label], ['Palabras clave', kwText(r.keywords)], ['Criterio', r.criteria], ['Causa', r.cause], ['Efecto', r.effect],
+        ['Recomendación', r.recommendation], ...(r.field_test ? [['Prueba de campo', r.field_test]] : [])];
+      const m = S.modal('Regla ' + r.key, h('dl', null, fields.map(([k, v]) => [h('dt', null, k), h('dd', null, v || '—')])));
+      m.footer.append(h('button', { onclick: () => m.close() }, 'Cerrar'));
+    };
+    const showChange = (q) => {
+      const keys = Array.from(new Set([...Object.keys(q.previous || {}), ...Object.keys(q.payload || {})]));
+      const fmtV = (v) => (Array.isArray(v) ? v.join(', ') : typeof v === 'object' && v !== null ? JSON.stringify(v) : v === true ? 'Sí' : v === false ? 'No' : String(v ?? '—'));
+      const changed = keys.filter((k) => JSON.stringify((q.previous || {})[k]) !== JSON.stringify(q.payload[k]));
+      const m = S.modal(`${q.engine} · ${q.rule_key}`, h('div', null, h('p', null, h('b', null, 'Motivo: '), q.reason),
+        tbl(['Campo', 'Vigente', 'Propuesto'], changed.map((k) => [k, q.previous ? fmtV(q.previous[k]) : '(nueva)', fmtV(q.payload[k])]))));
+      m.footer.append(h('button', { onclick: () => m.close() }, 'Cerrar'));
+    };
+    const proposeCatalog = async (r) => {
+      const sys = tab === 'SISTEMAS';
+      const v = await S.ask(r ? 'Proponer cambio: ' + r.key : 'Proponer regla nueva', [
+        ...(r ? [] : [{ name: 'key', label: 'Clave (minúsculas, números y _; p. ej. nube_privada)', required: true }]),
+        { name: 'label', label: 'Tema', value: r?.label, required: true },
+        { name: 'keywords', label: 'Palabras clave (separadas por coma)', type: 'textarea', value: kwText(r?.keywords) },
+        { name: 'criteria', label: 'Criterio (normativa o estándar aplicable)', type: 'textarea', value: r?.criteria, required: true },
+        { name: 'cause', label: 'Causa', type: 'textarea', value: r?.cause, required: true },
+        { name: 'effect', label: 'Efecto', type: 'textarea', value: r?.effect, required: true },
+        { name: 'recommendation', label: 'Recomendación', type: 'textarea', value: r?.recommendation, required: true },
+        ...(sys ? [{ name: 'field_test', label: 'Prueba de campo sugerida', type: 'textarea', value: r?.field_test, required: true },
+          { name: 'critical', label: 'Dominio crítico (eleva el riesgo de la evidencia desactualizada)', type: 'checkbox', value: r?.critical }] : []),
+        { name: 'sort_order', label: 'Orden (0 a 999)', type: 'number', value: String(r?.sort_order ?? 100) },
+        { name: 'active', label: 'Regla activa', type: 'checkbox', value: r ? r.active : true },
+        { name: 'reason', label: 'Motivo del cambio (mínimo 10 caracteres)', type: 'textarea', required: true }], 'Proponer',
+        'El cambio queda pendiente hasta que el Contralor lo apruebe.');
+      if (!v) return;
+      const payload = { label: v.label, keywords: kwList(v.keywords), criteria: v.criteria, cause: v.cause, effect: v.effect,
+        recommendation: v.recommendation, sort_order: Number(v.sort_order), active: v.active };
+      if (sys) Object.assign(payload, { field_test: v.field_test, critical: v.critical });
+      const d = await S.send('/rules-admin/requests', 'POST', { engine: tab, rule_key: r ? r.key : v.key, payload, reason: v.reason });
+      if (d) { S.say(d.note, true); draw(); }
+    };
+    const proposeAnalytic = async (r) => {
+      const v = await S.ask('Proponer cambio: ' + r.key, [
+        { name: 'params', label: 'Parámetros (JSON; solo las claves que cambian respecto de los valores por defecto)', type: 'textarea', value: JSON.stringify(r.params || {}, null, 2) },
+        { name: 'enabled', label: 'Regla activa', type: 'checkbox', value: r.enabled },
+        { name: 'reason', label: 'Motivo del cambio (mínimo 10 caracteres)', type: 'textarea', required: true }], 'Proponer',
+        'Valores por defecto: ' + JSON.stringify(r.defaults));
+      if (!v) return;
+      let params; try { params = JSON.parse(v.params || '{}'); } catch (_) { S.say('Los parámetros no son un JSON válido.'); return; }
+      const d = await S.send('/rules-admin/requests', 'POST', { engine: 'ANALITICO', rule_key: r.key, payload: { params, enabled: v.enabled }, reason: v.reason });
+      if (d) { S.say(d.note, true); draw(); }
+    };
+    const decide = async (q, approve) => {
+      const v = await S.ask((approve ? 'Aprobar' : 'Rechazar') + ' cambio de regla', [{ name: 'note', label: 'Nota (opcional)', type: 'textarea' }],
+        approve ? 'Aprobar' : 'Rechazar', approve ? 'El cambio se aplica de inmediato a las próximas observaciones y ejecuciones del motor.' : null);
+      if (!v) return;
+      if (await S.send(`/rules-admin/requests/${q.id}/decision`, 'POST', { approve, note: v.note })) { S.say('Registrado.', true); draw(); }
     };
     draw();
   } });

@@ -47,7 +47,8 @@ Leyenda: ● permitido · (vacío) denegado.
 | Permiso | Descripción | SYS_ADMIN | AUDITOR | CONTRALOR | GERENCIA |
 |---|---|---|---|---|---|
 | `rule:read` | Ver reglas y parámetros |  | ● | ● |  |
-| `rule:configure` | Modificar umbrales/parámetros de reglas |  |  | ● |  |
+| `rule:configure` | Modificar umbrales/parámetros de reglas y aprobar los cambios propuestos a los motores |  |  | ● |  |
+| `rule:propose` | Proponer reglas nuevas o cambios a los motores de reglas (los aprueba el Contralor) | ● |  |  |  |
 | `rule:execute` | Ejecutar el motor de reglas |  | ● | ● |  |
 | `finding:read` | Ver hallazgos con detalle |  | ● | ● |  |
 | `finding:read_summary` | Ver hallazgos agregados (sin datos personales) |  |  |  | ● |
@@ -141,6 +142,7 @@ Ningún usuario puede acumular ambos permisos de un par. El servicio de asignaci
 | `param:update` | `rule:configure` | Parámetros de plataforma y reglas de auditoría separados. |
 | `role:assign` | `report:approve` | Quien asigna roles no aprueba informes. |
 | `role:assign` | `role:approve` | Quien solicita un cambio de roles no lo aprueba. |
+| `rule:propose` | `rule:configure` | Quien propone un cambio de reglas no lo aprueba. |
 | `user:create` | `role:approve` | Quien crea usuarios no aprueba sus roles. |
 | `audit:manage` | `audit:report_approve` | Quien ejecuta la auditoría no aprueba su informe. |
 | `audit:report_draft` | `audit:sign_contralor` | Quien genera el informe no lo firma como Contralor. |

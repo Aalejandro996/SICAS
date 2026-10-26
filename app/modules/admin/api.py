@@ -13,7 +13,8 @@ from .service import AdminError, UserAdminService
 
 bp = Blueprint("admin", __name__)
 _STATUS = {"NOT_FOUND": 404, "FORBIDDEN": 403, "DUPLICATE": 409, "PENDING_EXISTS": 409, "NOT_PENDING": 409,
-           "DUAL_CONTROL": 403, "SELF_CHANGE": 403, "SOD_VIOLATION": 409, "LAST_ADMIN": 409}
+           "DUAL_CONTROL": 403, "SELF_CHANGE": 403, "SOD_VIOLATION": 409, "LAST_ADMIN": 409,
+           "ALREADY_REMOVED": 409, "REASON_REQUIRED": 400}
 
 
 def _svc() -> UserAdminService:
@@ -118,6 +119,35 @@ def decide(rid):
     _svc().decide_role_request(get_jwt_identity(), g.claims.get("roles", []), str(rid), bool(d.get("approve")), str(d.get("note", "")))
     notify_role_request_decision(str(rid), "APPROVED" if d.get("approve") else "REJECTED",
                                  str(get_jwt_identity()), getattr(g, "request_id", None))
+    return jsonify(status="APPROVED" if d.get("approve") else "REJECTED")
+
+
+@bp.post("/users/<uuid:uid>/removal-request")
+@permission_required("user:deactivate", step_up=True)
+@_guard
+def request_removal(uid):
+    d = request.get_json(silent=True) or {}
+    rid = _svc().request_removal(get_jwt_identity(), str(uid), str(d.get("reason", "")))
+    return jsonify(request_id=rid, status="PENDING",
+                   note="La baja queda pendiente de la aprobación del Contralor."), 201
+
+
+@bp.get("/removal-requests")
+@permission_required("user:read", "role:approve")
+def list_removal_requests():
+    status = request.args.get("status", "PENDING").upper()
+    if status not in ("PENDING", "APPROVED", "REJECTED"):
+        return jsonify(error="Estado inválido"), 400
+    return jsonify(requests=SqlAdminRepo().list_removal_requests(status))
+
+
+@bp.post("/removal-requests/<uuid:rid>/decision")
+@permission_required("role:approve", step_up=True)
+@_guard
+def decide_removal(rid):
+    d = request.get_json(silent=True) or {}
+    _svc().decide_removal(get_jwt_identity(), g.claims.get("roles", []), str(rid), bool(d.get("approve")),
+                          str(d.get("note", ""))[:1000])
     return jsonify(status="APPROVED" if d.get("approve") else "REJECTED")
 
 

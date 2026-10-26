@@ -51,6 +51,7 @@
     if (can('audit:manage')) bar.append(h('button', { onclick: newFile }, 'Nuevo expediente'), h('button', { onclick: newAudit }, 'Nueva auditoría'));
     if (can('audit:unit_manage')) bar.append(h('button', { class: 'secondary', onclick: units }, 'Unidades y sucursales'));
     if (can('audit:read', 'audit:template_manage')) bar.append(h('button', { class: 'secondary', onclick: templates }, 'Criterios de las cédulas'));
+    if (can('audit:read', 'audit:read_final', 'audit:report_approve', 'audit:report_approve_gerente')) bar.append(h('button', { class: 'secondary', onclick: delegations }, 'Suplencias'));
     el.append(bar);
     if (can('audit:read')) {
       const [f, a] = await Promise.all([S.get(A + '/files'), S.get(A)]);
@@ -64,6 +65,88 @@
       const d = await S.get(A + '/final-reports');
       if (d) el.append(h('h3', null, 'Informes finales'), tbl(['Auditoría', 'Unidad', 'Estado', 'Firmas'], d.reports.map((r) => [r.audit_code, r.unit_name, S.badge(r.status), r.signatures + ' / 2']), (i) => openReport(d.reports[i].id, () => renderList(el))));
     }
+  }
+
+  // ---------------------------------------------------------------- Suplencias temporales del flujo del informe
+  // Jefe de Auditoría y Gerencia los autoriza el Contralor; al Contralor, Gerencia. Máximo 90 días.
+  const STAGES = [['JEFE', 'Jefe de Auditoría'], ['GERENCIA', 'Gerencia'], ['CONTRALOR', 'Contralor']];
+  async function delegations() {
+    const d = await S.get(A + '/delegations?all=1');
+    if (!d) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const state = (x) => (x.revoked_at ? h('span', { class: 'badge REJECTED' }, 'Revocada') : x.active ? h('span', { class: 'badge ACTIVE' }, 'Vigente')
+      : x.ends_on < today ? h('span', { class: 'badge INACTIVE' }, 'Vencida') : h('span', { class: 'badge PENDING' }, 'Programada'));
+    const body = h('div', null,
+      h('p', { class: 'muted' }, 'Cuando el titular de una etapa del informe final (Jefe de Auditoría, Gerencia o Contralor) no está, otra persona actúa en su nombre por un plazo de hasta 90 días. ' +
+        'El flujo no cambia: cada decisión queda registrada como tomada por el suplente en nombre del titular, y el suplente firma con su propio certificado.'),
+      d.needs_certificate ? h('div', { class: d.my_certificate ? 'okbox' : 'warn' }, d.my_certificate
+        ? `Su certificado de firma: ${d.my_certificate.subject} (vence ${S.date(d.my_certificate.not_after)}).`
+        : 'Es suplente de una etapa con firma: suba su certificado (.p12/.pfx) antes de firmar.') : null,
+      tbl(['Etapa', 'Titular', 'Suplente', 'Desde', 'Hasta', 'Motivo', 'Autorizó', 'Estado', ''], d.delegations.map((x) => [
+        x.stage_label + (x.audit_domain ? ' · ' + (x.audit_domain === 'SISTEMAS' ? 'Sistemas' : 'Operativa') : ''), x.titular_name, x.delegate_name,
+        S.date(x.starts_on), S.date(x.ends_on), x.reason, x.authorized_by_name, state(x),
+        h('button', { class: 'sm danger', disabled: !x.can_revoke, onclick: () => revoke(x) }, 'Revocar')])));
+    const m = dlg('Suplencias', body);
+    const reload = () => { m.close(); delegations(); };
+    const revoke = async (x) => {
+      const v = await S.ask('Revocar suplencia', [{ name: 'reason', label: 'Motivo (p. ej. regreso del titular)', type: 'textarea', required: true }], 'Revocar',
+        `${x.delegate_name} dejará de actuar como ${x.stage_label} en nombre de ${x.titular_name}.`);
+      if (v && await S.send(`${A}/delegations/${x.id}/revoke`, 'POST', v)) { S.say('Suplencia revocada.', true); reload(); }
+    };
+    if (d.can_authorize.length) m.footer.append(h('button', { onclick: async () => { if (await newDelegation(d.can_authorize)) reload(); } }, 'Nueva suplencia'));
+    if (d.needs_certificate) m.footer.append(h('button', { class: 'secondary', onclick: async () => { if (await uploadCertificate()) reload(); } }, 'Mi certificado'));
+    m.footer.append(closeBtn(m));
+  }
+
+  async function newDelegation(allowed) {
+    const c = await S.get(A + '/delegations/candidates');
+    if (!c) return false;
+    const keys = { JEFE_FINANCIERA: ['JEFE', 'FINANCIERA', 'Jefe de Auditoría (Operativa)'], JEFE_SISTEMAS: ['JEFE', 'SISTEMAS', 'Jefe de Auditoría de Sistemas'],
+      GERENCIA: ['GERENCIA', null, 'Gerencia'], CONTRALOR: ['CONTRALOR', null, 'Contralor'] };
+    const options = Object.keys(c.candidates).filter((k) => keys[k] && allowed.includes(keys[k][0]));
+    if (!options.length) { S.say('No hay etapas con titulares registrados que usted pueda cubrir.'); return false; }
+    const stageSel = h('select', null, options.map((k) => h('option', { value: k }, keys[k][2])));
+    const titSel = h('select'), delSel = h('select');
+    const who = (u) => `${u.name} (${u.username}${u.roles.length ? ' · ' + u.roles.join(', ') : ''})`;
+    const fill = () => {
+      const cc = c.candidates[stageSel.value];
+      titSel.replaceChildren(...cc.titulars.map((u) => h('option', { value: u.id }, who(u))));
+      delSel.replaceChildren(...(cc.delegates.length ? cc.delegates.map((u) => h('option', { value: u.id }, who(u))) : [h('option', { value: '' }, 'Ninguna persona cumple la segregación de funciones para esta etapa')]));
+    };
+    stageSel.addEventListener('change', fill); fill();
+    const today = new Date().toISOString().slice(0, 10);
+    const from = h('input', { type: 'date', value: today, min: today }), to = h('input', { type: 'date', min: today });
+    const reason = h('textarea', { placeholder: 'Vacaciones, reposo médico, viaje…' });
+    return new Promise((resolve) => {
+      const m = dlg('Nueva suplencia', h('div', null,
+        h('p', { class: 'muted' }, 'Solo se ofrecen suplentes que no violan la segregación de funciones (por ejemplo, quien ejecuta auditorías no puede cubrir al Contralor). ' +
+          'El suplente de un Jefe de Auditoría debe pertenecer al mismo dominio.'),
+        h('label', null, 'Etapa', stageSel), h('label', null, 'Titular ausente', titSel), h('label', null, 'Suplente', delSel),
+        h('div', { class: 'toolbar' }, h('label', null, 'Desde', from), h('label', null, 'Hasta (máximo 90 días)', to)),
+        h('label', null, 'Motivo (mínimo 10 caracteres)', reason)));
+      m.footer.append(h('button', { class: 'secondary', onclick: () => { m.close(); resolve(false); } }, 'Cancelar'),
+        h('button', { onclick: async (e) => {
+          const [stage, domain] = keys[stageSel.value];
+          e.target.disabled = true;
+          const r = await S.send(A + '/delegations', 'POST', { stage, audit_domain: domain, titular_id: titSel.value, delegate_id: delSel.value,
+            starts_on: from.value, ends_on: to.value, reason: reason.value.trim() });
+          e.target.disabled = false;
+          if (r) { S.say(r.note, true); m.close(); resolve(true); }
+        } }, 'Autorizar suplencia'));
+    });
+  }
+
+  async function uploadCertificate() {
+    const v = await S.ask('Mi certificado de firma', [
+      { name: 'file', label: 'Certificado (.p12 / .pfx, máximo 200 KB)', type: 'file', required: true },
+      { name: 'passphrase', label: 'Contraseña del certificado', type: 'password' }], 'Guardar',
+      'Como suplente firma con su propio certificado. Se guarda cifrado en el servidor y solo se usa cuando usted firma un informe en su suplencia.');
+    if (!v) return false;
+    const form = new FormData(); form.append('file', v.file); form.append('passphrase', v.passphrase || '');
+    const r = await S.upload(A + '/signing-certificate', form);
+    if (!r.ok) { S.say(S.err(r)); return false; }
+    S.say(`Certificado registrado: ${r.data.subject} (vence ${S.date(r.data.not_after)}).`, true);
+    return true;
   }
 
   async function newFile() {
@@ -501,9 +584,10 @@
         h('p', { class: 'muted' }, `Cumplimiento: ${S.score(st.cumplimiento)}% · Exposición: ${S.score(st.exposicion)}% · Pendientes: ${st.pendientes ?? 0}`));
       const criteria = Object.fromEntries(ws.criteria.map((c) => [c.code, c]));
       const rows = ws.items.map((it) => systemQuestionRow(it, criteria[it.ref], edit, paint, wid, d.phase_rules || {}));
+      const qBody = h('tbody', null, rows);
       el.append(bar, h('div', { class: 'row' }, sum), stats, section,
         ...(!edit ? [h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'El cuestionario se califica en Trabajo de campo.' : d.audit.phase === 'INFORME' ? 'Fase de Informe: los controles quedaron cerrados en las fases 1 a 3.' : 'Solo lectura.')] : []),
-        h('div', { class: 'grid-wrap audit-system-questionnaire' }, h('table', null, h('thead', null, h('tr', null, ['ID', 'Sección', 'Pregunta de auditoría', 'Existencia', 'Soporte documental', 'Evidencia / entregable', 'Puntaje', 'Observación', ''].map((x) => h('th', null, x)))), h('tbody', null, rows))));
+        h('div', { class: 'grid-wrap audit-system-questionnaire' }, h('table', null, h('thead', null, h('tr', null, ['ID', 'Sección', 'Pregunta de auditoría', 'Existencia', 'Soporte documental', 'Evidencia / entregable', 'Puntaje', 'Observación', ''].map((x) => h('th', null, x)))), qBody)), S.paginate(qBody));
       return;
     }
 
@@ -547,18 +631,20 @@
       );
     }
 
+    const wBody = h('tbody', null, rows);
     worksheetContent.push(
       ws.items.length
         ? h('div', { class: 'grid-wrap audit-financial-worksheet' },
             h('table', null,
               h('thead', null,
                 h('tr', null, head.map((x) => h('th', null, x)))),
-              h('tbody', null, rows)
+              wBody
             )
           )
         : h('div', { class: 'empty panel' },
             'Sin ítems: agregue referencias o saque una muestra aleatoria.')
     );
+    if (ws.items.length) worksheetContent.push(S.paginate(wBody));
 
     el.append(...worksheetContent);
   }
@@ -1005,7 +1091,7 @@
       d.events.length ? tbl(['Fecha', 'Tipo', 'Acción', 'Elemento', 'Cambio', 'Motivo / comentario', 'Fase / estado', 'Usuario'],
         d.events.map((ev) => ev.source === 'TRANSITION'
           ? [fmt(ev.created_at), 'Flujo', ACTION[ev.action] || ev.action, `Informe ${ev.kind === 'PREVIO' ? 'previo' : 'final'} v${ev.report_version}`,
-            `${L(ev.from_status)} → ${L(ev.to_status)}`, ev.comment || '—', L(ev.to_status), ev.actor_username || '—']
+            `${L(ev.from_status)} → ${L(ev.to_status)}`, ev.comment || '—', L(ev.to_status), ev.on_behalf_of ? `${ev.actor_username || '—'} (suplente, en nombre de ${ev.on_behalf_of})` : (ev.actor_username || '—')]
           : [fmt(ev.created_at), 'Dato', L(ev.action), `${L(ev.entity_type)}${ev.entity_id ? ' · ' + String(ev.entity_id).slice(0, 8) : ''}`,
             fmtChange(ev.changes), ev.reason || '—', [L(ev.audit_phase), ev.report_status ? ' / ' + L(ev.report_status) : ''].join(''),
             ev.actor_username || '—']))
@@ -1042,11 +1128,13 @@
         h('b', null, 'Calificación'), [S.ratingBadge(b.overall.rating), ' ', b.overall.final != null ? S.score(b.overall.final) + '%' : ''], h('b', null, 'Observaciones'), String((b.observations || []).length),
         h('b', null, 'Limitaciones al alcance'), String((b.limitations || []).length), h('b', null, 'Ajustes manuales'), String((b.adjustments || []).length), r.sent_to ? [h('b', null, 'Enviado a'), r.sent_to] : null),
       r.status === 'RETURNED' ? h('div', { class: 'warn' }, 'Informe devuelto: atienda los puntos indicados, regenere y vuelva a enviar.') : null,
+      d.acting_for ? h('div', { class: 'warn' }, `Usted actúa como suplente de ${d.acting_for.titular} (${d.acting_for.stage}) hasta el ${S.date(d.acting_for.ends_on)}: sus decisiones quedan registradas en su nombre.` +
+        (d.acting_for.needs_certificate ? ' Para firmar debe subir su certificado en «Suplencias › Mi certificado».' : '')) : null,
       d.reopening ? h('div', { class: 'warn' }, `Reapertura autorizada el ${fmt(d.reopening.authorized_at)} por ${d.reopening.username || '—'}: ${d.reopening.reason}`) : null,
       reviewPointsBlock(d, rid, () => { done(); reopen(holder.m); }),
       (d.transitions || []).length ? h('details', null, h('summary', null, `Historial de decisiones (${d.transitions.length})`),
         tbl(['Fecha', 'Decisión', 'De', 'A', 'Usuario', 'Comentario'], d.transitions.map((t) => [fmt(t.created_at), ACTION[t.action] || t.action,
-          L(t.from_status), L(t.to_status), t.actor_username || '—', t.comment || '—']))) : null,
+          L(t.from_status), L(t.to_status), t.on_behalf_of ? `${t.actor_username || '—'} (suplente, en nombre de ${t.on_behalf_of})` : (t.actor_username || '—'), t.comment || '—']))) : null,
       (d.body_revisions || []).length > 1 ? h('details', null, h('summary', null, `Revisiones del contenido (${d.body_revisions.length})`),
         tbl(['Rev.', 'Fecha', 'Usuario', 'Motivo', 'SHA-256'], d.body_revisions.map((x) => [String(x.revision), fmt(x.created_at), x.username || '—', x.reason || '—', x.body_sha256.slice(0, 12) + '…']))) : null,
       r.kind === 'FINAL' ? h('div', null, h('h3', null, 'Firmas'), h('div', { class: 'kv' },

@@ -840,9 +840,18 @@ def active_rule_keys(audit_id):
                                      "AND rule_key IS NOT NULL AND superseded_by IS NULL", a=str(audit_id))}
 
 
-def regulatory_catalog():
-    return q("SELECT topic, label, keywords, criteria, cause, effect, recommendation, sort_order, updated_at "
-             "FROM engagement.regulatory_catalog ORDER BY sort_order, topic")
+def regulatory_catalog(include_inactive=False):
+    return q("SELECT topic, label, keywords, criteria, cause, effect, recommendation, sort_order, active, updated_at "
+             "FROM engagement.regulatory_catalog"
+             + ("" if include_inactive else " WHERE active")
+             + " ORDER BY sort_order, topic")
+
+
+def systems_rule_catalog(include_inactive=False):
+    return q("SELECT domain_key, label, keywords, criteria, cause, effect, recommendation, field_test, critical, "
+             "sort_order, active, updated_at FROM engagement.systems_rule_catalog"
+             + ("" if include_inactive else " WHERE active")
+             + " ORDER BY sort_order, domain_key")
 
 
 def update_regulatory_topic(topic, d, user):
@@ -1016,8 +1025,10 @@ def change_events(audit_id):
 
 def audit_report_transitions(audit_id):
     return q("SELECT t.id, t.report_id::text, r.kind, t.report_version, t.action, t.from_status, t.to_status, t.body_sha256, "
-             "t.actor_id::text AS actor_id, t.actor_username, t.actor_roles, t.comment, t.created_at "
+             "t.actor_id::text AS actor_id, t.actor_username, t.actor_roles, t.comment, t.created_at, "
+             "t.delegation_id::text AS delegation_id, ob.full_name AS on_behalf_of "
              "FROM engagement.report_transitions t JOIN engagement.reports r ON r.id = t.report_id "
+             "LEFT JOIN iam.users ob ON ob.id = t.on_behalf_of "
              "WHERE r.audit_id = CAST(:a AS uuid) ORDER BY t.id", a=str(audit_id))
 
 
@@ -1051,7 +1062,8 @@ class StaleReportState(Exception):
 
 def transition_report(rid, *, expected_status, expected_sha256, status, action, actor, report_version,
                       actor_username=None, actor_roles=(), comment=None, comment_kind=None,
-                      signed_doc=None, phase_snapshot=None, review_points=(), **kw):
+                      signed_doc=None, phase_snapshot=None, review_points=(), delegation_id=None,
+                      on_behalf_of=None, **kw):
     """Cambia el estado del informe con compare-and-set y registra la transición.
 
     El UPDATE solo se aplica si el informe sigue en `expected_status` con el contenido
@@ -1096,10 +1108,12 @@ def transition_report(rid, *, expected_status, expected_sha256, status, action, 
         transition_id = x(
             "INSERT INTO engagement.report_transitions "
             "(report_id, report_version, action, from_status, to_status, body_sha256, "
-            "actor_id, actor_username, actor_roles, comment) "
-            "VALUES (CAST(:r AS uuid), :v, :action, :f, :t, :h, CAST(:u AS uuid), :un, :roles, :c) RETURNING id",
+            "actor_id, actor_username, actor_roles, comment, delegation_id, on_behalf_of) "
+            "VALUES (CAST(:r AS uuid), :v, :action, :f, :t, :h, CAST(:u AS uuid), :un, :roles, :c, "
+            "CAST(:dg AS uuid), CAST(:ob AS uuid)) RETURNING id",
             r=str(rid), v=report_version, action=action, f=expected_status, t=status,
             h=expected_sha256, u=actor, un=actor_username, roles=list(actor_roles or ()), c=comment,
+            dg=delegation_id, ob=on_behalf_of,
         ).scalar_one()
         for point in review_points or ():
             x("INSERT INTO engagement.review_points (report_id, transition_id, target_type, target_id, target_label, description, created_by) "
@@ -1116,8 +1130,10 @@ def transition_report(rid, *, expected_status, expected_sha256, status, action, 
 
 def report_transitions(rid):
     return q("SELECT t.id, t.report_version, t.action, t.from_status, t.to_status, t.body_sha256, "
-             "t.actor_id::text AS actor_id, t.actor_username, t.actor_roles, t.comment, t.created_at "
-             "FROM engagement.report_transitions t WHERE t.report_id = CAST(:r AS uuid) ORDER BY t.id", r=str(rid))
+             "t.actor_id::text AS actor_id, t.actor_username, t.actor_roles, t.comment, t.created_at, "
+             "t.delegation_id::text AS delegation_id, ob.full_name AS on_behalf_of "
+             "FROM engagement.report_transitions t LEFT JOIN iam.users ob ON ob.id = t.on_behalf_of "
+             "WHERE t.report_id = CAST(:r AS uuid) ORDER BY t.id", r=str(rid))
 
 
 def _insert_comment(rid, user, kind, text_):
@@ -1201,3 +1217,86 @@ def apply_offline(plan, criteria_by_ws, user):
         db.session.rollback()
         raise
     return done
+
+
+# ------------------------------------------------------------------ suplencias temporales
+DELEGATION_SQL = (
+    "SELECT d.id::text, d.stage, d.audit_domain, d.titular_id::text, t.full_name AS titular_name, "
+    "d.delegate_id::text, s.full_name AS delegate_name, d.starts_on, d.ends_on, d.reason, "
+    "d.authorized_by::text, a.full_name AS authorized_by_name, d.created_at, d.revoked_at, d.revoke_reason, "
+    "(d.revoked_at IS NULL AND current_date BETWEEN d.starts_on AND d.ends_on) AS active "
+    "FROM engagement.delegations d JOIN iam.users t ON t.id = d.titular_id JOIN iam.users s ON s.id = d.delegate_id "
+    "JOIN iam.users a ON a.id = d.authorized_by "
+)
+
+
+def active_delegations(user_id):
+    """Suplencias vigentes hoy en las que el usuario es el suplente (con cuenta activa)."""
+    return q(DELEGATION_SQL + "WHERE d.delegate_id = CAST(:u AS uuid) AND d.revoked_at IS NULL "
+             "AND current_date BETWEEN d.starts_on AND d.ends_on AND s.is_active ORDER BY d.created_at", u=str(user_id))
+
+
+def list_delegations(user_id=None, include_past=False):
+    where = ["TRUE"]
+    if user_id:
+        where.append("(d.delegate_id = CAST(:u AS uuid) OR d.titular_id = CAST(:u AS uuid) OR d.authorized_by = CAST(:u AS uuid))")
+    if not include_past:
+        where.append("d.revoked_at IS NULL AND d.ends_on >= current_date")
+    return q(DELEGATION_SQL + "WHERE " + " AND ".join(where) + " ORDER BY d.starts_on DESC, d.created_at DESC LIMIT 200",
+             u=str(user_id) if user_id else None)
+
+
+def get_delegation(did):
+    return q1(DELEGATION_SQL + "WHERE d.id = CAST(:i AS uuid)", i=str(did))
+
+
+def overlapping_delegation(stage, domain, titular_id, starts_on, ends_on):
+    return q1("SELECT id::text FROM engagement.delegations WHERE stage = :s AND audit_domain IS NOT DISTINCT FROM :d "
+              "AND titular_id = CAST(:t AS uuid) AND revoked_at IS NULL AND starts_on <= :e AND ends_on >= :b",
+              s=stage, d=domain, t=str(titular_id), b=starts_on, e=ends_on)
+
+
+def create_delegation(d, authorized_by):
+    did = str(uuid.uuid4())
+    x("INSERT INTO engagement.delegations (id, stage, audit_domain, titular_id, delegate_id, starts_on, ends_on, reason, authorized_by) "
+      "VALUES (CAST(:i AS uuid), :s, :d, CAST(:t AS uuid), CAST(:g AS uuid), :b, :e, :r, CAST(:a AS uuid))",
+      i=did, s=d["stage"], d=d.get("audit_domain"), t=d["titular_id"], g=d["delegate_id"], b=d["starts_on"],
+      e=d["ends_on"], r=d["reason"], a=str(authorized_by))
+    db.session.commit()
+    return did
+
+
+def revoke_delegation(did, user, reason):
+    row = x("UPDATE engagement.delegations SET revoked_at = now(), revoked_by = CAST(:u AS uuid), revoke_reason = :r "
+            "WHERE id = CAST(:i AS uuid) AND revoked_at IS NULL RETURNING id", i=str(did), u=str(user), r=reason).first()
+    db.session.commit()
+    return row is not None
+
+
+def user_brief(user_id):
+    return q1("SELECT u.id::text, u.username, u.full_name AS name, u.is_active, u.removed_at, "
+              "COALESCE(array_agg(r.code) FILTER (WHERE r.code IS NOT NULL), '{}') AS roles FROM iam.users u "
+              "LEFT JOIN iam.user_roles ur ON ur.user_id = u.id LEFT JOIN iam.roles r ON r.id = ur.role_id "
+              "WHERE u.id = CAST(:u AS uuid) GROUP BY u.id", u=str(user_id))
+
+
+def delegation_candidates():
+    """Cuentas activas con sus roles, para elegir titular y suplente."""
+    return q("SELECT u.id::text, u.username, u.full_name AS name, "
+             "COALESCE(array_agg(r.code) FILTER (WHERE r.code IS NOT NULL), '{}') AS roles FROM iam.users u "
+             "LEFT JOIN iam.user_roles ur ON ur.user_id = u.id LEFT JOIN iam.roles r ON r.id = ur.role_id "
+             "WHERE u.is_active AND u.removed_at IS NULL GROUP BY u.id ORDER BY u.full_name")
+
+
+def save_signing_certificate(user_id, p12_encrypted, passphrase_encrypted, info):
+    x("INSERT INTO engagement.signing_certificates (user_id, p12_encrypted, passphrase_encrypted, subject, serial, not_after) "
+      "VALUES (CAST(:u AS uuid), :p, :k, :s, :n, :a) ON CONFLICT (user_id) DO UPDATE SET p12_encrypted = EXCLUDED.p12_encrypted, "
+      "passphrase_encrypted = EXCLUDED.passphrase_encrypted, subject = EXCLUDED.subject, serial = EXCLUDED.serial, "
+      "not_after = EXCLUDED.not_after, uploaded_at = now()",
+      u=str(user_id), p=p12_encrypted, k=passphrase_encrypted, s=info.get("subject"), n=info.get("serial"), a=info.get("not_after"))
+    db.session.commit()
+
+
+def signing_certificate(user_id):
+    return q1("SELECT user_id::text, p12_encrypted, passphrase_encrypted, subject, serial, not_after, uploaded_at "
+              "FROM engagement.signing_certificates WHERE user_id = CAST(:u AS uuid)", u=str(user_id))

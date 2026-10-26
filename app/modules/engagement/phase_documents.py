@@ -31,7 +31,7 @@ def _answer(item: dict, phase: str | None, field: str) -> str:
     return str(value.get(field) or "").upper() if isinstance(value, dict) else ""
 
 
-def documented_controls(worksheets: list[dict], phase: str) -> list[dict]:
+def documented_controls(worksheets: list[dict], phase: str, domains=None) -> list[dict]:
     """Controles con soporte documental SI al cierre de `phase`, en el orden de la cédula."""
     out = []
     for ws in worksheets:
@@ -46,7 +46,7 @@ def documented_controls(worksheets: list[dict], phase: str) -> list[dict]:
                 "ref": it["ref"], "section": crit.get("section") or "", "question": crit.get("text") or it["ref"],
                 "evidence": EVIDENCE.get(_answer(it, phase, "evidencia"), "No indicada"),
                 "control": _answer(it, phase, "control"),
-                "test": observation_rules.field_test_for(crit),
+                "test": observation_rules.field_test_for(crit, domains),
             })
     return out
 
