@@ -128,7 +128,7 @@ class ContralorDashboardUnitTests(unittest.TestCase):
 
     def test_closed_audit_duration_uses_pac_sent_timestamp(self):
         self.assertIn("a.pac_sent_at", SCOPE_CTE)
-        self.assertIn("a.pac_sent_at - a.created_at", SCOPE_CTE)
+        self.assertIn("engagement.business_seconds(a.created_at, a.pac_sent_at) / 32400.0", SCOPE_CTE)   # días hábiles de 9 horas
         self.assertNotIn("lp.last_changed_at - a.created_at", SCOPE_CTE)
 
     def test_kpi_audit_snapshot_only_contains_configuration_fields(self):

@@ -90,6 +90,8 @@
       if (await tryRefresh()) r = await raw(path, opts);
       else { S.onSessionLost && S.onSessionLost(); }
     }
+    // Fuera del horario laboral: la API responde 403 con outside_hours y la interfaz muestra el bloqueo.
+    if (r.status === 403 && r.data && r.data.outside_hours && S.onOutsideHours) S.onOutsideHours(r.data);
     return r;
   };
   S.err = (r) => r.data.error || r.data.msg || ('Error ' + r.status);

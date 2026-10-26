@@ -2807,3 +2807,9 @@ tr[hidden] { display: none; }
 
 /* Vista previa de firmas escaneadas */
 .sig-preview { display: block; max-height: 48px; max-width: 180px; background: #fff; border: 1px solid #e0e8f0; border-radius: 4px; }
+
+/* Horario laboral: aviso de cierre y horas extras */
+.schedule-banner { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 900; max-width: min(720px, calc(100vw - 32px));
+  padding: 10px 16px; border-radius: 10px; font-weight: 600; box-shadow: 0 6px 20px rgba(15, 30, 60, .18); background: #eef3fa; color: #1d3552; }
+.schedule-banner.warning { background: #fff4d6; color: #6b4a00; border: 1px solid #f0c75e; }
+.schedule-banner[hidden] { display: none; }

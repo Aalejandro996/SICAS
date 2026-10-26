@@ -58,7 +58,7 @@
     },
 
     contralor: {
-      src: '/static/pages_contralor.js?v=20261014-dashboard-role-matrix1',
+      src: '/static/pages_contralor.js?v=20261026-schedule1',
       pages: [
         {
           id: 'contralor-dashboard',

@@ -457,7 +457,36 @@ def _x_reset_password(payload, requester, approver):
     return {"reset": payload["user_id"], "unlocked": True, "_secret": temp}
 
 
+def _v_holiday(payload):
+    from datetime import date as _date
+    try:
+        day = _date.fromisoformat(str(payload.get("date") or ""))
+    except ValueError:
+        raise ValueError("Fecha inválida (AAAA-MM-DD)")
+    if not 2015 <= day.year <= 2045:
+        raise ValueError("Fecha fuera del calendario (2015-2045)")
+    name = str(payload.get("name") or "").strip()
+    if not 3 <= len(name) <= 120:
+        raise ValueError("Indique el nombre o el decreto (3 a 120 caracteres)")
+    observed = bool(payload.get("observed", True))
+    verb = "Declarar no laborable" if observed else "Declarar laborable"
+    return {"date": day.isoformat(), "name": name, "observed": observed}, f"{verb} el {day:%d/%m/%Y}: {name}"
+
+
+def _x_holiday(payload, requester, approver):
+    db.session.execute(text(
+        "INSERT INTO admin.holidays (holiday_date, name, kind, observed, updated_by) VALUES (CAST(:d AS date), :n, 'DECREE', :o, "
+        "CAST(:u AS uuid)) ON CONFLICT (holiday_date) DO UPDATE SET observed = EXCLUDED.observed, "
+        "name = CASE WHEN admin.holidays.kind = 'DECREE' THEN EXCLUDED.name ELSE admin.holidays.name END, "
+        "updated_by = EXCLUDED.updated_by, updated_at = now()"),
+        {"d": payload["date"], "n": payload["name"], "o": payload["observed"], "u": requester})
+    from app.core import worktime
+    worktime.invalidate()
+    return {"date": payload["date"], "observed": payload["observed"]}
+
+
 ACTIONS = {
+    "HOLIDAY": {"validate": _v_holiday, "execute": _x_holiday},
     "RESET_PASSWORD": {"validate": _v_reset_password, "execute": _x_reset_password},
     "SECURITY_POLICY": {"validate": _v_policy, "execute": _x_policy},
     "REVOKE_SESSIONS": {"validate": _v_revoke, "execute": _x_revoke},
@@ -466,7 +495,8 @@ ACTIONS = {
     "SMTP_TEST": {"validate": _v_smtp, "execute": _x_smtp},
 }
 ACTION_PERMS = {"SECURITY_POLICY": "param:update", "REVOKE_SESSIONS": "session:revoke", "DEACTIVATE_USER": "user:deactivate",
-                "ACCESS_REVIEW": "user:update", "SMTP_TEST": "param:update", "RESET_PASSWORD": "user:update"}
+                "ACCESS_REVIEW": "user:update", "SMTP_TEST": "param:update", "RESET_PASSWORD": "user:update",
+                "HOLIDAY": "param:update"}
 
 
 # ------------------------------------------------------------------ consultas compartidas con las tareas

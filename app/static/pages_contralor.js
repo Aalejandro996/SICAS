@@ -64,7 +64,7 @@
       el.append(h('h2', null, 'Dashboard'),
         h('p', { class: 'muted' }, isDomainHead
           ? `Vista restringida al dominio ${lockedDomain}. Puede definir KPI individuales para los auditores de su dominio.`
-          : 'Vista agregada. Las duraciones de fase son tiempos transcurridos y no equivalen a horas de trabajo activo del auditor.'));
+          : 'Vista agregada. Los tiempos se miden en horario hábil (lunes a viernes de 8:00 a 17:00, sin feriados; un día hábil = 9 horas). Las duraciones de fase no equivalen a horas de trabajo activo del auditor.'));
       const options = await S.get('/analytics/contralor/options');
       if (!options) return;
 
@@ -247,7 +247,7 @@
           S.stat(fmt(s.audits_total), 'Auditorías del período'), S.stat(fmt(s.audits_in_progress), 'Auditorías en curso'),
           S.stat(fmt(s.audits_closed), 'Cerradas dentro de la cohorte'), S.stat(fmt(s.pending_approval), 'Informes pendientes de aprobación'),
           S.stat(fmt(s.observations_total), 'Brechas / observaciones'), S.stat(fmt(s.high_risk_observations), 'Brechas altas o críticas'),
-          S.stat(fmt(s.avg_closed_audit_days, ' días'), 'Duración media de auditorías cerradas'), S.stat(fmt(s.avg_open_days, ' días'), 'Edad media de auditorías no cerradas'));
+          S.stat(fmt(s.avg_closed_audit_days, ' días hábiles'), 'Duración media de auditorías cerradas'), S.stat(fmt(s.avg_open_days, ' días hábiles'), 'Edad media de auditorías no cerradas'));
         const domainPanel = panel(
           isDomainHead ? `Resumen del dominio ${lockedDomain}` : 'Comparativo FINANCIERA vs SISTEMAS', h('div', null,
           emptyText(isDomainHead
@@ -270,13 +270,13 @@
           data.by_unit.map((r) => [r.unit_name, heat(r.risk_breakdown.CRITICAL || 0, 'high'), heat(r.risk_breakdown.HIGH || 0, 'high'),
             heat(r.risk_breakdown.MEDIUM || 0, 'mid'), heat(r.risk_breakdown.LOW || 0, 'low'), heat(r.risk_breakdown.UNSPECIFIED || 0, 'low'), heat(r.risk_breakdown.OTHER || 0, 'mid'), fmt(r.observations_total)])));
         const byUnitPanel = panel('Comparativo por unidad / sucursal', tbl(
-          ['Unidad', 'Auditorías creadas', 'En curso', 'Cerradas de la cohorte', 'Brechas creadas', 'Alto/crítico', 'Brechas abiertas', 'Días promedio al cierre'],
+          ['Unidad', 'Auditorías creadas', 'En curso', 'Cerradas de la cohorte', 'Brechas creadas', 'Alto/crítico', 'Brechas abiertas', 'Días hábiles promedio al cierre'],
           data.by_unit.map((r) => [r.unit_name, r.audits_total, r.audits_in_progress, r.audits_closed, r.observations_total, r.high_risk_observations, r.observations_open, fmt(r.avg_closed_audit_days)])));
         const phasePanel = panel('Tiempo transcurrido por fase', h('div', null,
-          tbl(['Fase', 'Transiciones', 'Promedio horas'], data.phase_times.map((r) => [S.label2(r.phase), r.transitions, fmt(r.average_hours)])),
+          tbl(['Fase', 'Transiciones', 'Promedio de horas hábiles'], data.phase_times.map((r) => [S.label2(r.phase), r.transitions, fmt(r.average_hours)])),
           emptyText('Duración de calendario entre transiciones registradas; no representa tiempo de trabajo activo. Si no existe historial de fase, no se inventa una duración de cierre.')));
         const auditorPanel = panel('Comparativo por auditor asignado', tbl(
-          ['Auditor', 'Auditorías de cohorte asignadas', 'Cerradas de la cohorte', 'Días promedio al cierre'],
+          ['Auditor', 'Auditorías de cohorte asignadas', 'Cerradas de la cohorte', 'Días hábiles promedio al cierre'],
           data.by_auditor.map((r) => [r.auditor_name, r.audits_total, r.audits_closed, fmt(r.avg_closed_audit_days)])));
         const ing = data.ingestion;
         const ingestionPanel = isDomainHead ? null : panel('Cargas de datos — alcance global', h('div', null,
@@ -301,10 +301,10 @@
           tbl(['Nivel', 'Control', 'Cantidad', 'Interpretación'], (quality.checks || []).map((c) => [S.badge(c.level), c.label, c.count, c.description]))));
         const pipe = data.phase_pipeline || { phases: [], pending_reports: [] };
         const pipelinePanel = panel('Flujo de auditoría y cuellos de botella', h('div', null,
-          tbl(['Fase actual', 'Auditorías activas', 'Vencidas', 'Horas transcurridas promedio'], pipe.phases.map((r) => [S.label2(r.phase), r.audits, r.overdue, fmt(r.average_phase_hours)])),
+          tbl(['Fase actual', 'Auditorías activas', 'Vencidas', 'Horas hábiles transcurridas promedio'], pipe.phases.map((r) => [S.label2(r.phase), r.audits, r.overdue, fmt(r.average_phase_hours)])),
           tbl(['Estado del informe pendiente', 'Informes'], pipe.pending_reports.map((r) => [r.status, r.reports]))));
         const workloadPanel = panel('Carga y tiempo activo registrado por auditor', h('div', null,
-          tbl(['Auditor', 'Auditorías activas', 'Vencidas', 'Brechas altas abiertas', 'Edad promedio (días)', 'Horas activas registradas', 'Sesiones'], (data.workload || []).map((r) => [
+          tbl(['Auditor', 'Auditorías activas', 'Vencidas', 'Brechas altas abiertas', 'Edad promedio (días hábiles)', 'Horas hábiles activas registradas', 'Sesiones'], (data.workload || []).map((r) => [
             r.auditor_name, r.active_audits, r.overdue_audits, r.open_high_risk, fmt(r.average_open_age_days), fmt(r.tracked_active_hours), r.tracked_sessions || 0])),
           emptyText('Las horas provienen del cronómetro de inicio/pausa/reanudación/finalización del auditor; son tiempo activo declarado, no una medición de teclado.')));
         const snapshotPanel = panel('Histórico verificable de cortes y KPI', h('div', { class: 'ctl-snapshots-host' }));

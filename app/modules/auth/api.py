@@ -96,6 +96,12 @@ def login():
         user = _service().verify_password_step(str(data.get("username", "")), str(data.get("password", "")), request.remote_addr)
     except AuthError as e:
         return _fail(e)
+    if current_app.config.get("WORK_SCHEDULE_ENABLED", True):
+        from app.modules.schedule.service import access_block
+        blocked = access_block(user.id, user.roles)
+        if blocked:
+            audit("LOGIN_REJECTED", outcome="DENIED", entity_type="user", entity_id=user.id, metadata={"reason": "OUTSIDE_HOURS"})
+            return jsonify(blocked), 403
     if not user.must_change_password and _password_expired(user):
         SqlUserRepo().require_password_change(user.id)
         user.must_change_password = True

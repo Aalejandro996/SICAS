@@ -10,6 +10,7 @@ def register_blueprints(app):
     from app.modules.ingestion.api import bp as ingestion_bp
     from app.modules.reporting.api import bp as reporting_bp
     from app.modules.rules_admin.api import bp as rules_admin_bp
+    from app.modules.schedule.api import bp as schedule_bp
     from .health import bp as health_bp
 
     p = "/api/v1"
@@ -25,6 +26,7 @@ def register_blueprints(app):
     app.register_blueprint(auditlog_bp, url_prefix=f"{p}/auditlog")
     app.register_blueprint(engagement_bp, url_prefix=f"{p}/audits")
     app.register_blueprint(rules_admin_bp, url_prefix=f"{p}/rules-admin")
+    app.register_blueprint(schedule_bp, url_prefix=f"{p}/schedule")
 
     @app.get("/")
     def index():

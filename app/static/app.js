@@ -58,6 +58,7 @@
     whoami(user);
     show('app'); S.say('');
     buildNav(); navigate();
+    if (S.startScheduleWatch) S.startScheduleWatch();       // aviso 15 minutos antes del cierre y bloqueo fuera de horario
     // Las suplencias vigentes agregan permisos de una etapa del flujo; /auth/me los incluye.
     if (!user.delegations) {
       S.call('/auth/me').then((r) => {

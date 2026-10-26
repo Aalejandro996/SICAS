@@ -49,6 +49,7 @@ class BaseConfig:
     MAX_FAILED_LOGINS = 5
     LOCKOUT_MINUTES = 30
     CHALLENGE_TTL_SECONDS = 300
+    WORK_SCHEDULE_ENABLED = os.environ.get("SICAS_WORK_SCHEDULE", "on").lower() != "off"   # solo pruebas lo apagan
     STEP_UP_MAX_AGE_SECONDS = 300      # reautenticación MFA reciente para firmar y acciones críticas
 
     COMPANY_NAME = os.environ.get("SICAS_COMPANY", "Aseguradora")

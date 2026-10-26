@@ -48,8 +48,8 @@ SCOPE_CTE = f"""WITH audit_scope AS (
         CASE
           WHEN upper(coalesce(a.status, '')) IN ('CLOSED','COMPLETED','SIGNED','CERRADO','CERRADA')
             THEN CASE WHEN a.pac_sent_at IS NULL THEN NULL
-                      ELSE greatest(extract(epoch FROM (a.pac_sent_at - a.created_at)) / 86400.0, 0) END
-          ELSE greatest(extract(epoch FROM (CURRENT_TIMESTAMP - a.created_at)) / 86400.0, 0)
+                      ELSE greatest(engagement.business_seconds(a.created_at, a.pac_sent_at) / 32400.0, 0) END
+          ELSE greatest(engagement.business_seconds(a.created_at, CURRENT_TIMESTAMP) / 32400.0, 0)
         END AS elapsed_days
     FROM engagement.audits a
     LEFT JOIN engagement.files f ON f.id = a.file_id
@@ -104,8 +104,8 @@ METRICS: dict[str, dict[str, str]] = {
     "OBSERVATIONS_TOTAL": {"label": "Brechas / observaciones creadas en el período", "unit": "observaciones", "description": "Observaciones cuya propia fecha de creación cae dentro del período, asociadas a las unidades, dominios y auditores seleccionados."},
     "HIGH_RISK_OBSERVATIONS": {"label": "Brechas de riesgo alto o crítico creadas en el período", "unit": "observaciones", "description": "Observaciones de riesgo ALTO/HIGH o CRÍTICO/CRITICAL cuya fecha de creación cae dentro del período."},
     "HIGH_RISK_SHARE_PCT": {"label": "Porcentaje de brechas de riesgo alto o crítico", "unit": "%", "description": "Brechas de riesgo alto o crítico divididas entre todas las observaciones."},
-    "AVG_CLOSED_AUDIT_DAYS": {"label": "Días promedio hasta cierre formal", "unit": "días", "description": "Promedio desde la creación hasta el envío del PAC (pac_sent_at) en las auditorías cerradas de la cohorte; si falta la fecha de cierre, esa auditoría no se incluye en el promedio."},
-    "AVG_PHASE_HOURS": {"label": "Horas promedio transcurridas por fase", "unit": "horas", "description": "Duración entre cambios de fase; la fase terminal de una auditoría cerrada termina en el envío del PAC. Las fases actuales no cerradas se miden hasta ahora. No representa tiempo activo del auditor."},
+    "AVG_CLOSED_AUDIT_DAYS": {"label": "Días hábiles promedio hasta cierre formal", "unit": "días hábiles", "description": "Promedio desde la creación hasta el envío del PAC (pac_sent_at) en las auditorías cerradas de la cohorte; si falta la fecha de cierre, esa auditoría no se incluye en el promedio."},
+    "AVG_PHASE_HOURS": {"label": "Horas hábiles promedio transcurridas por fase", "unit": "horas hábiles", "description": "Duración entre cambios de fase; la fase terminal de una auditoría cerrada termina en el envío del PAC. Las fases actuales no cerradas se miden hasta ahora. No representa tiempo activo del auditor."},
     "INGESTION_AVG_SECONDS": {"label": "Duración promedio de carga de datos", "unit": "segundos", "description": "Promedio entre creación y finalización de las cargas terminadas en el período."},
     "INGESTION_REJECTION_PCT": {"label": "Porcentaje de filas rechazadas en cargas", "unit": "%", "description": "Filas rechazadas divididas entre filas procesadas más rechazadas."},
 }
@@ -266,7 +266,7 @@ def _get_domain_comparison(filters: dict[str, Any]) -> list[dict[str, Any]]:
                    round((avg(CASE
                        WHEN upper(coalesce(s.status, '')) IN ('CLOSED','COMPLETED','SIGNED','CERRADO','CERRADA')
                          AND s.pac_sent_at IS NOT NULL
-                       THEN greatest(extract(epoch FROM (s.pac_sent_at - s.created_at)) / 86400.0, 0)
+                       THEN greatest(engagement.business_seconds(s.created_at, s.pac_sent_at) / 32400.0, 0)
                        ELSE NULL END))::numeric, 2) AS avg_closed_audit_days
             FROM audit_cohort s GROUP BY s.audit_domain
         ), item_totals AS (
@@ -503,7 +503,7 @@ def get_workflow_pipeline(filters: dict[str, Any]) -> dict[str, Any]:
     )
     SELECT p.phase, count(c.id)::integer AS audits,
            count(c.id) FILTER (WHERE c.planned_end IS NOT NULL AND c.planned_end < CURRENT_DATE)::integer AS overdue,
-           round(avg(greatest(extract(epoch FROM (CURRENT_TIMESTAMP-c.entered_at))/3600.0,0))::numeric,2) AS average_phase_hours
+           round(avg(greatest(engagement.business_seconds(c.entered_at, CURRENT_TIMESTAMP)/3600.0,0))::numeric,2) AS average_phase_hours
     FROM phase_list p LEFT JOIN current_phase c ON upper(c.phase)=upper(p.phase)
     GROUP BY p.phase ORDER BY CASE p.phase WHEN 'PLANIFICACION' THEN 1 WHEN 'TRABAJO_CAMPO' THEN 2 WHEN 'LEVANTAMIENTO' THEN 3
         WHEN 'DOCUMENTACION' THEN 4 WHEN 'PRUEBAS_CAMPO' THEN 5 WHEN 'INFORME' THEN 6 ELSE 7 END
@@ -538,7 +538,7 @@ def get_auditor_workload(filters: dict[str, Any]) -> list[dict[str, Any]]:
            count(DISTINCT audit_id)::integer AS active_audits,
            count(DISTINCT audit_id) FILTER (WHERE planned_end IS NOT NULL AND planned_end < CURRENT_DATE)::integer AS overdue_audits,
            coalesce(sum(open_high_risk),0)::integer AS open_high_risk,
-           round((avg(greatest(extract(epoch FROM (CURRENT_TIMESTAMP-created_at))/86400.0,0)))::numeric,2) AS average_open_age_days
+           round((avg(greatest(engagement.business_seconds(created_at, CURRENT_TIMESTAMP)/32400.0,0)))::numeric,2) AS average_open_age_days
     FROM auditor_active
     GROUP BY auditor_id, auditor_name
     ORDER BY active_audits DESC, overdue_audits DESC, auditor_name
@@ -552,7 +552,7 @@ def get_auditor_workload(filters: dict[str, Any]) -> list[dict[str, Any]]:
     activity_rows = _mappings(CURRENT_SCOPE_CTE + """, tracked AS (
         SELECT x.user_id,
                sum(x.accumulated_seconds + CASE WHEN x.status='RUNNING' AND x.last_resumed_at IS NOT NULL
-                   THEN greatest(extract(epoch FROM (CURRENT_TIMESTAMP-x.last_resumed_at)),0)::bigint
+                   THEN greatest(engagement.business_seconds(x.last_resumed_at, CURRENT_TIMESTAMP),0)::bigint
                    ELSE 0 END)::bigint AS active_seconds,
                count(*)::integer AS sessions
         FROM analytics.auditor_activity_sessions x
@@ -608,7 +608,7 @@ def get_activity_options(user_id: str) -> dict[str, Any]:
         SELECT x.id::text AS id, x.audit_id::text AS audit_id, a.code AS audit_code,
                x.started_at, x.ended_at, x.status, x.accumulated_seconds::bigint AS accumulated_seconds,
                (x.accumulated_seconds + CASE WHEN x.status='RUNNING' AND x.last_resumed_at IS NOT NULL
-                   THEN greatest(extract(epoch FROM (CURRENT_TIMESTAMP-x.last_resumed_at)),0)::bigint
+                   THEN greatest(engagement.business_seconds(x.last_resumed_at, CURRENT_TIMESTAMP),0)::bigint
                    ELSE 0 END)::bigint AS elapsed_seconds
         FROM analytics.auditor_activity_sessions x
         JOIN engagement.audits a ON a.id=x.audit_id
@@ -630,7 +630,7 @@ def get_current_activity_session(user_id: str) -> dict[str, Any] | None:
                coalesce(nullif(trim(a.phase),''),'SIN_FASE') AS phase,
                x.started_at, x.last_resumed_at, x.status,
                (x.accumulated_seconds + CASE WHEN x.status='RUNNING' AND x.last_resumed_at IS NOT NULL
-                    THEN greatest(extract(epoch FROM (CURRENT_TIMESTAMP-x.last_resumed_at)),0)::bigint ELSE 0 END)::bigint AS elapsed_seconds,
+                    THEN greatest(engagement.business_seconds(x.last_resumed_at, CURRENT_TIMESTAMP),0)::bigint ELSE 0 END)::bigint AS elapsed_seconds,
                x.accumulated_seconds::bigint AS accumulated_seconds
         FROM analytics.auditor_activity_sessions x
         JOIN engagement.audits a ON a.id=x.audit_id
@@ -700,7 +700,7 @@ def transition_activity_session(action: str, user_id: str) -> dict[str, Any]:
     if action == "PAUSE":
         db.session.execute(text("""
             UPDATE analytics.auditor_activity_sessions
-            SET accumulated_seconds=accumulated_seconds+greatest(extract(epoch FROM (CURRENT_TIMESTAMP-last_resumed_at)),0)::bigint,
+            SET accumulated_seconds=accumulated_seconds+greatest(engagement.business_seconds(last_resumed_at, CURRENT_TIMESTAMP),0)::bigint,
                 status='PAUSED',last_resumed_at=NULL,updated_at=CURRENT_TIMESTAMP
             WHERE id=CAST(:id AS uuid)
         """), {"id": current["id"]})
@@ -714,7 +714,7 @@ def transition_activity_session(action: str, user_id: str) -> dict[str, Any]:
         db.session.execute(text("""
             UPDATE analytics.auditor_activity_sessions
             SET accumulated_seconds=accumulated_seconds+CASE WHEN status='RUNNING' AND last_resumed_at IS NOT NULL
-                    THEN greatest(extract(epoch FROM (CURRENT_TIMESTAMP-last_resumed_at)),0)::bigint ELSE 0 END,
+                    THEN greatest(engagement.business_seconds(last_resumed_at, CURRENT_TIMESTAMP),0)::bigint ELSE 0 END,
                 status='STOPPED',last_resumed_at=NULL,ended_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
             WHERE id=CAST(:id AS uuid)
         """), {"id": current["id"]})
@@ -941,7 +941,7 @@ def export_pdf_report(data: dict[str, Any], kpis: list[dict[str, Any]]) -> Bytes
               table(["Fase","Auditorías activas","Vencidas","Promedio horas transcurridas"],phase_rows)]
     work_rows = [[v.get("auditor_name"),v.get("active_audits"),v.get("overdue_audits"),v.get("open_high_risk"),v.get("average_open_age_days"),v.get("tracked_active_hours"),v.get("tracked_sessions")] for v in data.get("workload",[])]
     story += [Paragraph("Carga asignada y tiempo activo registrado por auditores",styles["SicasSection"]),
-              table(["Auditor","Auditorías activas","Vencidas","Brechas alto/crítico abiertas","Edad promedio días","Horas activas registradas","Sesiones"],work_rows)]
+              table(["Auditor","Auditorías activas","Vencidas","Brechas alto/crítico abiertas","Edad promedio días hábiles","Horas hábiles activas registradas","Sesiones"],work_rows)]
     kpi_rows = [[k.get("name"),k.get("metric",{}).get("label"),k.get("actual_value"),k.get("target_value"),k.get("warning_value"),k.get("status_result"),k.get("period_start"),k.get("period_end")] for k in kpis]
     story += [Paragraph("KPI configurables",styles["SicasSection"]),
               table(["KPI","Métrica","Real","Meta","Advertencia","Resultado","Inicio","Fin"],kpi_rows)]
@@ -981,8 +981,8 @@ def render_print_report(data: dict[str, Any], kpis: list[dict[str, Any]]) -> str
         ("Comparación FINANCIERA vs SISTEMAS", _report_table(["Dominio","Auditorías","En curso","Cerradas","Brechas","Abiertas","Críticas","Altas","Ítems calificados","Ítems totales","% calificados"], domain_rows)),
         ("Centro de alertas (hasta 50 principales)", _report_table(["Nivel","Tipo","Auditoría","Dominio","Unidad","Detalle","Vencimiento","Antigüedad días"], alert_rows)),
         ("Calidad e integridad", _report_table(["Tipo","Control","Cantidad","Interpretación"], quality_rows)),
-        ("Flujo de auditoría", _report_table(["Fase","Auditorías activas","Vencidas","Horas transcurridas promedio"], phase_rows)),
-        ("Carga asignada de auditores", _report_table(["Auditor","Auditorías activas","Vencidas","Brechas altas abiertas","Edad promedio (días)"], workload_rows)),
+        ("Flujo de auditoría", _report_table(["Fase","Auditorías activas","Vencidas","Horas hábiles transcurridas promedio"], phase_rows)),
+        ("Carga asignada de auditores", _report_table(["Auditor","Auditorías activas","Vencidas","Brechas altas abiertas","Edad promedio (días hábiles)"], workload_rows)),
         ("KPI y metas", _report_table(["KPI","Métrica","Real","Meta","Advertencia","Resultado","Inicio","Fin"], kpi_rows)),
     ]
     section_html = "".join(f"<section><h2>{html.escape(h)}</h2>{body}</section>" for h,body in sections)
@@ -1101,12 +1101,12 @@ def get_dashboard_data(filters: dict[str, Any]) -> dict[str, Any]:
         SELECT phase,
                CASE
                  WHEN next_at IS NOT NULL
-                   THEN greatest(extract(epoch FROM (next_at - changed_at)) / 3600.0, 0)
+                   THEN greatest(engagement.business_seconds(changed_at, next_at) / 3600.0, 0)
                  WHEN upper(coalesce(status, '')) IN ('CLOSED','COMPLETED','SIGNED','CERRADO','CERRADA')
                       AND pac_sent_at IS NOT NULL
-                   THEN greatest(extract(epoch FROM (pac_sent_at - changed_at)) / 3600.0, 0)
+                   THEN greatest(engagement.business_seconds(changed_at, pac_sent_at) / 3600.0, 0)
                  WHEN upper(coalesce(status, '')) NOT IN ('CLOSED','COMPLETED','SIGNED','CERRADO','CERRADA')
-                   THEN greatest(extract(epoch FROM (CURRENT_TIMESTAMP - changed_at)) / 3600.0, 0)
+                   THEN greatest(engagement.business_seconds(changed_at, CURRENT_TIMESTAMP) / 3600.0, 0)
                  ELSE NULL
                END AS duration_hours
         FROM phase_entries
@@ -1299,12 +1299,12 @@ def metric_value(metric_code: str, filters: dict[str, Any]) -> float | None:
         ), phase_durations AS (
             SELECT CASE
                      WHEN next_at IS NOT NULL
-                       THEN greatest(extract(epoch FROM (next_at - changed_at)) / 3600.0, 0)
+                       THEN greatest(engagement.business_seconds(changed_at, next_at) / 3600.0, 0)
                      WHEN upper(coalesce(status, '')) IN ('CLOSED','COMPLETED','SIGNED','CERRADO','CERRADA')
                           AND pac_sent_at IS NOT NULL
-                       THEN greatest(extract(epoch FROM (pac_sent_at - changed_at)) / 3600.0, 0)
+                       THEN greatest(engagement.business_seconds(changed_at, pac_sent_at) / 3600.0, 0)
                      WHEN upper(coalesce(status, '')) NOT IN ('CLOSED','COMPLETED','SIGNED','CERRADO','CERRADA')
-                       THEN greatest(extract(epoch FROM (CURRENT_TIMESTAMP - changed_at)) / 3600.0, 0)
+                       THEN greatest(engagement.business_seconds(changed_at, CURRENT_TIMESTAMP) / 3600.0, 0)
                      ELSE NULL
                    END AS duration_hours
             FROM phase_entries
@@ -1683,14 +1683,14 @@ def export_workbook(data: dict[str, Any], kpis: list[dict[str, Any]]) -> BytesIO
         ("Auditorías cerradas", s["audits_closed"]), ("Informes pendientes de aprobación", s["pending_approval"]),
         ("Observaciones totales", s["observations_total"]), ("Observaciones abiertas", s["observations_open"]),
         ("Brechas de riesgo alto/crítico", s["high_risk_observations"]),
-        ("Días promedio para cierre", s["avg_closed_audit_days"]), ("Días promedio transcurridos abiertas", s["avg_open_days"]),
+        ("Días hábiles promedio para cierre", s["avg_closed_audit_days"]), ("Días hábiles promedio transcurridos abiertas", s["avg_open_days"]),
         ("Cargas de datos", data["ingestion"]["jobs_total"]), ("Cargas fallidas", data["ingestion"]["jobs_failed"]),
         ("Filas procesadas", data["ingestion"]["rows_processed"]), ("Filas rechazadas", data["ingestion"]["rows_rejected"]),
     ]
     for row in rows: ws.append(list(row))
 
     domain_ws = wb.create_sheet("Comparativo por dominio")
-    domain_ws.append(["Dominio", "Auditorías creadas", "En curso", "Cerradas de la cohorte", "Días promedio al cierre formal",
+    domain_ws.append(["Dominio", "Auditorías creadas", "En curso", "Cerradas de la cohorte", "Días hábiles promedio al cierre formal",
                       "Observaciones creadas", "Observaciones abiertas", "Crítico", "Alto", "Medio", "Bajo",
                       "Sin clasificar", "Otros", "Observaciones sin ítem", "Criterios vinculados a observaciones",
                       "Ítems de cédula", "Ítems con calificación", "% ítems calificados", "% riesgo alto/crítico"])
@@ -1721,7 +1721,7 @@ def export_workbook(data: dict[str, Any], kpis: list[dict[str, Any]]) -> BytesIO
         domain_ws.add_chart(domain_chart, "U2")
 
     units = wb.create_sheet("Comparativo por unidad")
-    units.append(["Unidad", "Código", "Auditorías", "En curso", "Cerradas", "Observaciones", "Alto/crítico", "Observaciones abiertas", "Días promedio al cierre", "% alto/crítico"])
+    units.append(["Unidad", "Código", "Auditorías", "En curso", "Cerradas", "Observaciones", "Alto/crítico", "Observaciones abiertas", "Días hábiles promedio al cierre", "% alto/crítico"])
     for item in data["by_unit"]:
         row = units.max_row + 1
         units.append([_excel_safe_text(item["unit_name"]), _excel_safe_text(item["unit_code"]), item["audits_total"], item["audits_in_progress"], item["audits_closed"], item["observations_total"], item["high_risk_observations"], item["observations_open"], item["avg_closed_audit_days"], f'=IF(F{row}=0,"",G{row}/F{row})'])
@@ -1752,7 +1752,7 @@ def export_workbook(data: dict[str, Any], kpis: list[dict[str, Any]]) -> BytesIO
         unit_risk_ws.add_chart(risk_chart, "J2")
 
     auditor_ws = wb.create_sheet("Comparativo por auditor")
-    auditor_ws.append(["Auditor", "Auditorías asignadas", "Cerradas de la cohorte", "Días promedio al cierre"])
+    auditor_ws.append(["Auditor", "Auditorías asignadas", "Cerradas de la cohorte", "Días hábiles promedio al cierre"])
     for item in data["by_auditor"]:
         auditor_ws.append([_excel_safe_text(item["auditor_name"]), item["audits_total"], item["audits_closed"], item["avg_closed_audit_days"]])
 

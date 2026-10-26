@@ -78,6 +78,10 @@ def create_app(config=None) -> Flask:
         except ValueError:
             g.request_id = str(uuid.uuid4())
 
+    # Horario laboral: fuera de él, la API solo atiende a los roles exentos y a quien tenga horas extras aprobadas.
+    from .modules.schedule.guard import install as install_work_schedule
+    install_work_schedule(app)
+
     @app.after_request
     def _extra_headers(resp):
         # Algunas respuestas de error pueden llegar aquí sin request_id.
