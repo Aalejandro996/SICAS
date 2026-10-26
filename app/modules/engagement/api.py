@@ -1357,13 +1357,17 @@ def get_rep(rid, write=False, final_viewer=False):
             "audit:report_approve" in pset or "audit:sign_contralor" in pset
         ))
     )
+    # audit:read_final solo da acceso a informes aprobados o firmados; en la etapa
+    # CONTRALOR el informe sigue en revisión y solo lo ven Gerencia y Contraloría.
     final_view = (
-        rep["status"] in ("CONTRALOR", "APPROVED", "SIGNED")
-        and (
-            "audit:read_final" in pset
-            or "audit:sign_gerente" in pset
-            or "audit:sign_contralor" in pset
-            or "audit:report_approve" in pset
+        (rep["status"] in ("APPROVED", "SIGNED") and "audit:read_final" in pset)
+        or (
+            rep["status"] in ("CONTRALOR", "APPROVED", "SIGNED")
+            and (
+                "audit:sign_gerente" in pset
+                or "audit:sign_contralor" in pset
+                or "audit:report_approve" in pset
+            )
         )
     )
     if (

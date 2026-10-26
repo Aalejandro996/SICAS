@@ -35,3 +35,13 @@ tmp/
 docs/Informes/
 docs/Cuestionario*.xlsx
 **/~$*
+# Material sensible que no debe viajar en la imagen
+Orden de prioridades.md
+docs/Firmas/
+docs/Firmas.zip
+seed_data/signatures/
+docs/PAC_*.xlsx
+docs/SICAS_AUD-*_sin_conexion.xlsx
+docs/*.docx
+docs/*.pdf
+*.docx

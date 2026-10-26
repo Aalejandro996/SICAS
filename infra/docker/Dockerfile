@@ -7,7 +7,8 @@ RUN useradd --create-home --uid 10001 app \
 WORKDIR /srv
 COPY requirements/base.txt requirements/base.txt
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
-    python -m pip install --retries 10 --timeout 300 -r requirements/base.txt boto3
+    python -m pip install --retries 10 --timeout 300 --upgrade "pip>=26.2" \
+    && python -m pip install --retries 10 --timeout 300 -r requirements/base.txt boto3
 COPY --chown=app:app . .
 RUN mkdir -p /srv/data/engagement \
     && chown -R app:app /srv/data

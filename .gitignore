@@ -56,3 +56,23 @@ logs/
 /docs/Cuestionario*.xlsx
 /tmp/
 ~$*.docx
+
+# Material sensible retirado del repositorio público (2026-10-25): secretos,
+# firmas manuscritas, resultados de auditorías y documentos internos.
+/Orden de prioridades.md
+/docs/Firmas/
+/docs/Firmas.zip
+/seed_data/signatures/
+/docs/PAC_*.xlsx
+/docs/SICAS_AUD-*_sin_conexion.xlsx
+/docs/Informe_Auditores_SICAS_*.docx
+/docs/MANUAL*.pdf
+/INFORME_PRELIMINAR_SICAS.docx
+/resultado_permisos_sicas.txt
+/consulta.sh
+/limpiar.sql
+/README_APPLY.txt
+*.bak
+*.pre-*
+__pycache__/
+*.pyc
