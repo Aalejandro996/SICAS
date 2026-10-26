@@ -3,8 +3,10 @@
   'use strict';
   const S = window.SICAS, { h, can, tbl, fmt } = S;
   const A = '/audits';
-  const LINES = [['AUTO', 'Auto'], ['PATRIMONIAL', 'Patrimonial'], ['PERSONAL', 'Personal'], ['ERP_TI', 'ERP / TI']];
-  const KINDS = [['SUSCRIPCION', 'Suscripción'], ['RECLAMO', 'Reclamo / indemnización'], ['SISTEMAS', 'Auditoría de Sistemas']];
+  const LINES = [['AUTO', 'Auto'], ['PATRIMONIAL', 'Patrimonial'], ['PERSONAL', 'Personal'], ['ERP_TI', 'ERP / TI'], ['GENERAL', 'General']];
+  const KINDS = [['SUSCRIPCION', 'Suscripción'], ['RECLAMO', 'Reclamo / indemnización'], ['SISTEMAS', 'Auditoría de Sistemas'],
+    ['CXP', 'Cuentas por pagar'], ['CXC', 'Cuentas por cobrar'], ['ADMIN', 'Gestión administrativa']];
+  const GENERAL_KINDS = ['CXP', 'CXC', 'ADMIN'];
   const LINE = Object.fromEntries(LINES), KIND = Object.fromEntries(KINDS);
   const PHASES = ['PLANIFICACION', 'TRABAJO_CAMPO', 'INFORME'];
   // Auditoría de Sistemas: 1 Levantamiento, 2 Documentación, 3 Pruebas de campo, 4 Informe.
@@ -32,7 +34,7 @@
   };
   const currentTitle = () => {
     const d = currentDomain();
-    return d === 'SISTEMAS' ? 'Auditoría de Sistemas' : d === 'FINANCIERA' ? 'Auditoría Operativa' : 'Auditorías';
+    return d === 'SISTEMAS' ? 'Auditoría de Sistemas' : 'Auditorías';
   };
 
   // ================================================================== lista, expedientes, unidades, plantillas
@@ -91,7 +93,8 @@
     const sel = h('select', null, open.map((x) => h('option', { value: x.id }, `${x.code} — ${x.unit_name} — ${x.title}`)));
     const mod = h('select', null, h('option', { value: 'REMOTA' }, 'Remota'), h('option', { value: 'PRESENCIAL' }, 'Presencial'));
     const loc = h('input', { placeholder: 'Lugar (obligatorio si es presencial)' });
-    const lines = LINES.filter(([v]) => v !== 'ERP_TI').map(([v, l]) => ({ v, el: h('input', { type: 'checkbox', checked: true }), l }));
+    const lines = LINES.filter(([v]) => !['ERP_TI', 'GENERAL'].includes(v)).map(([v, l]) => ({ v, el: h('input', { type: 'checkbox', checked: true }), l }));
+    const kindSel = h('select', null, Object.entries(cat.audit_kinds || {}).map(([k, v]) => h('option', { value: k }, v.label)));
     const lineBox = h('div');
     const cn = h('input', { placeholder: 'Responsable de la unidad' });
     const cr = h('input', { placeholder: 'Cargo del responsable' });
@@ -102,14 +105,21 @@
       if (system) {
         lineBox.replaceChildren(h('div', { class: 'panel' }, h('b', null, 'Auditoría de Sistemas'), h('p', { class: 'muted' }, 'No se utilizan líneas Auto, Patrimonial o Personal. El alcance queda asociado a la unidad de Sistemas seleccionada y al cuestionario ERP/TI.')));
       } else {
-        lineBox.replaceChildren(h('p', null, 'Líneas en el alcance:'), h('div', { class: 'row' }, lines.map((x) => h('label', null, x.el, ' ', x.l))));
-        lines.forEach((x) => { x.el.checked = true; x.el.disabled = false; });
+        const unitKind = file?.unit_kind;
+        [...kindSel.options].forEach((o) => { o.disabled = !(cat.audit_kinds[o.value]?.units || []).includes(unitKind); });
+        if (kindSel.selectedOptions[0]?.disabled) kindSel.value = [...kindSel.options].find((o) => !o.disabled)?.value || '';
+        const usesLines = (cat.audit_kinds[kindSel.value]?.kinds || []).some((k) => ['SUSCRIPCION', 'RECLAMO'].includes(k));
+        lineBox.replaceChildren(h('label', null, 'Tipo de auditoría', kindSel),
+          usesLines ? h('div', null, h('p', null, 'Líneas en el alcance:'), h('div', { class: 'row' }, lines.map((x) => h('label', null, x.el, ' ', x.l)))) : null);
+        procSel.value = { OPERATIVA: 'O', ESPECIAL: 'E', ADMINISTRATIVA: 'A', FINANCIERA: 'F' }[kindSel.value] || procSel.value;
+        if (kindSel.value === 'ESPECIAL') { planSel.value = 'E'; freqSel.value = 'E'; }
       }
       cn.value = file?.responsible_name || '';
       cr.value = file?.responsible_role || '';
       scopeHint.textContent = system ? 'El cuestionario ERP/TI se prepara automáticamente con los 81 controles oficiales. Puede llenarlo manualmente o cargar el Excel oficial.' : 'Seleccione las líneas que forman parte del alcance.';
     };
     sel.addEventListener('change', sync);
+    kindSel.addEventListener('change', sync);
     sync();
     const ta = (ph) => h('textarea', { placeholder: ph });
     const obj = ta('Objetivos de la auditoría'), scope = ta('Alcance'), proc = ta('Procedimientos / metodología (opcional)');
@@ -129,7 +139,7 @@
       const file = open.find((x) => x.id === sel.value),
         system = file?.audit_domain === 'SISTEMAS' || can('audit:systems_read') || can('audit:systems_execute') || can('audit:systems_manage') || can('audit:systems_review');
       const body = { file_id: sel.value, modality: mod.value, location: loc.value,
-        lines: system ? [] : lines.filter((x) => x.el.checked).map((x) => x.v),
+        lines: system ? [] : lines.filter((x) => x.el.checked).map((x) => x.v), audit_kind: system ? undefined : kindSel.value,
         objectives: obj.value, scope: scope.value, procedures: proc.value, planned_start: ps.value, planned_end: pe.value,
         contact_name: cn.value, contact_role: cr.value, member_ids: members.filter((x) => x.el.checked).map((x) => x.a.id),
         plan_type: planSel.value, process: procSel.value, frequency: freqSel.value, report_company: repCoSel.value };
@@ -157,6 +167,27 @@
     const m = dlg('Criterios de las cédulas', h('div', null, h('p', { class: 'muted' }, 'Son criterios base genéricos: ajústelos a las cédulas oficiales de la empresa. Cada cédula guarda una copia de los criterios con que se creó, así que cambiarlos no altera auditorías ya iniciadas.'),
       tbl(['Tipo', 'Línea', 'Criterios', 'Versión', ''], d.templates.map((t) => [KIND[t.kind], LINE[t.line], t.criteria.length, t.customized ? 'v' + t.version : 'base',
         can('audit:template_manage') ? h('button', { class: 'sm', onclick: () => editTemplate(t, m) }, 'Editar') : h('button', { class: 'sm secondary', onclick: () => viewTemplate(t) }, 'Ver')]))));
+    m.footer.append(h('button', { class: 'secondary', onclick: regulatoryCatalog }, 'Normativa SUDEASEG'), closeBtn(m));
+  }
+  async function regulatoryCatalog() {
+    const d = await S.get(A + '/regulatory-catalog');
+    if (!d) return;
+    const edit = can('audit:template_manage');
+    const m = dlg('Catálogo normativo SUDEASEG', h('div', null,
+      h('p', { class: 'muted' }, 'El motor de reglas toma de aquí el criterio, la causa, el efecto y la recomendación de cada hallazgo de las auditorías operativas, especiales, administrativas y financieras. Los instrumentos se citan sin número de artículo: agréguelos al editar el criterio.'),
+      tbl(['Tema', 'Criterio normativo', 'Palabras clave', ''], d.topics.map((t) => [t.label, t.criteria, (t.keywords || []).join(', ') || '—',
+        edit ? h('button', { class: 'sm', onclick: async () => {
+          const v = await S.ask('Tema: ' + t.label, [
+            { name: 'criteria', label: 'Criterio (normativa aplicable)', type: 'textarea', value: t.criteria, required: true },
+            { name: 'cause', label: 'Causa', type: 'textarea', value: t.cause, required: true },
+            { name: 'effect', label: 'Efecto / riesgo', type: 'textarea', value: t.effect, required: true },
+            { name: 'recommendation', label: 'Recomendación', type: 'textarea', value: t.recommendation, required: true },
+            { name: 'keywords', label: 'Palabras clave (separadas por coma)', value: (t.keywords || []).join(', ') }], 'Guardar',
+            'Los cambios aplican a los hallazgos que se generen desde ahora; los ya creados no cambian.');
+          if (!v) return;
+          v.keywords = String(v.keywords || '').split(',').map((x) => x.trim()).filter(Boolean);
+          if (await S.send(`${A}/regulatory-catalog/${t.topic}`, 'PUT', v)) { S.say('Tema actualizado.', true); m.close(); regulatoryCatalog(); }
+        } }, 'Editar') : null]))));
     m.footer.append(closeBtn(m));
   }
   function viewTemplate(t) { const m = dlg(`${KIND[t.kind]} — ${LINE[t.line]}`, tbl(['Código', 'Peso', 'Criterio'], t.criteria.map((c) => [c.code, c.weight, c.text]))); m.footer.append(closeBtn(m)); }
@@ -246,7 +277,9 @@
         h('div', { class: 'audit-hero-metric' }, h('span', null, 'Excepciones'), h('strong', null, String(exceptions))),
         h('div', { class: 'audit-hero-metric' }, h('span', null, 'Cédulas'), h('strong', null, String(sheets.length)))),
       h('div', { class: 'audit-hero-foot' },
-        h('span', { class: 'muted' }, `Escala: Excelente > ${excellent}; Satisfactorio 70–90; Aceptable 60–69; Necesita mejoras 50–59; No satisfactoria ≤ 49`),
+        h('span', { class: 'muted' }, d.thresholds?.scale === 'TRES_NIVELES'
+          ? `Escala: Excelente > ${d.thresholds.excelente}%; Aceptable > ${d.thresholds.aceptable}% y ≤ ${d.thresholds.excelente}%; No satisfactoria ≤ ${d.thresholds.aceptable}%`
+          : `Escala: Excelente > ${excellent}; Satisfactorio 70–90; Aceptable 60–69; Necesita mejoras 50–59; No satisfactoria ≤ 49`),
         a.manual_reason ? h('span', { class: 'audit-manual-reason' }, h('b', null, 'Justificación del ajuste: '), a.manual_reason) : null,
         can('audit:rate') && ctx.canWrite && workPhase(a)
           ? h('button', { class: 'sm', onclick: () => manual('/audits/' + a.id + '/rating', 'Calificación global', a.manual_score) }, 'Ajustar calificación global') : null));
@@ -294,6 +327,15 @@
         actions.childNodes.length ? actions : null);
     }
 
+    // ---- auditorías no de Sistemas: hallazgos con normativa SUDEASEG
+    if (!isSystems(a) && ctx.canWrite && ['TRABAJO_CAMPO', 'INFORME'].includes(a.phase)) {
+      phasesPanel = section('Hallazgos de la evaluación', 'Los criterios incumplidos de la muestra se agrupan por tema y se redactan con la normativa SUDEASEG (catálogo editable por Contraloría).',
+        h('div', { class: 'row' }, h('button', { class: 'sm', onclick: async () => {
+          const r = await S.send(`${A}/${a.id}/auto-observations`, 'POST', {});
+          if (r) { S.say(r.note, true); reload(); }
+        } }, 'Generar hallazgos de los incumplimientos')));
+    }
+
     // ---- indicadores por cédula (los mismos del cuestionario y del informe)
     const indicatorCards = (indicators.worksheets || []).map((w) => h('div', { class: 'audit-indicator-block' },
       h('div', { class: 'audit-indicator-head' },
@@ -308,6 +350,7 @@
     const dataPanel = section('Datos de la auditoría', null,
       h('div', { class: 'kv audit-summary-kv' },
         h('b', null, 'Expediente'), `${a.file_code} — ${a.title || ''}`,
+        h('b', null, 'Tipo de auditoría'), isSystems(a) ? 'Auditoría de Sistemas' : (d.audit_kinds?.[a.audit_kind]?.label || a.audit_kind || '—'),
         h('b', null, 'Codificación de informes'), `${a.plan_type}-${a.process}-${a.frequency}-${a.report_company}-NNN-AAAA`,
         h('b', null, 'Unidad'), a.unit_name || '—',
         h('b', null, 'Objetivos'), a.objectives || '—',
@@ -319,7 +362,7 @@
         h('b', null, 'Colaborador en la unidad'), (a.contact_name || '—') + (a.contact_role ? ' · ' + a.contact_role : ''),
         h('b', null, 'Período revisado'), `${S.date(a.period_from) || '—'} → ${S.date(a.period_to) || '—'}`,
         h('b', null, 'Fechas previstas'), `${S.date(a.planned_start) || '—'} → ${S.date(a.planned_end) || '—'}`),
-      ctx.canWrite ? h('div', { class: 'row' }, h('button', { class: 'sm', onclick: editAudit }, 'Editar datos de la auditoría')) : null);
+      d.can_edit_data ? h('div', { class: 'row' }, h('button', { class: 'sm', onclick: editAudit }, 'Editar datos de la auditoría')) : null);
     const teamPanel = section('Equipo auditor', null,
       team.length ? h('div', { class: 'audit-team-list' }, team.map((t) => h('div', { class: 'audit-team-member' },
         h('div', { class: 'audit-team-initials' }, t.initials || '—'),
@@ -414,10 +457,14 @@
   }
   async function addSheet() {
     const system = ctx.d.audit.audit_domain === 'SISTEMAS';
-    const kinds = system ? [['SISTEMAS', 'Auditoría de Sistemas']] : KINDS.filter(([k]) => k !== 'SISTEMAS');
+    const allowed = ctx.d.audit_kinds?.[ctx.d.audit.audit_kind]?.kinds || [];
+    const kinds = system ? [['SISTEMAS', 'Auditoría de Sistemas']] : KINDS.filter(([k]) => allowed.includes(k));
     const lines = system ? [['ERP_TI', 'ERP / TI']] : LINES.filter(([l]) => ctx.d.audit.lines.includes(l) && l !== 'ERP_TI');
-    const v = await S.ask('Agregar cédula', [{ name: 'kind', label: 'Tipo', type: 'select', options: kinds }, { name: 'line', label: 'Línea', type: 'select', options: lines }], 'Crear');
-    if (v && await S.send(`${A}/${ctx.aid}/worksheets`, 'POST', v)) { S.say('Cédula creada.', true); reload(); }
+    const v = await S.ask('Agregar cédula', [{ name: 'kind', label: 'Cédula', type: 'select', options: kinds },
+      { name: 'line', label: 'Línea (Cuentas por pagar, por cobrar y Gestión administrativa usan General)', type: 'select', options: lines }], 'Crear');
+    if (!v) return;
+    if (!system) v.line = GENERAL_KINDS.includes(v.kind) ? 'GENERAL' : (v.line === 'GENERAL' ? (lines.find(([l]) => l !== 'GENERAL') || [''])[0] : v.line);
+    if (await S.send(`${A}/${ctx.aid}/worksheets`, 'POST', v)) { S.say('Cédula creada.', true); reload(); }
   }
 
   async function sheetView(el, wid) {

@@ -50,7 +50,7 @@
   function enter(user) {
     S.user = user;
     S.perms = new Set(user.permissions || []);
-    $('whoami').textContent = `${user.username} (${(user.roles || []).join(', ') || 'sin roles'})`;
+    $('whoami').textContent = `${user.username} (${(user.roles || []).map(S.roleLabel).join(', ') || 'sin roles'})`;
     show('app'); S.say('');
     buildNav(); navigate();
     if (typeof S.refreshNotificationCount === 'function') {
@@ -157,7 +157,7 @@
       S.h('p', null, 'Configuración de la cuenta y seguridad.'),
       S.h('dl', null,
         S.h('dt', null, 'Usuario'), S.h('dd', null, user.username || '—'),
-        S.h('dt', null, 'Roles'), S.h('dd', null, (user.roles || []).join(', ') || 'Sin roles asignados'),
+        S.h('dt', null, 'Roles'), S.h('dd', null, (user.roles || []).map(S.roleLabel).join(', ') || 'Sin roles asignados'),
         S.h('dt', null, 'Sesión'), S.h('dd', null, 'Autenticación multifactor (MFA) completada')) ,
       S.h('p', { class: 'muted' }, 'Los cambios de contraseña y la recuperación de MFA continúan sujetos a los flujos de seguridad existentes.'));
     const modal = S.modal('Configuración', content);

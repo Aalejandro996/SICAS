@@ -36,6 +36,9 @@ DEFAULT_THRESHOLDS = {
     "aceptable": 60,
     "mejora": 50,
 }
+# Escala de las auditorías operativas, especiales, administrativas y financieras (3 niveles):
+#   No satisfactoria <= 33,3 · Aceptable > 33,3 y <= 50 · Excelente > 50.
+AUDIT_THRESHOLDS = {"scale": "TRES_NIVELES", "excelente": 50, "aceptable": 33.3}
 
 RATING_LABEL = {
     "EXCELENTE": "Excelente",
@@ -222,6 +225,13 @@ def rating(score: float | None, thresholds: dict | None = None) -> str:
         return "SIN_CALIFICAR"
 
     value = float(score)
+
+    if t.get("scale") == "TRES_NIVELES":
+        if value > t["excelente"]:
+            return "EXCELENTE"
+        if value > t["aceptable"]:
+            return "ACEPTABLE"
+        return "NO_SATISFACTORIA"
 
     # Excelente: estrictamente mayor que 90.
     if value > t["excelente"]:

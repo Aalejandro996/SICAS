@@ -85,12 +85,21 @@ def file_fields(d: dict, domain: str, unit_kind: str | None = None) -> dict:
     return {"audit_type": audit_type, "company": _pick(d.get("company"), COMPANIES, "Compañía", "SC")}
 
 
-def report_fields(d: dict, domain: str) -> dict:
-    base = defaults_for_domain(domain)
+# Proceso, siglas y tipo por defecto según el tipo de auditoría.
+KIND_DEFAULTS = {
+    "OPERATIVA": {"process": "O"},
+    "ESPECIAL": {"process": "E", "plan_type": "E", "frequency": "E"},
+    "ADMINISTRATIVA": {"process": "A"},
+    "FINANCIERA": {"process": "F"},
+}
+
+
+def report_fields(d: dict, domain: str, audit_kind: str | None = None) -> dict:
+    base = {**defaults_for_domain(domain), **KIND_DEFAULTS.get(str(audit_kind or "").upper(), {})}
     return {
-        "plan_type": _pick(d.get("plan_type"), PLAN_TYPES, "Siglas (planificada/especial)", "P"),
+        "plan_type": _pick(d.get("plan_type"), PLAN_TYPES, "Siglas (planificada/especial)", base.get("plan_type", "P")),
         "process": _pick(d.get("process"), PROCESSES, "Proceso", base["process"]),
-        "frequency": _pick(d.get("frequency"), FREQUENCIES, "Tipo (frecuencia)", "G"),
+        "frequency": _pick(d.get("frequency"), FREQUENCIES, "Tipo (frecuencia)", base.get("frequency", "G")),
         "report_company": _pick(d.get("report_company"), REPORT_COMPANIES, "Compañía del informe", "SC"),
     }
 

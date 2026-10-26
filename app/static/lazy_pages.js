@@ -41,7 +41,7 @@
     },
 
     audit: {
-      src: '/static/pages_audit.js?v=20261026-codes2',
+      src: '/static/pages_audit.js?v=20261026-kinds1',
       pages: [
         {
           id: 'audits',

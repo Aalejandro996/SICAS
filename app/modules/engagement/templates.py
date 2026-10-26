@@ -5,8 +5,19 @@ Cada criterio: code, text, weight (1 = normal, 2 = importante, 3 = crítico).
 """
 from __future__ import annotations
 
-KINDS = {"SUSCRIPCION": "Suscripción", "RECLAMO": "Reclamo / indemnización", "SISTEMAS": "Auditoría de Sistemas"}
-LINES = {"AUTO": "Auto", "PATRIMONIAL": "Patrimonial", "PERSONAL": "Personal", "ERP_TI": "ERP / TI"}
+KINDS = {"SUSCRIPCION": "Suscripción", "RECLAMO": "Reclamo / indemnización", "SISTEMAS": "Auditoría de Sistemas",
+         "CXP": "Cuentas por pagar", "CXC": "Cuentas por cobrar", "ADMIN": "Gestión administrativa"}
+LINES = {"AUTO": "Auto", "PATRIMONIAL": "Patrimonial", "PERSONAL": "Personal", "ERP_TI": "ERP / TI", "GENERAL": "General"}
+
+# Tipos de auditoría (no Sistemas): a qué unidades se aplican y qué cédulas pueden usar.
+AUDIT_KINDS = {
+    "OPERATIVA": {"label": "Operativa (sucursales)", "units": ("SUCURSAL",), "kinds": ("SUSCRIPCION", "RECLAMO")},
+    "ESPECIAL": {"label": "Especial (unidades administrativas y/o sucursales)", "units": ("SUCURSAL", "UNIDAD"),
+                 "kinds": ("SUSCRIPCION", "RECLAMO", "CXP", "CXC", "ADMIN")},
+    "ADMINISTRATIVA": {"label": "Administrativa (unidades administrativas)", "units": ("UNIDAD",), "kinds": ("ADMIN",)},
+    "FINANCIERA": {"label": "Financiera (cuentas por pagar y por cobrar)", "units": ("SUCURSAL", "UNIDAD"), "kinds": ("CXP", "CXC")},
+}
+GENERAL_KINDS = ("CXP", "CXC", "ADMIN")   # cédulas sin línea de negocio (línea GENERAL)
 TEMPLATE_KEYS = (("SUSCRIPCION", "AUTO"), ("SUSCRIPCION", "PATRIMONIAL"), ("SUSCRIPCION", "PERSONAL"), ("RECLAMO", "AUTO"), ("RECLAMO", "PATRIMONIAL"), ("RECLAMO", "PERSONAL"), ("SISTEMAS", "ERP_TI"))
 RESULTS = ("CUMPLE", "PARCIAL", "NO_CUMPLE", "NO_APLICA", "EXCEPCION")
 RESULT_LABEL = {"CUMPLE": "Cumple", "PARCIAL": "Cumple parcialmente", "NO_CUMPLE": "No cumple",

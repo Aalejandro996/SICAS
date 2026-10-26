@@ -23,8 +23,8 @@ ROLES = {
     CONTRALOR: "Aprueba y firma dictámenes, cierra hallazgos, configura reglas y supervisa el audit trail.",
     SYS_ADMIN: "Administra plataforma, usuarios, respaldos y salud. Sin acceso a datos de negocio.",
     GERENCIA: "Consulta indicadores ejecutivos e informes aprobados y firmados (solo lectura).",
-    AUDITOR_FINANCIERO: "Ejecuta auditorías financieras, sus cédulas, evidencias e informes en borrador, con alcance exclusivo financiero.",
-    JEFE_AUDITORIA_FINANCIERA: "Supervisa y coordina auditorías financieras, con alcance exclusivo financiero; no aprueba ni firma como Contralor o Gerente.",
+    AUDITOR_FINANCIERO: "Auditor: ejecuta auditorías operativas, especiales, administrativas y financieras, sus cédulas, evidencias e informes en borrador.",
+    JEFE_AUDITORIA_FINANCIERA: "Jefe de Auditoría: supervisa y coordina las auditorías operativas, especiales, administrativas y financieras; no aprueba ni firma como Contralor o Gerente.",
     AUDITOR_SISTEMAS: "Ejecuta auditorías de sistemas/TI, sus evidencias e informes en borrador, con alcance exclusivo de sistemas.",
     JEFE_AUDITORIA_SISTEMAS: "Supervisa y coordina auditorías de sistemas/TI, con alcance exclusivo de sistemas; no aprueba ni firma como Contralor o Gerente.",
 }
@@ -35,8 +35,8 @@ ROLE_LABELS = {
     CONTRALOR: "Contralor",
     SYS_ADMIN: "Administrador del sistema",
     GERENCIA: "Gerencia",
-    AUDITOR_FINANCIERO: "Auditor Financiero",
-    JEFE_AUDITORIA_FINANCIERA: "Jefe de Auditoría Financiera",
+    AUDITOR_FINANCIERO: "Auditor",
+    JEFE_AUDITORIA_FINANCIERA: "Jefe de Auditoría",
     AUDITOR_SISTEMAS: "Auditor de Sistemas",
     JEFE_AUDITORIA_SISTEMAS: "Jefe de Auditoría de Sistemas",
 }

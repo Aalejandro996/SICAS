@@ -15,12 +15,12 @@ from app.core.security.rbac import permission_required
 from . import assemble as asm
 from . import codification
 from . import score_snapshots
-from . import evidence_rules, observation_rules, offline, phase_documents, scoring, storage, system_questionnaire
+from . import evidence_rules, observation_rules, offline, phase_documents, regulatory_rules, scoring, storage, system_questionnaire
 from . import repositories as repo
 from . import workflow as wf
 from .pac import build_pac
 from .report_builder import SIG_BOX_CONTRALOR, SIG_BOX_GERENTE, body_hash, build_pdf, initials_of
-from .templates import BRANCH_TO_LINE, KINDS, LINES, TEMPLATE_KEYS, branches_for_line, validate_criteria
+from .templates import AUDIT_KINDS, BRANCH_TO_LINE, GENERAL_KINDS, KINDS, LINES, TEMPLATE_KEYS, branches_for_line, validate_criteria
 from app.modules.notifications.service import (
     notify_report_submitted, notify_report_jefe_approved, notify_report_returned, notify_report_signed,
 )
@@ -154,7 +154,18 @@ def final_locked(audit_id) -> bool:
     return not (latest["status"] == "SIGNED" and repo.reopening(latest["id"]))
 
 
-def thresholds():
+def can_edit_data(a) -> bool:
+    """Datos generales: los edita el equipo o el Jefe de Auditoría del dominio, con la auditoría en curso y sin bloqueo."""
+    if a.get("status") != "IN_PROGRESS" or final_locked(a["id"]):
+        return False
+    jefe = "audit:report_approve_jefe" in perms() and can_review_domain(a.get("audit_domain", "GENERAL"))
+    return repo.is_member(a["id"], me()) or jefe
+
+
+def thresholds(a=None):
+    """Escala de calificación: Sistemas usa la parametrizada (5 niveles); el resto de auditorías, la de 3 niveles."""
+    if a is not None and not is_systems(a):
+        return dict(scoring.AUDIT_THRESHOLDS)
     return repo.thresholds() or scoring.DEFAULT_THRESHOLDS
 
 
@@ -169,7 +180,7 @@ def _phase_snapshot(a, trigger_action, report=None, reason=None):
         "report_id": str(report["id"]) if report else None,
         "report_version": report.get("version") if report else None,
         "scorecard": score_snapshots.build_scorecard(
-            a, repo.worksheets_with_items(a["id"]), thresholds(),
+            a, repo.worksheets_with_items(a["id"]), thresholds(a),
             evidence=repo.evidence(a["id"]), reason=reason,
         ),
     }
@@ -198,7 +209,8 @@ def _change(a, entity_type, entity_id, action, changes=None, reason=None, report
 @permission_required("audit:read", "audit:manage")
 def codification_catalogs():
     """Catálogos de la codificación institucional para los formularios."""
-    return jsonify(codification.catalogs())
+    return jsonify({**codification.catalogs(),
+                    "audit_kinds": {k: {"label": v["label"], "units": v["units"], "kinds": v["kinds"]} for k, v in AUDIT_KINDS.items()}})
 
 
 @bp.get("/units")
@@ -360,14 +372,30 @@ def new_audit():
             contact_name = str(d.get("contact_name") or f.get("responsible_name") or "").strip()
             contact_role = str(d.get("contact_role") or f.get("responsible_role") or "").strip()
         else:
-            lines = [l for l in d.get("lines", []) if l in LINES and l != "ERP_TI"]
+            unit_kind = str(f.get("unit_kind") or "").upper()
+            audit_kind = str(d.get("audit_kind") or ("OPERATIVA" if unit_kind == "SUCURSAL" else "ADMINISTRATIVA")).upper()
+            rules = AUDIT_KINDS.get(audit_kind)
+            if rules is None:
+                return err("Tipo de auditoría: OPERATIVA, ESPECIAL, ADMINISTRATIVA o FINANCIERA")
+            if unit_kind not in rules["units"]:
+                return err(f"Una auditoría {rules['label'].split(' (')[0].lower()} no se aplica a una "
+                           f"{'sucursal' if unit_kind == 'SUCURSAL' else 'unidad administrativa'}")
+            lines = [l for l in d.get("lines", []) if l in ("AUTO", "PATRIMONIAL", "PERSONAL")]
+            if set(rules["kinds"]) & {"SUSCRIPCION", "RECLAMO"} and audit_kind == "OPERATIVA" and not lines:
+                return err("Seleccione al menos una línea (Auto, Patrimonial o Personal)")
+            if not set(rules["kinds"]) & {"SUSCRIPCION", "RECLAMO"}:
+                lines = []
+            if set(rules["kinds"]) & set(GENERAL_KINDS):
+                lines.append("GENERAL")
             if not lines:
                 return err("Seleccione al menos una línea (Auto, Patrimonial o Personal)")
-            contact_name = txt(d, "contact_name", 0, 120)
-            contact_role = txt(d, "contact_role", 0, 120)
+            d["audit_kind"] = audit_kind
+            contact_name = txt(d, "contact_name", 0, 120) or ""
+            contact_role = txt(d, "contact_role", 0, 120) or ""
         if len(contact_name) > 120 or len(contact_role) > 120:
             return err("Responsable de la unidad y cargo: máximo 120 caracteres")
-        data = {"modality": modality, "audit_domain": domain, "lines": sorted(set(lines)), "objectives": txt(d, "objectives", 10, 3000), "scope": txt(d, "scope", 10, 3000),
+        data = {"modality": modality, "audit_domain": domain, "lines": sorted(set(lines)),
+                "audit_kind": "SISTEMAS" if domain == "SISTEMAS" else d["audit_kind"], "objectives": txt(d, "objectives", 10, 3000), "scope": txt(d, "scope", 10, 3000),
                 "procedures": txt(d, "procedures", 0, 3000), "location": txt(d, "location", 0, 200),
                 "contact_name": contact_name or None, "contact_role": contact_role or None,
                 "planned_start": parse_date(d.get("planned_start"), "Inicio previsto"), "planned_end": parse_date(d.get("planned_end"), "Fin previsto")}
@@ -387,7 +415,7 @@ def new_audit():
         return err("Usted debe formar parte del equipo que crea la auditoría")
     team = [{"user_id": i, "role": "LIDER" if i == leader else "AUDITOR", "initials": initials_of(eligible[i]["name"])} for i in ids]
     try:
-        data.update(codification.report_fields(d, domain))
+        data.update(codification.report_fields(d, domain, data.get("audit_kind")))
     except codification.CodeError as ex:
         return err(str(ex))
     aid, code = repo.create_audit(f["id"], data, team, me())
@@ -411,7 +439,7 @@ def overall_for(a, pairs, th):
 
 def audit_overview(a):
     sheets = repo.worksheets_with_items(a["id"])
-    th = thresholds()
+    th = thresholds(a)
     pairs = asm.summarize_sheets(sheets, th)
     overall = overall_for(a, pairs, th)
     reps = repo.reports(a["id"])
@@ -425,6 +453,8 @@ def audit_overview(a):
                         "statistics": scoring.system_statistics(ws["criteria"], ws["items"]) if ws["kind"] == "SISTEMAS" else None} for ws, s in pairs],
             "observations": len(obs), "evidence": len(repo.evidence(a["id"])), "reports": reps,
             "locked": final_locked(a["id"]),
+            "can_edit_data": "audit:manage" in perms() and can_edit_data(a),
+            "audit_kinds": {k: {"label": v["label"], "kinds": v["kinds"]} for k, v in AUDIT_KINDS.items()},
             "is_member": repo.is_member(a["id"], me())}
 
 
@@ -438,10 +468,12 @@ def audit_detail(aid):
 @bp.put("/<uuid:aid>")
 @permission_required("audit:manage")
 def edit_audit(aid):
-    """Edición de los datos generales por el equipo auditor, con motivo y registro en la bitácora."""
-    a, e = load(aid, write=True)
+    """Edición de los datos generales por el equipo auditor o el Jefe de Auditoría del dominio, con motivo y bitácora."""
+    a, e = load(aid)
     if e:
         return e
+    if not can_edit_data(a):
+        return err("Solo el equipo auditor o el Jefe de Auditoría pueden modificar los datos de esta auditoría", 403)
     d = request.get_json(silent=True) or {}
     try:
         upd = {}
@@ -641,6 +673,13 @@ def new_worksheet(aid):
             "Tipo o línea inválidos"
         )
 
+    if not is_systems(a):
+        allowed = AUDIT_KINDS.get(a.get("audit_kind") or "", {}).get("kinds", ())
+        if kind not in allowed:
+            return err("Esa cédula no corresponde a este tipo de auditoría")
+        if (kind in GENERAL_KINDS) != (line == "GENERAL"):
+            return err("Línea inválida para esa cédula")
+
     if line not in a["lines"]:
         return err(
             "La línea no pertenece al alcance de la auditoría"
@@ -786,7 +825,7 @@ def worksheet(wid):
     for it in ws["items"]:
         it["auto_score"] = scoring.item_score(ws["criteria"], it["results"])
         it["final_score"] = scoring.final_score(it["auto_score"], it["manual_score"])
-    s = scoring.worksheet_summary(ws["criteria"], ws["items"], ws["manual_score"], thresholds())
+    s = scoring.worksheet_summary(ws["criteria"], ws["items"], ws["manual_score"], thresholds(a))
     stats = scoring.system_statistics(ws["criteria"], ws["items"]) if ws["kind"] == "SISTEMAS" else None
     return jsonify(worksheet=ws, summary=s.__dict__, statistics=stats, audit={"id": a["id"], "code": a["code"], "phase": a["phase"], "status": a["status"]},
                    editable=repo.is_member(a["id"], me()) and a["status"] == "IN_PROGRESS" and a["phase"] in phase_group(a, "ITEMS")
@@ -1188,6 +1227,75 @@ def auto_observations(wid):
     n = _auto_observations(a, ws)
     return jsonify(created=n, note=f"Se crearon {n} observación(es) agrupadas por dominio. Revíselas y ajústelas antes del informe." if n
                    else "No hay brechas nuevas ni observaciones automáticas por consolidar.")
+
+
+@bp.post("/<uuid:aid>/auto-observations")
+@permission_required("audit:manage")
+def audit_auto_observations(aid):
+    """Hallazgos automáticos de las auditorías no de Sistemas, con criterios normativos SUDEASEG.
+
+    Recorre las cédulas de la auditoría, agrupa los criterios incumplidos de la muestra por tema
+    normativo y crea un hallazgo por cédula y tema que todavía no tenga su observación automática.
+    """
+    a, e = load(aid, write=True, phases="WORK")
+    if e:
+        return e
+    if is_systems(a):
+        return err("En Auditoría de Sistemas use la generación desde la cédula", 400)
+    catalog = repo.regulatory_catalog()
+    if not catalog:
+        return err("El catálogo normativo no está configurado", 409)
+    existing = repo.active_rule_keys(a["id"])
+    drafts = [o for ws in repo.worksheets_with_items(a["id"]) for o in regulatory_rules.findings(ws, catalog)
+              if o["rule_key"] not in existing]
+    if not drafts:
+        return jsonify(created=0, note="No hay incumplimientos nuevos sin hallazgo.")
+    try:
+        for o in drafts:
+            fields = {k: o[k] for k in ("title", "condition", "criteria", "cause", "effect", "recommendation", "risk", "rule_key")}
+            fields.update(item_id=o["item_id"], covered_items=o["covered_items"])
+            _change(a, "observation", None, "OBSERVATION_AUTO_CREATED",
+                    {"criteria": o["controls"], "topic": o["topic"], "risk": o["risk"]},
+                    reason="Redactada por el motor de reglas (normativa SUDEASEG) a partir de los incumplimientos de la cédula")
+            repo.add_observation(a["id"], fields, me(), origin="AUTO", commit=False)
+        repo.db.session.commit()
+    except Exception:
+        repo.db.session.rollback()
+        raise
+    log("OBSERVATIONS_AUTO_CREATED", entity_type="audit", entity_id=a["id"], after_data={"creadas": len(drafts)}, request_id=g.request_id)
+    return jsonify(created=len(drafts), note=f"Se crearon {len(drafts)} hallazgo(s). Revíselos y ajústelos antes del informe.")
+
+
+@bp.get("/regulatory-catalog")
+@permission_required("audit:read", "audit:template_manage")
+def regulatory_catalog():
+    return jsonify(topics=repo.regulatory_catalog())
+
+
+@bp.put("/regulatory-catalog/<topic>")
+@permission_required("audit:template_manage", step_up=True)
+def update_regulatory_catalog(topic):
+    """Contraloría ajusta los textos normativos (y puede agregar artículos) de un tema del catálogo."""
+    d = request.get_json(silent=True) or {}
+    try:
+        upd = {k: txt(d, k, 10, 3000) for k in ("criteria", "cause", "effect", "recommendation") if k in d}
+        if "label" in d:
+            upd["label"] = txt(d, "label", 3, 120)
+        if "keywords" in d:
+            kws = [str(k).strip().lower()[:60] for k in (d.get("keywords") or []) if str(k).strip()]
+            if len(kws) > 60:
+                raise ValueError("Máximo 60 palabras clave")
+            upd["keywords"] = kws
+    except ValueError as ex:
+        return err(str(ex))
+    if not upd:
+        return err("Nada que actualizar")
+    before = next((t for t in repo.regulatory_catalog() if t["topic"] == topic), None)
+    if before is None or not repo.update_regulatory_topic(topic, upd, me()):
+        return err("Tema no encontrado", 404)
+    log("REGULATORY_CATALOG_UPDATED", entity_type="regulatory_topic", entity_id=topic,
+        before_data={k: before.get(k) for k in upd}, after_data=upd, request_id=g.request_id)
+    return jsonify(status="OK")
 
 
 def _systems_document(aid, kind):
@@ -1692,7 +1800,7 @@ def _make_body(a, kind, version, conclusion, revision=1, report_code=None):
         kind=kind, audit=a, file={"code": a["file_code"], "title": a["title"], "period_from": a["period_from"], "period_to": a["period_to"]},
         unit={"code": a["unit_code"], "name": a["unit_name"], "kind": a["unit_kind"]}, team=team,
         worksheets=repo.worksheets_with_items(a["id"]), observations=repo.observations(a["id"]), evidence=repo.evidence(a["id"]),
-        thresholds=thresholds(), company=repo.company() or current_app.config["COMPANY_NAME"], version=version, today=date.today(), conclusion=conclusion,
+        thresholds=thresholds(a), company=repo.company() or current_app.config["COMPANY_NAME"], version=version, today=date.today(), conclusion=conclusion,
         history=history, revision=revision, overall_for=lambda pairs, th: overall_for(a, pairs, th), report_code=report_code)
 
 

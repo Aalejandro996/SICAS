@@ -149,7 +149,7 @@ def get_file(file_id):
 
 
 # ------------------------------------------------------------------ auditorías
-AUDIT_SQL = ("SELECT a.id::text, a.code, a.legacy_code, a.plan_type, a.process, a.frequency, a.report_company, a.file_id::text, a.modality, a.phase, a.status, a.audit_domain, a.objectives, a.scope, a.procedures, a.lines, "
+AUDIT_SQL = ("SELECT a.id::text, a.code, a.legacy_code, a.audit_kind, a.plan_type, a.process, a.frequency, a.report_company, a.file_id::text, a.modality, a.phase, a.status, a.audit_domain, a.objectives, a.scope, a.procedures, a.lines, "
              "a.planned_start, a.planned_end, a.location, a.contact_name, a.contact_role, a.manual_score, a.manual_reason, a.manual_at, "
              "a.pac_sent_at, a.pac_sent_to, a.created_at, f.code AS file_code, f.audit_type, f.company, f.title, f.period_from, f.period_to, "
              "u.code AS unit_code, u.name AS unit_name, u.kind AS unit_kind, u.audit_domain AS unit_audit_domain, u.responsible_name, u.responsible_role "
@@ -221,11 +221,12 @@ def create_audit(file_id, d, members, user):
     # Sistemas inicia en Levantamiento de información; el resto, en Planificación.
     first_phase = "LEVANTAMIENTO" if domain == "SISTEMAS" else "PLANIFICACION"
     x("INSERT INTO engagement.audits (id, code, file_id, modality, audit_domain, objectives, scope, procedures, lines, planned_start, planned_end, location, "
-      "contact_name, contact_role, created_by, phase, plan_type, process, frequency, report_company) VALUES (CAST(:i AS uuid), :c, CAST(:f AS uuid), :m, :d, :o, :s, :p, "
-      "CAST(:l AS text[]), :ps, :pe, :loc, :cn, :cr, CAST(:by AS uuid), :ph, :pl, :pr, :fr, :rc)",
+      "contact_name, contact_role, created_by, phase, plan_type, process, frequency, report_company, audit_kind) VALUES (CAST(:i AS uuid), :c, CAST(:f AS uuid), :m, :d, :o, :s, :p, "
+      "CAST(:l AS text[]), :ps, :pe, :loc, :cn, :cr, CAST(:by AS uuid), :ph, :pl, :pr, :fr, :rc, :ak)",
       i=aid, c=code, f=str(file_id), m=d["modality"], d=domain, o=d["objectives"], s=d["scope"], p=d.get("procedures"), l=d["lines"], ps=d.get("planned_start"),
       pe=d.get("planned_end"), loc=d.get("location"), cn=d.get("contact_name"), cr=d.get("contact_role"), by=user, ph=first_phase,
-      pl=d["plan_type"], pr=d["process"], fr=d["frequency"], rc=d["report_company"])
+      pl=d["plan_type"], pr=d["process"], fr=d["frequency"], rc=d["report_company"],
+      ak=d.get("audit_kind") or ("SISTEMAS" if domain == "SISTEMAS" else "OPERATIVA"))
     for m in members:
         x("INSERT INTO engagement.team (audit_id, user_id, role, initials) VALUES (CAST(:a AS uuid), CAST(:u AS uuid), :r, :i)",
           a=aid, u=m["user_id"], r=m["role"], i=m["initials"])
@@ -809,9 +810,10 @@ def add_observation(audit_id, d, user, origin="MANUAL", commit=True):
     seq = db.session.execute(text("SELECT COALESCE(max(seq), 0) + 1 FROM engagement.observations WHERE audit_id = CAST(:a AS uuid)"), {"a": str(audit_id)}).scalar_one()
     covered = d.get("covered_items") or ([d["item_id"]] if d.get("item_id") else [])
     x("INSERT INTO engagement.observations (id, audit_id, item_id, seq, title, condition, criteria, cause, effect, recommendation, risk, created_by, origin, "
-      "covered_items) VALUES (CAST(:i AS uuid), CAST(:a AS uuid), CAST(:it AS uuid), :s, :t, :c, :cr, :ca, :e, :r, :k, CAST(:u AS uuid), :o, CAST(:cov AS uuid[]))",
+      "covered_items, rule_key) VALUES (CAST(:i AS uuid), CAST(:a AS uuid), CAST(:it AS uuid), :s, :t, :c, :cr, :ca, :e, :r, :k, CAST(:u AS uuid), :o, "
+      "CAST(:cov AS uuid[]), :rk)",
       i=oid, a=str(audit_id), it=d.get("item_id"), s=seq, t=d["title"], c=d["condition"], cr=d.get("criteria"), ca=d.get("cause"), e=d.get("effect"),
-      r=d.get("recommendation"), k=d["risk"], u=user, o=origin, cov=[str(c) for c in covered])
+      r=d.get("recommendation"), k=d["risk"], u=user, o=origin, cov=[str(c) for c in covered], rk=d.get("rule_key"))
     _insert_observation_revision(oid, user, reason="Registro original" if origin == "MANUAL" else "Redactada por el motor de reglas al cargar la cédula")
     if commit:
         db.session.commit()
@@ -830,6 +832,27 @@ def observed_item_ids(audit_id, exclude=()):
         if r["item_id"]:
             out.add(r["item_id"])
     return out
+
+
+def active_rule_keys(audit_id):
+    """Reglas que ya tienen una observación automática vigente en la auditoría."""
+    return {r["rule_key"] for r in q("SELECT rule_key FROM engagement.observations WHERE audit_id = CAST(:a AS uuid) "
+                                     "AND rule_key IS NOT NULL AND superseded_by IS NULL", a=str(audit_id))}
+
+
+def regulatory_catalog():
+    return q("SELECT topic, label, keywords, criteria, cause, effect, recommendation, sort_order, updated_at "
+             "FROM engagement.regulatory_catalog ORDER BY sort_order, topic")
+
+
+def update_regulatory_topic(topic, d, user):
+    cols = [c for c in ("label", "criteria", "cause", "effect", "recommendation") if c in d]
+    row = x("UPDATE engagement.regulatory_catalog SET " + ", ".join(f"{c} = :{c}" for c in cols)
+            + (", keywords = CAST(:kw AS text[])" if "keywords" in d else "")
+            + ", updated_by = CAST(:u AS uuid), updated_at = now() WHERE topic = :t RETURNING topic",
+            **{c: d[c] for c in cols}, kw=d.get("keywords"), u=user, t=topic).first()
+    db.session.commit()
+    return row is not None
 
 
 def consolidable_auto_observations(audit_id):

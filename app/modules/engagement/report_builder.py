@@ -302,8 +302,12 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
     th = body.get("thresholds") or {}
     excelente, satisfactorio = th.get("excelente", 90), th.get("satisfactorio", 70)
     aceptable, mejora = th.get("aceptable", 60), th.get("mejora", 50)
-    s.append(_p(f"Escala: Excelente > {excelente}; Satisfactorio ≥ {satisfactorio} y ≤ {excelente}; Aceptable ≥ {aceptable} y < {satisfactorio}; "
-                f"Necesita mejoras ≥ {mejora} y < {aceptable}; No satisfactoria < {mejora}.", small))
+    if th.get("scale") == "TRES_NIVELES":
+        s.append(_p(f"Escala: Excelente > {th['excelente']}%; Aceptable > {th['aceptable']}% y ≤ {th['excelente']}%; "
+                    f"No satisfactoria ≤ {th['aceptable']}%.", small))
+    else:
+        s.append(_p(f"Escala: Excelente > {excelente}; Satisfactorio ≥ {satisfactorio} y ≤ {excelente}; Aceptable ≥ {aceptable} y < {satisfactorio}; "
+                    f"Necesita mejoras ≥ {mejora} y < {aceptable}; No satisfactoria < {mejora}.", small))
     if ov.get("manual_override") and body.get("overall_reason"):
         s.append(_p(f"Ajuste manual de la calificación global: {body['overall_reason']}", small))
 

@@ -112,6 +112,13 @@
     return r;
   };
 
+  // Nombre visible de cada rol (mismo catálogo que ROLE_LABELS en el servidor).
+  const ROLE_LABELS = {
+    AUDITOR: 'Auditor', CONTRALOR: 'Contralor', SYS_ADMIN: 'Administrador del sistema', GERENCIA: 'Gerencia',
+    AUDITOR_FINANCIERO: 'Auditor', JEFE_AUDITORIA_FINANCIERA: 'Jefe de Auditoría',
+    AUDITOR_SISTEMAS: 'Auditor de Sistemas', JEFE_AUDITORIA_SISTEMAS: 'Jefe de Auditoría de Sistemas'
+  };
+  S.roleLabel = (code) => ROLE_LABELS[code] || code;
   S.stat = (n, l) => h('div', { class: 'card stat' }, h('div', { class: 'n' }, n), h('div', { class: 'l' }, l));
   S.score = (v) => (v == null ? '—' : Number(v).toFixed(1));
   S.ratingBadge = (r) => h(
