@@ -13,5 +13,4 @@ COPY --chown=app:app . .
 RUN mkdir -p /srv/data/engagement \
     && chown -R app:app /srv/data
 USER app
-ENTRYPOINT ["/bin/sh", "/srv/infra/docker/entrypoint.sh"]
 CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8000", "--access-logfile", "-", "wsgi:app"]
