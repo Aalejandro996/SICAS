@@ -82,25 +82,6 @@
     load();
   } });
 
-  // ------------------------------------------------------------------ Reglas
-  S.pages.push({ id: 'rules', title: 'Reglas', perms: ['rule:read'], render: async (el) => {
-    const draw = async () => {
-      el.replaceChildren(h('h2', null, 'Reglas de anomalías, fraude y LC/FT'));
-      const d = await S.get('/engine/rules');
-      if (!d) return;
-      el.append(h('p', { class: 'muted' }, 'Los umbrales son valores iniciales. Calíbrelos con datos históricos; los de LC/FT los fija el Oficial de Cumplimiento. Cada cambio queda en el audit trail.'),
-        tbl(['Regla', 'Descripción', 'Parámetros', 'Activa', ''], d.rules.map((r) => [r.code, r.title, h('code', null, JSON.stringify(r.params || r.defaults)), r.enabled ? 'Sí' : 'No',
-          can('rule:configure') ? h('button', { class: 'sm', onclick: () => edit(r) }, 'Editar') : ''])));
-    };
-    const edit = async (r) => {
-      const v = await S.ask('Editar ' + r.code, [{ name: 'params', label: 'Parámetros (JSON)', type: 'textarea', value: JSON.stringify(r.params || r.defaults, null, 2), required: true }, { name: 'enabled', label: 'Regla activa', type: 'checkbox', value: r.enabled }], 'Guardar');
-      if (!v) return;
-      let params; try { params = JSON.parse(v.params); } catch (_) { S.say('JSON inválido.'); return; }
-      if (await S.send('/engine/rules/' + r.code, 'PUT', { params, enabled: v.enabled })) { S.say('Regla actualizada.', true); draw(); }
-    };
-    draw();
-  } });
-
   // ------------------------------------------------------------------ LC/FT
   S.pages.push({ id: 'lcft', title: 'LC/FT', perms: ['lcft:alert_read'], render: async (el) => {
     const draw = async () => {

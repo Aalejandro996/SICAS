@@ -801,7 +801,7 @@
   } });
 
   // ------------------------------------------------------------------ Solicitudes de rol
-  S.pages.push({ id: 'roles', title: 'Solicitudes', perms: ['role:approve', 'role:assign', 'role:read', 'admin:action_approve', 'audit:annul_approve', 'backup:restore_approve'], render: async (el) => {
+  S.pages.push({ id: 'roles', title: 'Solicitudes', perms: ['role:approve', 'role:assign', 'role:read', 'admin:action_approve', 'audit:annul_approve', 'backup:restore_approve', 'rule:configure'], render: async (el) => {
     const draw = async () => {
       el.replaceChildren(h('h2', null, 'Solicitudes y aprobaciones'));
       if (S.adminApprovals) await S.adminApprovals(el, draw);
@@ -839,7 +839,8 @@
 
   // ------------------------------------------------------------------ Reglas de los motores
   // El Administrador del Sistema propone; el Contralor aprueba (doble control). Nada se aplica sin aprobación.
-  S.pages.push({ id: 'rules-admin', title: 'Reglas de los motores', perms: ['rule:propose', 'rule:configure'], render: async (el) => {
+  // Solo el Administrador del Sistema la ve; el Contralor aprueba los cambios desde «Solicitudes».
+  S.pages.push({ id: 'rules-admin', title: 'Reglas de los motores', perms: ['rule:propose'], render: async (el) => {
     const ENGINES = [['SUDEASEG', 'Normativa SUDEASEG'], ['SISTEMAS', 'Auditoría de Sistemas'], ['ANALITICO', 'Motor analítico'],
       ['UNIDAD', 'Unidades y sucursales'], ['CODIFICACION', 'Codificación']];
     const CODE_CATALOGS = [['AUDIT_TYPE', 'Tipo de auditoría'], ['COMPANY', 'Compañía'], ['PLAN_TYPE', 'Siglas (planificada/especial)'],
@@ -1002,7 +1003,7 @@
   } });
 
   // ------------------------------------------------------------------ Sistema
-  S.pages.push({ id: 'system', title: 'Sistema', perms: ['health:read', 'param:read', 'backup:read'], render: async (el) => {
+  S.pages.push({ id: 'system', title: 'Sistema', perms: ['health:read', 'backup:read'], render: async (el) => {
     const draw = async () => {
       el.replaceChildren(h('h2', null, 'Sistema'));
       if (can('health:read')) {

@@ -26,11 +26,10 @@
 
   const modules = {
     ops: {
-      src: '/static/pages_ops.js?v=20261004',
+      src: '/static/pages_ops.js?v=20261026-menu1',
       pages: [
         { id: 'ingestion', title: 'Cargas', perms: ['ingestion:read'] },
         { id: 'findings', title: 'Hallazgos', perms: ['finding:read'] },
-        { id: 'rules', title: 'Reglas', perms: ['rule:read'] },
         { id: 'lcft', title: 'LC/FT', perms: ['lcft:alert_read'] },
         {
           id: 'reports',
@@ -58,7 +57,7 @@
     },
 
     contralor: {
-      src: '/static/pages_contralor.js?v=20261026-schedule1',
+      src: '/static/pages_contralor.js?v=20261026-menu1',
       pages: [
         {
           id: 'contralor-dashboard',

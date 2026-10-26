@@ -229,6 +229,25 @@
         tbl(['Fecha', 'Auditoría', 'Justificación', 'Solicitó', ''], a.requests.map((q) => [fmt(q.created_at), q.audit_code, q.reason, q.requested_by,
           buttons(`/admin/audit-annulments/${q.id}/decision`, 'anular ' + q.audit_code, 'La auditoría queda anulada y fuera de las listas; su código se libera.')])));
     }
+    if (can('rule:configure')) {
+      const ENGINE = { SUDEASEG: 'Normativa', SISTEMAS: 'Auditoría de Sistemas', ANALITICO: 'Motor analítico', UNIDAD: 'Unidades y sucursales', CODIFICACION: 'Codificación' };
+      const fmtV = (v) => (Array.isArray(v) ? v.join(', ') : typeof v === 'object' && v !== null ? JSON.stringify(v) : v === true ? 'Sí' : v === false ? 'No' : String(v ?? '—'));
+      const show = (q) => {
+        const keys = Array.from(new Set([...Object.keys(q.previous || {}), ...Object.keys(q.payload || {})]))
+          .filter((k) => JSON.stringify((q.previous || {})[k]) !== JSON.stringify(q.payload[k]));
+        const m = S.modal(`${ENGINE[q.engine] || q.engine} · ${q.rule_key}`, h('div', null, h('p', null, h('b', null, 'Motivo: '), q.reason),
+          tbl(['Campo', 'Vigente', 'Propuesto'], keys.map((k) => [k, q.previous ? fmtV(q.previous[k]) : '(nueva)', fmtV(q.payload[k])]))));
+        m.footer.append(h('button', { onclick: () => m.close() }, 'Cerrar'));
+      };
+      const a = await S.get('/rules-admin/requests?status=PENDING');
+      if (a) el.append(h('h3', null, 'Cambios a las reglas de los motores'),
+        h('p', { class: 'muted' }, 'Los propone el Administrador del Sistema; al aprobar, el cambio se aplica de inmediato.'),
+        tbl(['Fecha', 'Motor', 'Regla', 'Tipo', 'Motivo', 'Propuso', ''], a.requests.map((q) => [fmt(q.created_at), ENGINE[q.engine] || q.engine, q.rule_key,
+          q.previous ? 'Cambio' : 'Regla nueva', q.reason, q.requested_by,
+          h('div', { class: 'actions' }, h('button', { class: 'sm secondary', onclick: () => show(q) }, 'Ver'),
+            q.requested_by === S.user?.username ? 'Propia' : buttons(`/rules-admin/requests/${q.id}/decision`, 'cambio de regla ' + q.rule_key,
+              'El cambio se aplica de inmediato a las próximas observaciones y ejecuciones del motor.'))])));
+    }
     if (can('backup:restore_approve')) {
       const a = await S.get('/admin/restore-requests');
       const pending = a ? a.requests.filter((q) => q.status === 'PENDING') : [];
