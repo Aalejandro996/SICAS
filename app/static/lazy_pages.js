@@ -41,7 +41,7 @@
     },
 
     audit: {
-      src: '/static/pages_audit.js?v=20261026-continuity1',
+      src: '/static/pages_audit.js?v=20261026-signatures1',
       pages: [
         {
           id: 'audits',
