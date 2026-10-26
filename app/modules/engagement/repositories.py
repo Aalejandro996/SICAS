@@ -89,8 +89,10 @@ def next_audit_code(file_id):
     """Código de la auditoría: el del expediente con el sufijo -A<n>."""
     from .codification import audit_code
     f = q1("SELECT code FROM engagement.files WHERE id = CAST(:f AS uuid) FOR UPDATE", f=str(file_id))
-    n = db.session.execute(text("SELECT count(*) + 1 FROM engagement.audits WHERE file_id = CAST(:f AS uuid)"),
-                           {"f": str(file_id)}).scalar_one()
+    # Correlativo siguiente entre las auditorías vigentes; una anulada libera su número.
+    n = db.session.execute(text(
+        "SELECT COALESCE(max(CAST(substring(code from '-A([0-9]+)$') AS int)), 0) + 1 FROM engagement.audits "
+        "WHERE file_id = CAST(:f AS uuid) AND status <> 'ANULADA'"), {"f": str(file_id)}).scalar_one()
     return audit_code(f["code"], n)
 
 
@@ -127,7 +129,7 @@ def create_file(unit_id, title, objective, pf, pt, user, audit_domain="GENERAL",
 
 FILE_SQL = ("SELECT f.id::text, f.code, f.legacy_code, f.audit_type, f.company, f.fiscal_year, f.title, f.objective, f.period_from, f.period_to, f.status, f.audit_domain, f.created_at, u.id AS unit_id, "
             "u.code AS unit_code, u.name AS unit_name, u.kind AS unit_kind, u.audit_domain AS unit_audit_domain, u.responsible_name, u.responsible_role, "
-            "(SELECT count(*) FROM engagement.audits a WHERE a.file_id = f.id) AS audits FROM engagement.files f JOIN engagement.units u ON u.id = f.unit_id ")
+            "(SELECT count(*) FROM engagement.audits a WHERE a.file_id = f.id AND a.status <> 'ANULADA') AS audits FROM engagement.files f JOIN engagement.units u ON u.id = f.unit_id ")
 
 
 def list_files(domains=None):
@@ -159,7 +161,7 @@ AUDIT_SQL = ("SELECT a.id::text, a.code, a.legacy_code, a.audit_kind, a.plan_typ
 def list_audits(statuses=None, domains=None):
     sql = AUDIT_SQL
     params = {}
-    where = []
+    where = ["a.status <> 'ANULADA'"]
     if statuses:
         where.append("a.status = ANY(CAST(:st AS text[]))")
         params["st"] = statuses
@@ -172,7 +174,7 @@ def list_audits(statuses=None, domains=None):
 
 
 def get_audit(audit_id):
-    return q1(AUDIT_SQL + "WHERE a.id = CAST(:i AS uuid)", i=str(audit_id))
+    return q1(AUDIT_SQL + "WHERE a.id = CAST(:i AS uuid) AND a.status <> 'ANULADA'", i=str(audit_id))
 
 
 def team(audit_id):
@@ -1175,7 +1177,7 @@ def signed_docs(rid):
 def mark_pac_sent(audit_id, to, user, phase_snapshot=None):
     x("UPDATE engagement.audits SET pac_sent_at = now(), pac_sent_to = :t, pac_sent_by = CAST(:u AS uuid), status = 'CLOSED' WHERE id = CAST(:a AS uuid)", t=to, u=user, a=str(audit_id))
     x("UPDATE engagement.files SET status = 'CLOSED' WHERE id = (SELECT file_id FROM engagement.audits WHERE id = CAST(:a AS uuid)) "
-      "AND NOT EXISTS (SELECT 1 FROM engagement.audits o WHERE o.file_id = engagement.files.id AND o.status <> 'CLOSED')", a=str(audit_id))
+      "AND NOT EXISTS (SELECT 1 FROM engagement.audits o WHERE o.file_id = engagement.files.id AND o.status NOT IN ('CLOSED', 'ANULADA'))", a=str(audit_id))
     if phase_snapshot:
         _insert_phase_score_snapshot(phase_snapshot)
     db.session.commit()

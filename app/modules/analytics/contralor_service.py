@@ -59,7 +59,8 @@ SCOPE_CTE = f"""WITH audit_scope AS (
         FROM engagement.phase_log pl
         WHERE pl.audit_id = a.id
     ) lp ON TRUE
-    WHERE a.created_at >= :start_at
+    WHERE a.status <> 'ANULADA'
+      AND a.created_at >= :start_at
       AND a.created_at < :end_before
       AND (CAST(:unit_id AS integer) IS NULL OR f.unit_id = CAST(:unit_id AS integer))
       AND (CAST(:audit_domain AS text) IS NULL OR upper(coalesce(a.audit_domain, '')) = CAST(:audit_domain AS text))
@@ -76,7 +77,8 @@ OBS_CTE = f"""WITH observed_audits AS (
     FROM engagement.audits a
     LEFT JOIN engagement.files f ON f.id = a.file_id
     LEFT JOIN engagement.units u ON u.id = f.unit_id
-    WHERE (CAST(:unit_id AS integer) IS NULL OR f.unit_id = CAST(:unit_id AS integer))
+    WHERE a.status <> 'ANULADA'
+      AND (CAST(:unit_id AS integer) IS NULL OR f.unit_id = CAST(:unit_id AS integer))
       AND (CAST(:audit_domain AS text) IS NULL OR upper(coalesce(a.audit_domain, '')) = CAST(:audit_domain AS text))
       AND (CAST(:auditor_id AS uuid) IS NULL OR EXISTS (
           SELECT 1 FROM engagement.team t
@@ -246,7 +248,7 @@ def _get_domain_comparison(filters: dict[str, Any]) -> list[dict[str, Any]]:
                    a.status, a.created_at, a.pac_sent_at, f.unit_id
             FROM engagement.audits a
             LEFT JOIN engagement.files f ON f.id = a.file_id
-            WHERE upper(coalesce(a.audit_domain, '')) IN ('FINANCIERA', 'SISTEMAS')
+            WHERE upper(coalesce(a.audit_domain, '')) IN ('FINANCIERA', 'SISTEMAS') AND a.status <> 'ANULADA'
               AND (NOT :domain_locked OR upper(coalesce(a.audit_domain, '')) = CAST(:audit_domain AS text))
               AND (CAST(:unit_id AS integer) IS NULL OR f.unit_id = CAST(:unit_id AS integer))
               AND (CAST(:auditor_id AS uuid) IS NULL OR EXISTS (
@@ -339,7 +341,8 @@ CURRENT_SCOPE_CTE = """WITH current_audit_scope AS (
     FROM engagement.audits a
     LEFT JOIN engagement.files f ON f.id = a.file_id
     LEFT JOIN engagement.units u ON u.id = f.unit_id
-    WHERE (CAST(:unit_id AS integer) IS NULL OR f.unit_id = CAST(:unit_id AS integer))
+    WHERE a.status <> 'ANULADA'
+      AND (CAST(:unit_id AS integer) IS NULL OR f.unit_id = CAST(:unit_id AS integer))
       AND (CAST(:audit_domain AS text) IS NULL OR CAST(:audit_domain AS text) = 'GENERAL'
            OR upper(coalesce(a.audit_domain, '')) = CAST(:audit_domain AS text))
       AND (CAST(:auditor_id AS uuid) IS NULL OR EXISTS (
