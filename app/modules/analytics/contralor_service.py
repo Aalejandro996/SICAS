@@ -452,6 +452,7 @@ def get_data_quality(filters: dict[str, Any]) -> dict[str, Any]:
         FROM current_audit_scope s JOIN engagement.worksheets w ON w.audit_id = s.id
         LEFT JOIN engagement.financial_worksheets fw ON fw.worksheet_id = w.id
         LEFT JOIN engagement.items i ON i.worksheet_id = w.id
+        WHERE w.kind <> 'TI_SUC'   -- Evaluación TI: una fila por colaborador, no por criterio
         GROUP BY w.id, s.id, w.criteria, fw.worksheet_id, fw.criteria_snapshot
     )
     SELECT

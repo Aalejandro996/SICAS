@@ -94,25 +94,6 @@ def _questionnaire_blocks(w: dict, cell, small, width) -> list:
         out.append(Paragraph(f"<b>{escape(b['title'])}</b> - no cumple el promedio requerido. {notes}", small))
     return out + [Spacer(1, 4)]
 
-def _ti_people(w: dict, cell, small, width) -> list:
-    """Evaluación TI de la sucursal: resultado por colaborador entrevistado y dictamen."""
-    ti = w["ti"]
-    rows = [[Paragraph(f"<b>{x}</b>", cell) for x in ("Colaborador", "Prácticas (de 15)", "Nota", "Nivel", "Perfiles / SoD", "Dictamen")]]
-    for p in ti["people"]:
-        rows.append([Paragraph(escape(p["ref"] or "—"), cell), Paragraph(str(p["yes"]), cell),
-                     Paragraph("—" if p["final"] is None else f"{p['final']:.1f}%", cell), Paragraph(escape(p["level_label"] or "—"), cell),
-                     Paragraph("Conflicto: " + ", ".join(c.replace("TI-", "") for c in p["sod"]) if p["sod"] else "Sin hallazgos", cell),
-                     Paragraph(escape(p["dictamen"] or "—"), cell)])
-    t = Table(rows, colWidths=[width * x for x in (0.26, 0.11, 0.09, 0.2, 0.14, 0.2)], repeatRows=1)
-    t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#C9D3E3")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEF2F8")),
-                           ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]
-                          + [("BACKGROUND", (4, i), (5, i), colors.HexColor("#FDE2E1")) for i, p in enumerate(ti["people"], 1) if p["sod"]]))
-    out = [t]
-    if ti.get("dictamen"):
-        out.append(Paragraph(f"Sucursal: {escape(ti['level_label'] or '—')} · {escape(ti['risk'] or '')} · Dictamen: {escape(ti['dictamen'])}.", small))
-    return out + [Spacer(1, 4)]
-
-
 def build_body(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dict], sheets: list[dict], overall: dict,
                observations: list[dict], limitations: list[dict], adjustments: list[dict], evidence: list[dict],
                company: str, version: int, today: date, conclusion: str | None = None, thresholds: dict | None = None) -> dict:
@@ -402,8 +383,6 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
             s += [Spacer(1, 2), t, Spacer(1, 4)]
             if w.get("blocks"):
                 s += _questionnaire_blocks(w, cell, small, doc.width)
-            if w.get("ti"):
-                s += _ti_people(w, cell, small, doc.width)
 
     s.append(Paragraph("3.3 Hallazgos", h2))
     observations = sorted(body["observations"], key=lambda o: (RISK_ORDER.get(o["risk"], 3), o["n"]))

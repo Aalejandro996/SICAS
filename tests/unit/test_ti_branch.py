@@ -48,3 +48,17 @@ def test_branch_summary_and_findings():
 
 def test_unanswered_collaborator_has_no_score():
     assert ti_branch.evaluate(CRITERIA, {})["score"] is None
+
+
+def test_ti_sheet_does_not_count_in_the_audit_score():
+    items = [{"id": "a", "ref": "Ana — Cajera", "results": res(EXCEL)}]
+    ti = scoring.worksheet_summary(CRITERIA, items)
+    assert ti.scoring_excluded and ti.final == 46.67
+    other = scoring.SheetSummary(1, 1, 0, 80.0, 80.0, False, "EXCELENTE")
+    assert scoring.audit_summary([other, ti])["final"] == 80.0
+
+
+def test_ti_sheet_is_not_in_the_audit_report_indicators():
+    ind = scoring.evaluation_indicators([{"id": "w", "title": "TI", "kind": "TI_SUC", "criteria": CRITERIA,
+                                          "items": [{"id": "a", "ref": "Ana", "results": res(EXCEL)}]}], {"final": None})
+    assert ind["worksheets"] == []

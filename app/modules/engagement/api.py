@@ -643,7 +643,8 @@ def phase(aid):
         return err("Para pasar a Trabajo de campo cree al menos una cédula en Planificación")
     scored_check = (forward and is_systems(a)) or to == "INFORME"
     if scored_check:
-        empty = [ws["title"] for ws in sheets if not any(scoring.item_score(ws["criteria"], i["results"]) is not None for i in ws["items"])]
+        empty = [ws["title"] for ws in sheets if not ti_branch.is_ti_criteria(ws["criteria"])   # la Evaluación TI es informativa
+                 and not any(scoring.item_score(ws["criteria"], i["results"]) is not None for i in ws["items"])]
         if not sheets or empty:
             return err("Para cerrar la fase, cada cédula debe tener al menos un control calificado" + (": " + ", ".join(empty) if empty else ""))
     if not forward and not note:
@@ -1377,7 +1378,8 @@ def audit_auto_observations(aid):
         return err("El catálogo normativo no está configurado", 409)
     existing = repo.active_rule_keys(a["id"])
     drafts = [o for ws in repo.worksheets_with_items(a["id"])
-              for o in (ti_branch.findings(ws) if ti_branch.is_ti_criteria(ws["criteria"]) else regulatory_rules.findings(ws, catalog))
+              if not ti_branch.is_ti_criteria(ws["criteria"])   # la Evaluación TI no genera hallazgos de la auditoría
+              for o in regulatory_rules.findings(ws, catalog)
               if o["rule_key"] not in existing]
     if not drafts:
         return jsonify(created=0, note="No hay incumplimientos nuevos sin hallazgo.")

@@ -19,6 +19,8 @@ def summarize_sheets(worksheets: list[dict], thresholds: dict | None) -> list[tu
 def assemble(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dict], worksheets: list[dict], observations: list[dict],
              evidence: list[dict], thresholds: dict | None, company: str, version: int, today: date, conclusion: str | None = None,
              history: dict | None = None, revision: int = 1, overall_for=None, report_code: str | None = None) -> dict:
+    # La Evaluación TI de la sucursal no forma parte del informe ni de la calificación: alimenta el módulo del Jefe de Sistemas.
+    worksheets = [ws for ws in worksheets if not scoring.ti_branch.is_ti_criteria(ws["criteria"])]
     pairs = summarize_sheets(worksheets, thresholds)
     sheets = [{"title": sheet_title(ws), "kind": ws["kind"], "line": ws["line"], "items": s.items, "scored": s.scored, "exceptions": s.exceptions,
                "auto": s.auto, "final": s.final, "manual_override": s.manual_override, "rating": s.rating} for ws, s in pairs]

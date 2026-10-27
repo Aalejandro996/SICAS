@@ -545,7 +545,7 @@
     const isSys = d.audit.audit_domain === 'SISTEMAS';
     el.append(bar, h('p', { class: 'muted' }, isSys ? 'Cuestionario ERP / TI. Cada fila representa un activo, aplicación, servicio o componente evaluado.' : 'Una cédula por tipo (suscripción o reclamo/indemnización) y línea (Auto, Patrimonial, Personal). Cada fila es una póliza o un siniestro de la muestra.'),
       h('p', { class: 'muted' }, 'Los cuestionarios (Cartelera fiscal, Evaluación ADS, LOPCYMAT y Administración y servicios en sucursales) se responden una sola vez por unidad: una fila por pregunta.'),
-      tbl(['Cédula', 'Criterios', 'Ítems', 'Excepciones', 'Final', 'Calificación'], d.sheets.map((s) => [s.title, s.criteria_count, s.items, s.exceptions, S.score(s.final), S.ratingBadge(s.rating)]), (i) => { location.hash = `#/audits/${ctx.aid}/cedulas/${d.sheets[i].id}`; }));
+      tbl(['Cédula', 'Criterios', 'Ítems', 'Excepciones', 'Final', 'Calificación'], d.sheets.map((s) => [s.title, s.criteria_count, s.items, s.exceptions, S.score(s.final), s.kind === 'TI_SUC' ? h('span', { class: 'muted' }, 'Informativa (no cuenta)') : S.ratingBadge(s.rating)]), (i) => { location.hash = `#/audits/${ctx.aid}/cedulas/${d.sheets[i].id}`; }));
   }
   async function addSheet() {
     const system = ctx.d.audit.audit_domain === 'SISTEMAS';
@@ -712,19 +712,16 @@
       const r = await S.send(`${A}/worksheets/${wid}/items`, 'POST', { refs: [ref] });
       if (r) { S.say(r.added ? 'Colaborador agregado.' : 'Ese colaborador ya está en la cédula.', !!r.added); reload(); }
     } }, 'Agregar colaborador'));
-    if (edit && can('audit:rate')) {
-      bar.append(h('button', { class: 'secondary', onclick: () => manual(`${A}/worksheets/${wid}/rating`, ws.title, ws.manual_score) }, 'Ajustar nota de la cédula'));
-      if (ws.manual_score != null) bar.append(h('button', { class: 'secondary', onclick: () => clearManual(`${A}/worksheets/${wid}/rating`) }, 'Quitar ajuste'));
-    }
     const risk = TI_RISK[st.level];
     el.append(bar,
-      h('div', { class: 'row' }, h('b', null, `Nota: ${S.score(d.summary.final)}%`), d.summary.manual_override ? ' (manual)' : '', ' ',
+      h('div', { class: 'okbox' }, h('b', null, 'Evaluación informativa: '), 'no afecta la calificación de la auditoría ni su informe. Solo genera indicadores para el Jefe de Auditoría de Sistemas.'),
+      h('div', { class: 'row' }, h('b', null, `Índice TI: ${S.score(d.summary.final)}%`), ' ',
         st.level ? h('span', { class: 'q-risk q-risk-' + risk }, `${st.level_label} · ${st.risk}`) : h('span', { class: 'muted' }, 'Sin evaluar'),
         ` · ${st.rated || 0} colaborador(es)`, st.sod_conflicts ? h('span', { class: 'q-risk q-risk-ALTO' }, ` ${st.sod_conflicts} con conflicto de perfiles`) : ''),
       st.dictamen ? h('p', null, h('b', null, 'Dictamen preliminar: '), st.dictamen) : null,
       h('p', { class: 'muted' }, 'Entreviste a cada colaborador. Módulo I (15 preguntas): «Sí» es lo correcto; 14 o más = Nivel 1 Óptimo, 11 a 13 = Nivel 2, 8 a 10 = Nivel 3, ' +
-        'menos de 8 = Nivel 4 Crítico. Módulo II (5 preguntas): cualquier «Sí» es un conflicto de perfiles y limita la nota del colaborador al nivel crítico. ' +
-        'La nota de la cédula es el promedio de los colaboradores. Al cerrar la auditoría, el resultado pasa al módulo Evaluación TI de sucursales del Jefe de Auditoría de Sistemas.'),
+        'menos de 8 = Nivel 4 Crítico. Módulo II (5 preguntas): cualquier «Sí» es un conflicto de perfiles y limita el resultado del colaborador al nivel crítico. ' +
+        'El índice de la sucursal es el promedio de los colaboradores. Al cerrar la auditoría, el resultado pasa al módulo Evaluación TI de sucursales del Jefe de Auditoría de Sistemas.'),
       ...(!edit ? [h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'La evaluación se responde en Trabajo de campo.' : 'Solo lectura.')] : []),
       (st.people || []).length ? tbl(['Colaborador', 'Prácticas (de 15)', 'Nota', 'Nivel', 'Perfiles / SoD', 'Dictamen', 'Respondidas', ''],
         st.people.map((p) => [p.ref, p.score == null ? '—' : String(p.yes), p.final == null ? '—' : S.score(p.final) + '%',

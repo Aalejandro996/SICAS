@@ -267,6 +267,8 @@ class SheetSummary:
     final: float | None
     manual_override: bool
     rating: str
+    # Cédulas informativas (Evaluación TI de la sucursal): se muestran, pero no cuentan en la nota de la auditoría.
+    scoring_excluded: bool = False
 
 
 # ------------------------------------------------------------------ cédulas tipo cuestionario (LOPCYMAT, servicios, cartelera, ADS)
@@ -356,10 +358,11 @@ def worksheet_summary(criteria: list[dict], items: list[dict], sheet_manual: flo
     sheet_manual = None if sheet_manual is None else float(sheet_manual)
     final = sheet_manual if sheet_manual is not None else auto
     return SheetSummary(len(items), sum(1 for f in finals if f is not None), exc, auto, final,
-                        sheet_manual is not None, rating(final, thresholds))
+                        sheet_manual is not None, rating(final, thresholds), scoring_excluded=ti_branch.is_ti_criteria(criteria))
 
 
 def audit_summary(sheets: list[SheetSummary], manual: float | None = None, thresholds: dict | None = None) -> dict:
+    sheets = [s for s in sheets if not s.scoring_excluded]   # la Evaluación TI no cuenta en la nota
     auto = mean(s.final for s in sheets)
     manual = None if manual is None else float(manual)
     final = manual if manual is not None else auto
@@ -414,19 +417,7 @@ def evaluation_indicators(worksheets: list[dict], overall: dict, thresholds: dic
             stats = system_statistics(ws["criteria"], ws["items"])
             indicators = [{"key": k, "label": label, "value": int(stats.get(k) or 0)} for k, label in SYSTEM_INDICATORS]
         elif ti_branch.is_ti_criteria(ws["criteria"]):
-            t = ti_branch.summary(ws["criteria"], ws["items"])
-            blocks = None
-            indicators = [
-                {"key": "collaborators", "label": "Colaboradores", "value": t["rated"]},
-                {"key": "avg_yes", "label": "Prácticas cumplidas (de 15)", "value": round(t["avg_yes"] or 0, 1)},
-                {"key": "sod", "label": "Conflictos de perfiles", "value": t["sod_conflicts"]},
-                {"key": "level", "label": "Nivel (1 óptimo a 4 crítico)", "value": t["level"] or "—"},
-            ]
-            sheets.append({"id": ws.get("id"), "title": ws.get("title"), "kind": ws.get("kind"), "score": summary.final,
-                           "rating": summary.rating, "items": summary.items, "indicators": indicators,
-                           "ti": {"people": [{k: p[k] for k in ("ref", "yes", "final", "level_label", "sod", "dictamen")} for p in t["people"]],
-                                  "dictamen": t["dictamen"], "level_label": t["level_label"], "risk": t["risk"]}})
-            continue
+            continue   # la Evaluación TI no va en el informe de la auditoría: solo alimenta el módulo del Jefe de Sistemas
         elif is_questionnaire(ws["criteria"]):
             q = questionnaire_summary(ws["criteria"], ws["items"])
             counts = _response_counts(ws["criteria"], ws["items"])
