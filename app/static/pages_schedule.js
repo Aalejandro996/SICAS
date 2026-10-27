@@ -54,19 +54,113 @@
     if (!S.scheduleTimer) { S.scheduleTimer = setInterval(checkSchedule, 60000); S.timers.push(S.scheduleTimer); }
   };
 
-  // ------------------------------------------------------------------ calendario de feriados
-  const holidayTable = async (year, withActions) => {
-    const d = await S.get('/schedule/holidays?year=' + year);
-    if (!d) return h('div');
-    const KIND = { FIXED: 'Fijo', MOVABLE: 'Móvil (Carnaval / Semana Santa)', DECREE: 'Decretado' };
-    return tbl(['Fecha', 'Día', 'Feriado', 'Tipo', 'Estado', ...(withActions ? [''] : [])], d.holidays.map((x) => {
-      const dt = new Date(x.holiday_date + 'T12:00:00');
-      return [dt.toLocaleDateString('es-VE'), dt.toLocaleDateString('es-VE', { weekday: 'long' }), x.name, KIND[x.kind] || x.kind,
-        x.observed ? 'No laborable' : h('b', null, 'Laborable (no se observa)'),
-        ...(withActions ? [can('param:update') && S.requestAdminAction ? h('button', { class: 'sm secondary', onclick: () => S.requestAdminAction('HOLIDAY',
-          { date: x.holiday_date, name: x.name, observed: !x.observed }, (x.observed ? 'Declarar laborable el ' : 'Declarar no laborable el ') + dt.toLocaleDateString('es-VE')) },
-        x.observed ? 'Declarar laborable' : 'Declarar no laborable') : ''] : [])];
-    }));
+  // ------------------------------------------------------------------ calendario de feriados (interactivo)
+  const KIND = { FIXED: 'Fijo', MOVABLE: 'Móvil (Carnaval / Semana Santa)', DECREE: 'Decretado' };
+  const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  const WEEKDAYS = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+  const pad = (n) => String(n).padStart(2, '0');
+  const iso = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
+  const longDate = (s) => new Date(s + 'T12:00:00').toLocaleDateString('es-VE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const caracasToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Caracas' });
+  const holidayCache = {};
+  const loadHolidays = async (year) => {
+    if (!holidayCache[year]) {
+      const d = await S.get('/schedule/holidays?year=' + year);
+      if (!d) return null;
+      holidayCache[year] = Object.fromEntries(d.holidays.map((x) => [x.holiday_date, x]));
+    }
+    return holidayCache[year];
+  };
+
+  // Calendario anual: cada mes en su cuadrícula; un clic en un día muestra si es laborable y, al Administrador,
+  // las acciones (con doble verificación) para declarar un feriado decretado o un feriado no observado.
+  const holidayCalendar = (initialYear, withActions) => {
+    const root = h('div', { class: 'holiday-cal' });
+    // month = null: vista anual; 0..11: un solo mes. En pantallas angostas abre en el mes actual.
+    let year = initialYear, month = window.innerWidth < 700 && initialYear === Number(caracasToday().slice(0, 4)) ? Number(caracasToday().slice(5, 7)) - 1 : null;
+    const canAct = withActions && can('param:update') && S.requestAdminAction;
+
+    const dayInfo = (date, hol) => {
+      const wd = new Date(date + 'T12:00:00').getDay();
+      if (hol && hol.observed) return { cls: 'hol hol-' + hol.kind.toLowerCase(), text: hol.name };
+      if (hol && !hol.observed) return { cls: 'hol-off', text: hol.name + ' (no se observa: laborable)' };
+      if (wd === 0 || wd === 6) return { cls: 'weekend', text: 'Fin de semana' };
+      return { cls: '', text: 'Laborable de 8:00 a 17:00' };
+    };
+
+    const openDay = (date, hol) => {
+      const wd = new Date(date + 'T12:00:00').getDay();
+      const weekend = wd === 0 || wd === 6;
+      const status = hol ? (hol.observed ? 'No laborable (feriado)' : 'Laborable: el feriado no se observa') : weekend ? 'No laborable (fin de semana)' : 'Laborable de 8:00 a 17:00';
+      const m = S.modal(longDate(date), h('div', null, h('dl', { class: 'kv' },
+        h('dt', null, 'Estado'), h('dd', null, status),
+        ...(hol ? [h('dt', null, 'Feriado'), h('dd', null, hol.name), h('dt', null, 'Tipo'), h('dd', null, KIND[hol.kind] || hol.kind)] : [])),
+        canAct ? h('p', { class: 'muted' }, 'Los cambios piden su código MFA y se aplican cuando el Contralor los aprueba.') : null));
+      if (canAct && hol) {
+        m.footer.append(h('button', { class: 'secondary', onclick: async () => {
+          m.close();
+          await S.requestAdminAction('HOLIDAY', { date, name: hol.name, observed: !hol.observed },
+            (hol.observed ? 'Declarar laborable el ' : 'Declarar no laborable el ') + longDate(date));
+        } }, hol.observed ? 'Declarar laborable' : 'Declarar no laborable'));
+      } else if (canAct && !weekend) {
+        m.footer.append(h('button', { onclick: async () => {
+          const v = await S.ask('Proponer día no laborable decretado', [{ name: 'name', label: 'Motivo o decreto (p. ej. Decreto N° … Gaceta Oficial …)', required: true }],
+            'Continuar', longDate(date));
+          m.close();
+          if (v) await S.requestAdminAction('HOLIDAY', { date, name: v.name, observed: true }, 'Declarar no laborable el ' + longDate(date));
+        } }, 'Proponer feriado decretado'));
+      }
+      m.footer.append(h('button', { class: 'secondary', onclick: () => m.close() }, 'Cerrar'));
+    };
+
+    const monthGrid = (hols, m, big) => {
+      const today = caracasToday();
+      const first = new Date(year, m, 1), days = new Date(year, m + 1, 0).getDate();
+      const lead = (first.getDay() + 6) % 7;     // semana de lunes a domingo
+      const cells = [...WEEKDAYS.map((w) => h('span', { class: 'wd', 'aria-hidden': 'true' }, w)), ...Array.from({ length: lead }, () => h('span', { class: 'pad' }))];
+      for (let d = 1; d <= days; d++) {
+        const date = iso(year, m, d), hol = hols[date], info = dayInfo(date, hol);
+        cells.push(h('button', { type: 'button', class: `day ${info.cls}${date === today ? ' today' : ''}`, title: `${longDate(date)}: ${info.text}`,
+          'aria-label': `${longDate(date)}: ${info.text}`, onclick: () => openDay(date, hol) },
+          h('span', { class: 'n' }, String(d)), big && hol ? h('span', { class: 'lbl' }, hol.name) : null));
+      }
+      const count = Object.keys(hols).filter((k) => k.startsWith(`${year}-${pad(m + 1)}`) && hols[k].observed).length;
+      return h('div', { class: 'month' + (big ? ' big' : '') },
+        h('button', { type: 'button', class: 'mname', title: big ? 'Volver al año' : 'Ver el mes', onclick: () => { month = big ? null : m; draw(); } },
+          MONTHS[m], count ? h('span', { class: 'cnt' }, String(count)) : null),
+        h('div', { class: 'grid' }, cells));
+    };
+
+    const draw = async () => {
+      const hols = await loadHolidays(year);
+      if (!hols) return;
+      const step = (delta) => () => {
+        if (month === null) year += delta;
+        else { month += delta; if (month < 0) { month = 11; year -= 1; } if (month > 11) { month = 0; year += 1; } }
+        year = Math.min(2045, Math.max(2015, year)); draw();
+      };
+      const today = caracasToday();
+      const upcoming = Object.values(hols).filter((x) => x.observed && x.holiday_date >= today).slice(0, 4);
+      const list = h('details', { class: 'hol-list' }, h('summary', null, `Ver los feriados de ${year} como lista`),
+        tbl(['Fecha', 'Feriado', 'Tipo', 'Estado'], Object.values(hols).map((x) => [longDate(x.holiday_date), x.name, KIND[x.kind] || x.kind,
+          x.observed ? 'No laborable' : h('b', null, 'Laborable (no se observa)')])));
+      root.replaceChildren(...[
+        h('div', { class: 'cal-bar' },
+          h('button', { type: 'button', class: 'secondary sm', 'aria-label': 'Anterior', onclick: step(-1) }, '‹'),
+          h('b', { class: 'cal-title' }, month === null ? String(year) : `${MONTHS[month]} ${year}`),
+          h('button', { type: 'button', class: 'secondary sm', 'aria-label': 'Siguiente', onclick: step(1) }, '›'),
+          h('button', { type: 'button', class: 'secondary sm', onclick: () => { year = Number(today.slice(0, 4)); month = month === null ? null : Number(today.slice(5, 7)) - 1; draw(); } }, 'Hoy'),
+          month !== null ? h('button', { type: 'button', class: 'secondary sm', onclick: () => { month = null; draw(); } }, 'Ver el año') : null),
+        h('div', { class: 'cal-legend' }, ...[['hol hol-fixed', 'Feriado fijo'], ['hol hol-movable', 'Carnaval / Semana Santa'], ['hol hol-decree', 'Decretado'],
+          ['hol-off', 'Feriado no observado (laborable)'], ['weekend', 'Fin de semana'], ['today', 'Hoy']].map(([c, t]) => h('span', null, h('i', { class: 'sw ' + c }), t))),
+        upcoming.length && month === null && year === Number(today.slice(0, 4))
+          ? h('p', { class: 'muted' }, 'Próximos: ' + upcoming.map((x) => `${new Date(x.holiday_date + 'T12:00:00').toLocaleDateString('es-VE', { day: 'numeric', month: 'short' })} ${x.name}`).join(' · ')) : null,
+        month === null ? h('div', { class: 'months' }, Array.from({ length: 12 }, (_, m) => monthGrid(hols, m, false))) : monthGrid(hols, month, true),
+        h('p', { class: 'muted' }, canAct ? 'Haga clic en un día para ver su estado o proponer un cambio. Clic en el nombre del mes para ampliarlo.' : 'Haga clic en un día para ver su estado. Clic en el nombre del mes para ampliarlo.'),
+        list].filter(Boolean));
+    };
+    draw();
+    return root;
   };
 
   // ------------------------------------------------------------------ horas extras (usuarios y aprobadores)
@@ -115,7 +209,7 @@
           q.full_name, hm(q.starts_at), hm(q.ends_at), q.reason, otBadge(q.status),
           h('div', { class: 'actions' }, h('button', { class: 'sm ok', onclick: () => decide(q, true) }, 'Aprobar'), h('button', { class: 'sm danger', onclick: () => decide(q, false) }, 'Rechazar'))])));
       }
-      el.append(h('h3', null, `Feriados ${new Date().getFullYear()}`), await holidayTable(new Date().getFullYear(), false));
+      el.append(h('h3', null, 'Calendario de feriados'), holidayCalendar(new Date().getFullYear(), false));
     };
     draw();
   } });
@@ -133,18 +227,10 @@
           q.jefe_name ? `${q.jefe_name} (${hm(q.jefe_at)})` : '—', q.gerente_name ? `${q.gerente_name} (${hm(q.gerente_at)})` : '—',
           q.contralor_name ? `${q.contralor_name} (${hm(q.contralor_at)})` : (q.rejected_name ? `Rechazó ${q.rejected_name}` : '—'),
           q.first_used_at ? `${hm(q.first_used_at)} – ${hm(q.last_used_at)}` : 'Sin uso'])));
-      const ysel = h('select', null, [year - 1, year, year + 1].map((y) => h('option', { value: y, selected: y === year }, String(y))));
-      ysel.addEventListener('change', () => { year = Number(ysel.value); draw(); });
       el.append(h('h3', null, 'Calendario de feriados'),
         h('p', { class: 'muted' }, 'Fijos y móviles (Carnaval, Jueves y Viernes Santo) se calculan solos. Los decretados por el Ejecutivo, o un feriado que no se observe, ' +
           'se cargan con doble verificación (MFA y aprobación del Contralor).'),
-        h('div', { class: 'toolbar' }, h('label', null, 'Año', ysel),
-          can('param:update') && S.requestAdminAction ? h('button', { onclick: async () => {
-            const v = await S.ask('Proponer día no laborable decretado', [{ name: 'date', label: 'Fecha', type: 'date', required: true },
-              { name: 'name', label: 'Motivo o decreto (p. ej. Decreto N° … Gaceta Oficial …)', required: true }], 'Continuar');
-            if (v) S.requestAdminAction('HOLIDAY', { date: v.date, name: v.name, observed: true }, 'Declarar no laborable el ' + v.date);
-          } }, 'Proponer feriado decretado') : null),
-        await holidayTable(year, true));
+        holidayCalendar(year, true));
     };
     draw();
   } });

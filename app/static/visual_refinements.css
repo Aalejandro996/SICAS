@@ -2827,3 +2827,41 @@ tr[hidden] { display: none; }
 .q-risk-BAJO { background: #d7f0df; color: #1e6b3a; }
 .q-risk-MEDIO { background: #fff1c2; color: #7a5a00; }
 .q-risk-ALTO { background: #f8d4d4; color: #9b1c1c; }
+
+/* Calendario interactivo de feriados (Horas extras y Horario laboral) */
+#page .holiday-cal { margin: 8px 0 16px; }
+#page .holiday-cal .cal-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+#page .holiday-cal .cal-title { font-size: 18px; min-width: 150px; text-align: center; color: #1f3556; }
+#page .holiday-cal .cal-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: #4a5a70; margin-bottom: 8px; }
+#page .holiday-cal .cal-legend span { display: inline-flex; align-items: center; gap: 6px; }
+#page .holiday-cal .sw { width: 14px; height: 14px; border-radius: 4px; display: inline-block; border: 1px solid #d5dce8; background: #fff; }
+#page .holiday-cal .months { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+#page .holiday-cal .month { background: #fff; border: 1px solid #dde4ef; border-radius: 12px; padding: 10px; }
+#page .holiday-cal .month.big { max-width: 760px; }
+#page .holiday-cal .mname { all: unset; cursor: pointer; display: flex; justify-content: space-between; align-items: center; width: 100%; font-weight: 700; color: #1f3556; margin-bottom: 6px; }
+#page .holiday-cal .mname:hover, #page .holiday-cal .mname:focus-visible { text-decoration: underline; }
+#page .holiday-cal .mname .cnt { font-size: 11px; background: #f8d4d4; color: #9b1c1c; border-radius: 999px; padding: 1px 8px; }
+#page .holiday-cal .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+#page .holiday-cal .wd { font-size: 11px; color: #7a8699; text-align: center; padding-bottom: 2px; }
+#page .holiday-cal .day { all: unset; box-sizing: border-box; cursor: pointer; text-align: center; font-size: 12px; padding: 5px 0; border-radius: 6px; background: #f7f9fc; color: #22324a; }
+#page .holiday-cal .month.big .day { min-height: 72px; text-align: left; padding: 6px 8px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+#page .holiday-cal .month.big .day .lbl { font-size: 11px; line-height: 1.25; font-weight: 600; }
+#page .holiday-cal .day:hover, #page .holiday-cal .day:focus-visible { outline: 2px solid #4a6fa5; outline-offset: -2px; }
+#page .holiday-cal .weekend, #page .holiday-cal .sw.weekend { background: #eceff4; color: #8a94a6; }
+#page .holiday-cal .hol-fixed, #page .holiday-cal .sw.hol-fixed { background: #f8d4d4; color: #9b1c1c; font-weight: 700; }
+#page .holiday-cal .hol-movable, #page .holiday-cal .sw.hol-movable { background: #fde4c8; color: #8a4a00; font-weight: 700; }
+#page .holiday-cal .hol-decree, #page .holiday-cal .sw.hol-decree { background: #e3d7f5; color: #4b2a85; font-weight: 700; }
+#page .holiday-cal .hol-off, #page .holiday-cal .sw.hol-off { background: #fff; color: #22324a; border: 1px dashed #c0392b; text-decoration: line-through; }
+#page .holiday-cal .today, #page .holiday-cal .sw.today { box-shadow: inset 0 0 0 2px #1f3556; }
+#page .holiday-cal .hol-list { margin-top: 10px; }
+#page .holiday-cal button.day, #page .holiday-cal button.mname { min-height: 0; box-shadow: none; transform: none; font-family: inherit; }
+#page .holiday-cal button.day { background: #f7f9fc !important; color: #22324a !important; border: 1px solid transparent !important; font-weight: 500; }
+#page .holiday-cal button.day.weekend { background: #eceff4 !important; color: #8a94a6 !important; }
+#page .holiday-cal button.day.hol-fixed { background: #f8d4d4 !important; color: #9b1c1c !important; font-weight: 700; }
+#page .holiday-cal button.day.hol-movable { background: #fde4c8 !important; color: #8a4a00 !important; font-weight: 700; }
+#page .holiday-cal button.day.hol-decree { background: #e3d7f5 !important; color: #4b2a85 !important; font-weight: 700; }
+#page .holiday-cal button.day.hol-off { background: #fff !important; border: 1px dashed #c0392b !important; text-decoration: line-through; }
+#page .holiday-cal button.day.today { box-shadow: inset 0 0 0 2px #1f3556 !important; }
+#page .holiday-cal button.day:hover, #page .holiday-cal button.day:focus-visible { outline: 2px solid #4a6fa5; outline-offset: -2px; }
+#page .holiday-cal button.mname { background: transparent !important; color: #1f3556 !important; border: 0 !important; padding: 0 !important; }
+#page .holiday-cal .month.big button.day { min-height: 72px; }
