@@ -558,7 +558,7 @@ def audit_overview(a):
             "sheets": [{"id": ws["id"], "kind": ws["kind"], "line": ws["line"], "title": ws["title"], "criteria_count": len(ws["criteria"]),
                         "items": s.items, "scored": s.scored, "exceptions": s.exceptions, "auto": s.auto, "final": s.final,
                         "manual_override": s.manual_override, "rating": s.rating,
-                        "statistics": scoring.system_statistics(ws["criteria"], ws["items"]) if ws["kind"] == "SISTEMAS" else None} for ws, s in pairs],
+                        "statistics": sheet_statistics(ws)} for ws, s in pairs],
             "observations": len(obs), "evidence": len(repo.evidence(a["id"])), "reports": reps,
             "locked": final_locked(a["id"]),
             "can_edit_data": "audit:manage" in perms() and can_edit_data(a),
@@ -788,7 +788,8 @@ def new_worksheet(aid):
         if (kind in GENERAL_KINDS) != (line == "GENERAL"):
             return err("Línea inválida para esa cédula")
 
-    if line not in a["lines"]:
+    # Las cédulas de línea General (cuestionarios, cuentas por pagar...) no dependen de las líneas de negocio elegidas.
+    if line not in a["lines"] and not (line == "GENERAL" and kind in GENERAL_KINDS and not is_systems(a)):
         return err(
             "La línea no pertenece al alcance de la auditoría"
         )
@@ -916,6 +917,15 @@ def _item_phase_guard(a, it, results=None):
     return None
 
 
+def sheet_statistics(ws):
+    """Estadísticas propias de la cédula: cuestionario de Sistemas o cuestionario por bloques (LOPCYMAT, servicios...)."""
+    if ws["kind"] == "SISTEMAS":
+        return scoring.system_statistics(ws["criteria"], ws["items"])
+    if scoring.is_questionnaire(ws["criteria"]):
+        return scoring.questionnaire_summary(ws["criteria"], ws["items"])
+    return None
+
+
 def ws_for(ws_id, write=False):
     ws = repo.get_worksheet(ws_id)
     if ws is None:
@@ -934,7 +944,7 @@ def worksheet(wid):
         it["auto_score"] = scoring.item_score(ws["criteria"], it["results"])
         it["final_score"] = scoring.final_score(it["auto_score"], it["manual_score"])
     s = scoring.worksheet_summary(ws["criteria"], ws["items"], ws["manual_score"], thresholds(a))
-    stats = scoring.system_statistics(ws["criteria"], ws["items"]) if ws["kind"] == "SISTEMAS" else None
+    stats = sheet_statistics(ws)
     return jsonify(worksheet=ws, summary=s.__dict__, statistics=stats, audit={"id": a["id"], "code": a["code"], "phase": a["phase"], "status": a["status"]},
                    editable=repo.is_member(a["id"], me()) and a["status"] == "IN_PROGRESS" and a["phase"] in phase_group(a, "ITEMS")
                    and not final_locked(a["id"]),
@@ -1572,6 +1582,8 @@ def update_item(iid):
     exc = str(d.get("info_exception") or "").strip()[:2000] or None
     if "EXCEPCION" in results.values() and not exc:
         return err("Marcó EXCEPCION: describa la información no recibida en el campo de excepción")
+    if scoring.is_questionnaire(ws["criteria"]) and set(results.values()) & set(scoring.NEGATIVE_ANSWERS) and not obs:
+        return err("Respuesta negativa: incluya una breve reseña del motivo en la observación")
     before = {"results": it.get("results") or {}, "observation": it.get("observation"), "info_exception": it.get("info_exception")}
     after = {"results": results, "observation": obs, "info_exception": exc}
     _change(a, "item", str(iid), "ITEM_UPDATED",

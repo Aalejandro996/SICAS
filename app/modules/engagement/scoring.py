@@ -264,6 +264,64 @@ class SheetSummary:
     rating: str
 
 
+# ------------------------------------------------------------------ cédulas tipo cuestionario (LOPCYMAT, servicios, cartelera, ADS)
+# Metodología del Excel «Atributos Auditorias»: Sí = 1, Parcialmente = 0,5, No = 0, N/A no cuenta. Cumplimiento del
+# bloque = promedio de sus preguntas respondidas. Índice = suma de (peso x cumplimiento) de los bloques con respuestas
+# (los pesos se reparten entre esos bloques). Riesgo: >= 80 % bajo, >= 60 % medio, < 60 % alto. Bloque crítico
+# («no cumple el promedio requerido»): cumplimiento por debajo del 50 % con todas sus preguntas respondidas.
+QUESTIONNAIRE_RISK = ((80.0, "BAJO"), (60.0, "MEDIO"))
+NEGATIVE_ANSWERS = ("NO_CUMPLE", "PARCIAL")
+
+
+def is_questionnaire(criteria: list[dict]) -> bool:
+    return bool(criteria) and all(c.get("block") for c in criteria)
+
+
+def questionnaire_risk(index: float | None) -> str | None:
+    if index is None:
+        return None
+    return next((label for floor, label in QUESTIONNAIRE_RISK if index >= floor), "ALTO")
+
+
+def questionnaire_summary(criteria: list[dict], items: list[dict]) -> dict:
+    by_ref = {it.get("ref"): it for it in items}
+    blocks: dict[str, dict] = {}
+    for c in criteria:
+        b = blocks.setdefault(str(c["block"]), {"block": str(c["block"]), "title": c.get("block_title") or c.get("section") or "",
+                                                "weight": c.get("block_weight"), "questions": 0, "answered": 0, "not_applicable": 0,
+                                                "exceptions": 0, "points": 0.0, "negatives": []})
+        b["questions"] += 1
+        it = by_ref.get(c["code"]) or {}
+        answer = (it.get("results") or {}).get(c["code"])
+        final = final_score(item_score(criteria, it.get("results") or {}), it.get("manual_score"))
+        if answer == "NO_APLICA":
+            b["not_applicable"] += 1
+        elif answer == "EXCEPCION":
+            b["exceptions"] += 1
+        elif final is not None:
+            b["answered"] += 1
+            b["points"] += float(final) / 100.0
+        if answer in NEGATIVE_ANSWERS:
+            b["negatives"].append({"code": c["code"], "question": c.get("text") or "", "answer": answer, "note": it.get("observation") or ""})
+    weighted = all(b["weight"] not in (None, "") for b in blocks.values())
+    num = den = 0.0
+    for b in blocks.values():
+        b["compliance"] = round(b["points"] / b["answered"] * 100, 2) if b["answered"] else None
+        b["complete"] = b["answered"] + b["not_applicable"] + b["exceptions"] == b["questions"]
+        b["critical"] = bool(b["complete"] and b["compliance"] is not None and b["compliance"] < 50)
+        w = float(b["weight"]) if weighted else float(b["answered"])
+        b["contribution"] = round(w * b["compliance"], 2) if b["compliance"] is not None and weighted else None
+        if b["compliance"] is not None:
+            num += w * b["compliance"]
+            den += w
+        b["points"] = round(b["points"], 2)
+    index = round(num / den, 2) if den else None
+    answered = sum(b["answered"] + b["not_applicable"] + b["exceptions"] for b in blocks.values())
+    return {"blocks": list(blocks.values()), "index": index, "risk": questionnaire_risk(index), "weighted": weighted,
+            "total": len(criteria), "answered": answered, "pending": len(criteria) - answered,
+            "critical": [b["title"] for b in blocks.values() if b["critical"]]}
+
+
 def worksheet_summary(criteria: list[dict], items: list[dict], sheet_manual: float | None = None,
                       thresholds: dict | None = None) -> SheetSummary:
     finals, autos, exc = [], [], 0
@@ -273,7 +331,8 @@ def worksheet_summary(criteria: list[dict], items: list[dict], sheet_manual: flo
         finals.append(final_score(a, it.get("manual_score")))
         if it.get("info_exception") or "EXCEPCION" in (it.get("results") or {}).values():
             exc += 1
-    auto = mean(finals)                       # promedio de las notas finales de los ítems
+    # Cuestionario: índice ponderado por bloque; resto: promedio de las notas finales de los ítems.
+    auto = questionnaire_summary(criteria, items)["index"] if is_questionnaire(criteria) else mean(finals)
     sheet_manual = None if sheet_manual is None else float(sheet_manual)
     final = sheet_manual if sheet_manual is not None else auto
     return SheetSummary(len(items), sum(1 for f in finals if f is not None), exc, auto, final,
@@ -330,9 +389,22 @@ def evaluation_indicators(worksheets: list[dict], overall: dict, thresholds: dic
     sheets = []
     for ws in worksheets:
         summary = worksheet_summary(ws["criteria"], ws["items"], ws.get("manual_score"), t)
+        blocks = risk = None
         if is_system_criteria(ws["criteria"]):
             stats = system_statistics(ws["criteria"], ws["items"])
             indicators = [{"key": k, "label": label, "value": int(stats.get(k) or 0)} for k, label in SYSTEM_INDICATORS]
+        elif is_questionnaire(ws["criteria"]):
+            q = questionnaire_summary(ws["criteria"], ws["items"])
+            counts = _response_counts(ws["criteria"], ws["items"])
+            blocks, risk = q["blocks"], q["risk"]
+            indicators = [
+                {"key": "questions", "label": "Preguntas", "value": q["total"]},
+                {"key": "answered", "label": "Respondidas", "value": q["answered"]},
+                {"key": "affirmative", "label": "Sí", "value": counts["affirmative"]},
+                {"key": "negative", "label": "No / parcialmente", "value": counts["answered"] - counts["affirmative"]},
+                {"key": "not_applicable", "label": "N/A", "value": counts["not_applicable"]},
+                {"key": "critical", "label": "Bloques críticos", "value": len(q["critical"])},
+            ]
         else:
             counts = _response_counts(ws["criteria"], ws["items"])
             indicators = [
@@ -344,7 +416,8 @@ def evaluation_indicators(worksheets: list[dict], overall: dict, thresholds: dic
                 {"key": "pending", "label": "Pendientes", "value": counts["pending"]},
             ]
         sheets.append({"id": ws.get("id"), "title": ws.get("title"), "kind": ws.get("kind"),
-                       "score": summary.final, "rating": summary.rating, "items": summary.items, "indicators": indicators})
+                       "score": summary.final, "rating": summary.rating, "items": summary.items, "indicators": indicators,
+                       **({"blocks": blocks, "risk": risk} if blocks is not None else {})})
     return {"overall": {"score": overall.get("final"), "rating": overall.get("rating", "SIN_CALIFICAR"),
                         "items": sum(s["items"] for s in sheets)},
             "worksheets": sheets}

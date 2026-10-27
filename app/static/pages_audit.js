@@ -5,8 +5,15 @@
   const A = '/audits';
   const LINES = [['AUTO', 'Auto'], ['PATRIMONIAL', 'Patrimonial'], ['PERSONAL', 'Personal'], ['ERP_TI', 'ERP / TI'], ['GENERAL', 'General']];
   const KINDS = [['SUSCRIPCION', 'Suscripción'], ['RECLAMO', 'Reclamo / indemnización'], ['SISTEMAS', 'Auditoría de Sistemas'],
-    ['CXP', 'Cuentas por pagar'], ['CXC', 'Cuentas por cobrar'], ['ADMIN', 'Gestión administrativa']];
-  const GENERAL_KINDS = ['CXP', 'CXC', 'ADMIN'];
+    ['CXP', 'Cuentas por pagar'], ['CXC', 'Cuentas por cobrar'], ['ADMIN', 'Gestión administrativa'],
+    ['CARTELERA', 'Cartelera fiscal y firmas autorizadas'], ['ADS', 'Evaluación ADS'], ['LOPCYMAT', 'Cuestionario LOPCYMAT'],
+    ['SERV_SUC', 'Administración y servicios en sucursales']];
+  const GENERAL_KINDS = ['CXP', 'CXC', 'ADMIN', 'CARTELERA', 'ADS', 'LOPCYMAT', 'SERV_SUC'];
+  // Cuestionarios por bloques (Excel «Atributos Auditorias»): Sí / Parcialmente / No / N/A.
+  const Q_RES = [['', '—'], ['CUMPLE', 'Sí'], ['PARCIAL', 'Parcialmente'], ['NO_CUMPLE', 'No'], ['NO_APLICA', 'N/A'], ['EXCEPCION', 'Excepción']];
+  const Q_NEGATIVE = ['NO_CUMPLE', 'PARCIAL'];
+  const Q_RISK = { BAJO: ['Riesgo bajo', 'LOW'], MEDIO: ['Riesgo medio', 'MEDIUM'], ALTO: ['Riesgo alto', 'HIGH'] };
+  const isQuestionnaire = (ws) => ws.criteria.length > 0 && ws.criteria.every((c) => c.block);
   const LINE = Object.fromEntries(LINES), KIND = Object.fromEntries(KINDS);
   const PHASES = ['PLANIFICACION', 'TRABAJO_CAMPO', 'INFORME'];
   // Auditoría de Sistemas: 1 Levantamiento, 2 Documentación, 3 Pruebas de campo, 4 Informe.
@@ -536,6 +543,7 @@
     if (ctx.canWrite && d.audit.phase !== 'INFORME') bar.append(h('button', { onclick: addSheet }, 'Agregar cédula'));
     const isSys = d.audit.audit_domain === 'SISTEMAS';
     el.append(bar, h('p', { class: 'muted' }, isSys ? 'Cuestionario ERP / TI. Cada fila representa un activo, aplicación, servicio o componente evaluado.' : 'Una cédula por tipo (suscripción o reclamo/indemnización) y línea (Auto, Patrimonial, Personal). Cada fila es una póliza o un siniestro de la muestra.'),
+      h('p', { class: 'muted' }, 'Los cuestionarios (Cartelera fiscal, Evaluación ADS, LOPCYMAT y Administración y servicios en sucursales) se responden una sola vez por unidad: una fila por pregunta.'),
       tbl(['Cédula', 'Criterios', 'Ítems', 'Excepciones', 'Final', 'Calificación'], d.sheets.map((s) => [s.title, s.criteria_count, s.items, s.exceptions, S.score(s.final), S.ratingBadge(s.rating)]), (i) => { location.hash = `#/audits/${ctx.aid}/cedulas/${d.sheets[i].id}`; }));
   }
   async function addSheet() {
@@ -590,6 +598,8 @@
         h('div', { class: 'grid-wrap audit-system-questionnaire' }, h('table', null, h('thead', null, h('tr', null, ['ID', 'Sección', 'Pregunta de auditoría', 'Existencia', 'Soporte documental', 'Evidencia / entregable', 'Puntaje', 'Observación', ''].map((x) => h('th', null, x)))), qBody)), S.paginate(qBody));
       return;
     }
+
+    if (isQuestionnaire(ws)) return questionnaireView(el, d, ws, edit, bar, wid);
 
     if (edit) {
       bar.append(h('button', { onclick: async () => {
@@ -647,6 +657,76 @@
     if (ws.items.length) worksheetContent.push(S.paginate(wBody));
 
     el.append(...worksheetContent);
+  }
+
+  // Cuestionario por bloques: índice ponderado, riesgo y bloques que no cumplen el promedio requerido.
+  function questionnaireView(el, d, ws, edit, bar, wid) {
+    const st = h('div'), sum = h('div', { class: 'row' });
+    const paintStats = (s, q) => {
+      const risk = Q_RISK[q?.risk];
+      sum.replaceChildren(h('b', null, `Índice ${S.score(q?.index)}%`), s.manual_override ? ` · Final ${S.score(s.final)}% (manual)` : '', ' ',
+        risk ? h('span', { class: 'q-risk q-risk-' + q.risk }, risk[0]) : '', ` · ${q?.answered ?? 0}/${q?.total ?? 0} respondidas`);
+      const weighted = q?.weighted && (q?.blocks || []).length > 1;
+      st.replaceChildren(tbl(['Bloque', ...(weighted ? ['Peso'] : []), 'Preguntas', 'Cumplimiento', ...(weighted ? ['Aporte'] : []), 'Estado'],
+        (q?.blocks || []).map((b) => [b.title, ...(weighted ? [S.score(b.weight * 100) + '%'] : []), `${b.answered + b.not_applicable + b.exceptions}/${b.questions}`,
+          b.compliance == null ? '—' : S.score(b.compliance) + '%', ...(weighted ? [b.contribution == null ? '—' : S.score(b.contribution) + '%'] : []),
+          b.critical ? h('span', { class: 'q-risk q-risk-ALTO' }, 'No cumple el promedio requerido') : b.complete ? h('span', { class: 'q-risk q-risk-BAJO' }, 'Cumple') : 'Pendiente'])),
+        ...(q?.critical?.length ? [h('div', { class: 'warn' }, 'Bloques críticos: ' + q.critical.join('; ') + '. Cada respuesta negativa lleva su reseña y pasa al informe.')] : []));
+    };
+    paintStats(d.summary, d.statistics);
+    const refresh = async () => { const f = await S.get(`${A}/worksheets/${wid}`); if (f) paintStats(f.summary, f.statistics); };
+    if (edit && can('audit:rate')) {
+      bar.append(h('button', { class: 'secondary', onclick: () => manual(`${A}/worksheets/${wid}/rating`, ws.title, ws.manual_score) }, 'Ajustar nota de la cédula'));
+      if (ws.manual_score != null) bar.append(h('button', { class: 'secondary', onclick: () => clearManual(`${A}/worksheets/${wid}/rating`) }, 'Quitar ajuste'));
+    }
+    const items = Object.fromEntries(ws.items.map((it) => [it.ref, it]));
+    const body = h('tbody');
+    let block = null;
+    ws.criteria.forEach((c) => {
+      if (c.block !== block) {
+        block = c.block;
+        body.append(h('tr', { class: 'audit-q-block' }, h('td', { colspan: 5 }, h('b', null, c.block_title || c.section),
+          c.block_weight != null && ws.criteria.some((x) => x.block !== c.block) ? ` · peso ${S.score(c.block_weight * 100)}%` : '')));
+      }
+      const it = items[c.code];
+      if (it) body.append(questionRow(it, c, edit, refresh));
+    });
+    el.append(bar, sum, h('p', { class: 'muted' }, 'Sí = 1, Parcialmente = 0,5, No = 0; N/A no cuenta. Índice = suma de (peso del bloque × cumplimiento). Riesgo bajo ≥ 80 %, medio ≥ 60 %, alto < 60 %. Un bloque no cumple el promedio requerido si su cumplimiento queda por debajo del 50 %.'),
+      st, ...(ws.manual_reason ? [h('div', { class: 'warn' }, 'Ajuste manual de la cédula: ' + ws.manual_reason)] : []),
+      ...(!edit ? [h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'El cuestionario se responde en Trabajo de campo.' : 'Solo lectura.')] : []),
+      h('div', { class: 'grid-wrap audit-questionnaire' }, h('table', null,
+        h('thead', null, h('tr', null, ['N°', 'Pregunta', 'Respuesta', 'Reseña (obligatoria si es No o Parcialmente)', ''].map((x) => h('th', null, x)))), body)));
+  }
+
+  function questionRow(it, c, edit, refresh) {
+    const code = c.code;
+    const state = { results: { ...(it.results || {}) }, observation: it.observation || '', info_exception: it.info_exception || '' };
+    const saving = h('span', { class: 'saving' });
+    const sel = h('select', { disabled: !edit }, Q_RES.map(([v, l]) => h('option', { value: v, selected: v === (state.results[code] || '') }, l)));
+    const td = h('td', { class: 'res-' + (state.results[code] || '') }, sel);
+    const obs = h('textarea', { disabled: !edit, value: state.observation, placeholder: 'Motivo de la respuesta negativa, evidencia o plan de acción' });
+    const exc = h('textarea', { disabled: !edit, value: state.info_exception, placeholder: 'Qué información no se recibió', class: state.results[code] === 'EXCEPCION' ? '' : 'hidden' });
+    let timer;
+    const save = () => {
+      const answer = state.results[code];
+      if (Q_NEGATIVE.includes(answer) && !state.observation.trim()) { saving.textContent = 'falta la reseña'; obs.focus(); return; }
+      if (answer === 'EXCEPCION' && !state.info_exception.trim()) { saving.textContent = 'describa la excepción'; exc.focus(); return; }
+      clearTimeout(timer); saving.textContent = 'guardando…';
+      timer = setTimeout(async () => {
+        const r = await S.call(`${A}/items/${it.id}`, { method: 'PUT', json: state });
+        if (!r.ok) { saving.textContent = ''; S.say(S.err(r)); return; }
+        saving.textContent = 'guardado'; refresh();
+      }, 350);
+    };
+    sel.addEventListener('change', () => {
+      if (sel.value) state.results[code] = sel.value; else delete state.results[code];
+      td.className = 'res-' + sel.value; exc.classList.toggle('hidden', sel.value !== 'EXCEPCION'); save();
+    });
+    obs.addEventListener('change', () => { state.observation = obs.value; save(); });
+    exc.addEventListener('change', () => { state.info_exception = exc.value; save(); });
+    const actions = h('td', null, saving);
+    if (edit) actions.append(h('button', { class: 'sm', title: 'Crear una observación desde esta pregunta', onclick: () => obsForm({ item_id: it.id, title: '', condition: it.observation || '' }) }, '+ Obs.'));
+    return h('tr', null, h('td', null, h('b', null, c.number || code)), h('td', null, c.text), td, h('td', null, obs, exc), actions);
   }
 
   function systemQuestionRow(it, criterion, edit, paint, wid, rules = {}) {

@@ -2813,3 +2813,17 @@ tr[hidden] { display: none; }
   padding: 10px 16px; border-radius: 10px; font-weight: 600; box-shadow: 0 6px 20px rgba(15, 30, 60, .18); background: #eef3fa; color: #1d3552; }
 .schedule-banner.warning { background: #fff4d6; color: #6b4a00; border: 1px solid #f0c75e; }
 .schedule-banner[hidden] { display: none; }
+
+/* Cuestionarios por bloques (LOPCYMAT, servicios en sucursales, cartelera fiscal, ADS) */
+#page[data-sicas-view="audit"] .grid-wrap.audit-questionnaire > table { width: 100%; table-layout: fixed; }
+#page[data-sicas-view="audit"] .grid-wrap.audit-questionnaire th:nth-child(1) { width: 92px; }
+#page[data-sicas-view="audit"] .grid-wrap.audit-questionnaire th:nth-child(3) { width: 150px; }
+#page[data-sicas-view="audit"] .grid-wrap.audit-questionnaire th:nth-child(4) { width: 32%; }
+#page[data-sicas-view="audit"] .grid-wrap.audit-questionnaire th:nth-child(5) { width: 96px; }
+#page[data-sicas-view="audit"] .grid-wrap.audit-questionnaire td { vertical-align: top; white-space: normal; }
+#page[data-sicas-view="audit"] .grid-wrap.audit-questionnaire textarea { width: 100%; min-height: 54px; }
+#page[data-sicas-view="audit"] .grid-wrap.audit-questionnaire tr.audit-q-block td { background: #eef2f8; color: #1f3556; }
+.q-risk { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.q-risk-BAJO { background: #d7f0df; color: #1e6b3a; }
+.q-risk-MEDIO { background: #fff1c2; color: #7a5a00; }
+.q-risk-ALTO { background: #f8d4d4; color: #9b1c1c; }

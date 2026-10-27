@@ -481,6 +481,12 @@ def create_financial_worksheet(audit_id, kind, line, user):
             "metadata": row["metadata"] or {},
         }
 
+        # Cédulas tipo cuestionario: bloque y peso del bloque (scoring.questionnaire_summary).
+        meta = row["metadata"] or {}
+        if meta.get("block"):
+            criterion.update(block=str(meta["block"]), block_title=meta.get("block_title") or row["section"],
+                             block_weight=meta.get("block_weight"), number=meta.get("number"))
+
         # El Excel financiero actualmente no define pesos individuales.
         # El motor actual puede tratar la ausencia del peso como peso 1
         # mientras se define formalmente la metodología financiera.

@@ -63,6 +63,37 @@ def auto_conclusion(modality: str, unit: str, overall: dict, observations: list[
     return t.strip()
 
 
+
+QUESTIONNAIRE_RISK_LABEL = {"BAJO": "Riesgo bajo", "MEDIO": "Riesgo medio", "ALTO": "Riesgo alto"}
+QUESTIONNAIRE_ANSWER = {"NO_CUMPLE": "No", "PARCIAL": "Parcialmente"}
+
+
+def _questionnaire_blocks(w: dict, cell, small, width) -> list:
+    """Cuadro por bloque de una cédula tipo cuestionario y reseña de los bloques que no cumplen el promedio."""
+    pct = lambda v: "—" if v is None else f"{v:.1f}%"
+    weighted = any(b.get("weight") not in (None, "") for b in w["blocks"])
+    head = ["Bloque", *(["Peso"] if weighted else []), "Cumplimiento", *(["Aporte"] if weighted else []), "Estado"]
+    rows = [[Paragraph(f"<b>{x}</b>", cell) for x in head]]
+    for b in w["blocks"]:
+        state = "No cumple el promedio requerido" if b["critical"] else ("Pendiente" if not b["complete"] else "Cumple")
+        rows.append([Paragraph(escape(b["title"]), cell), *([Paragraph(pct(float(b["weight"]) * 100), cell)] if weighted else []),
+                     Paragraph(pct(b["compliance"]), cell), *([Paragraph(pct(b["contribution"]), cell)] if weighted else []),
+                     Paragraph(state, cell)])
+    widths = [width * x for x in ((0.42, 0.1, 0.15, 0.11, 0.22) if weighted else (0.55, 0.18, 0.27))]
+    t = Table(rows, colWidths=widths, repeatRows=1)
+    t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#C9D3E3")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEF2F8")),
+                           ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]
+                          + [("BACKGROUND", (-1, i), (-1, i), colors.HexColor("#FDE2E1")) for i, b in enumerate(w["blocks"], 1) if b["critical"]]))
+    out = [t]
+    if w.get("risk"):
+        out.append(Paragraph(f"Índice {pct(w.get('score'))} · {QUESTIONNAIRE_RISK_LABEL.get(w['risk'], w['risk'])} "
+                             "(bajo ≥ 80 %, medio ≥ 60 %, alto < 60 %).", small))
+    for b in (b for b in w["blocks"] if b["critical"]):
+        notes = "; ".join(f"{n['code']} ({QUESTIONNAIRE_ANSWER.get(n['answer'], n['answer'])}): {escape(_cut(n['note'] or 'sin reseña', 220))}"
+                          for n in b["negatives"])
+        out.append(Paragraph(f"<b>{escape(b['title'])}</b> - no cumple el promedio requerido. {notes}", small))
+    return out + [Spacer(1, 4)]
+
 def build_body(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dict], sheets: list[dict], overall: dict,
                observations: list[dict], limitations: list[dict], adjustments: list[dict], evidence: list[dict],
                company: str, version: int, today: date, conclusion: str | None = None, thresholds: dict | None = None) -> dict:
@@ -350,6 +381,8 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
                 ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 3),
             ]))
             s += [Spacer(1, 2), t, Spacer(1, 4)]
+            if w.get("blocks"):
+                s += _questionnaire_blocks(w, cell, small, doc.width)
 
     s.append(Paragraph("3.3 Hallazgos", h2))
     observations = sorted(body["observations"], key=lambda o: (RISK_ORDER.get(o["risk"], 3), o["n"]))
