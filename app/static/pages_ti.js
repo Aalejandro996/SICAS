@@ -8,6 +8,8 @@
   const LEVEL = { 1: 'Nivel 1: Óptimo', 2: 'Nivel 2: Satisfactorio', 3: 'Nivel 3: Requiere mejoras', 4: 'Nivel 4: Crítico' };
   const COLOR = { CRITICA: '#c0392b', ALTA: '#e67e22', MEDIA: '#d4a017', BAJA: '#2e8b57' };
   const day = (v) => (v ? new Date(v).toLocaleDateString('es-VE', { timeZone: 'America/Caracas' }) : '—');
+  // Fechas sin hora (período del expediente): se muestran tal cual, sin convertir de zona horaria.
+  const dateOnly = (v) => (v ? new Date(v).toLocaleDateString('es-VE', { timeZone: 'UTC' }) : '—');
   const pct = (v) => (v == null ? '—' : S.score(v) + '%');
   const critBadge = (c) => (c ? h('span', { class: 'q-risk q-risk-' + CRIT[c][1] }, CRIT[c][0]) : '—');
 
@@ -36,7 +38,7 @@
     const m = S.modal(`${d.unit_name} · ${d.audit_code}`, h('div', null,
       h('div', { class: 'cards' }, S.stat(pct(d.score), 'Nota'), S.stat(LEVEL[d.level] || '—', 'Nivel'), S.stat(critBadge(d.criticality), 'Criticidad'),
         S.stat(String(d.collaborators), 'Colaboradores'), S.stat(String(d.sod_conflicts), 'Conflictos de perfiles')),
-      h('p', null, h('b', null, 'Dictamen: '), d.dictamen || '—', ' · Cierre: ', day(d.closed_at), ' · Período: ', `${day(d.period_from)} → ${day(d.period_to)}`),
+      h('p', null, h('b', null, 'Dictamen: '), d.dictamen || '—', ' · Cierre: ', day(d.closed_at), ' · Período: ', `${dateOnly(d.period_from)} → ${dateOnly(d.period_to)}`),
       h('h3', null, 'Colaboradores'),
       tbl(['Colaborador', 'Cargo', 'Prácticas (de 15)', 'Nota', 'Nivel', 'Perfiles / SoD', 'Dictamen'], people.map((p) => [p.name, p.role || '—', String(p.yes), pct(p.final),
         LEVEL[p.level] || '—', p.sod.length ? h('span', { class: 'q-risk q-risk-ALTO' }, 'Conflicto: ' + p.sod.map((c) => c.replace('TI-', '')).join(', ')) : 'Sin hallazgos', p.dictamen || '—'])),
