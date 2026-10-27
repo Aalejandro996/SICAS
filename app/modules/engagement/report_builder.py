@@ -86,7 +86,7 @@ def _questionnaire_blocks(w: dict, cell, small, width) -> list:
                           + [("BACKGROUND", (-1, i), (-1, i), colors.HexColor("#FDE2E1")) for i, b in enumerate(w["blocks"], 1) if b["critical"]]))
     out = [t]
     if w.get("risk"):
-        out.append(Paragraph(f"Índice {pct(w.get('score'))} · {QUESTIONNAIRE_RISK_LABEL.get(w['risk'], w['risk'])} "
+        out.append(Paragraph(f"{escape(w.get('index_label') or 'Índice')} {pct(w.get('score'))} · {QUESTIONNAIRE_RISK_LABEL.get(w['risk'], w['risk'])} "
                              "(bajo ≥ 80 %, medio ≥ 60 %, alto < 60 %).", small))
     for b in (b for b in w["blocks"] if b["critical"]):
         notes = "; ".join(f"{n['code']} ({QUESTIONNAIRE_ANSWER.get(n['answer'], n['answer'])}): {escape(_cut(n['note'] or 'sin reseña', 220))}"

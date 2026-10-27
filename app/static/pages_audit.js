@@ -664,7 +664,7 @@
     const st = h('div'), sum = h('div', { class: 'row' });
     const paintStats = (s, q) => {
       const risk = Q_RISK[q?.risk];
-      sum.replaceChildren(h('b', null, `Índice ${S.score(q?.index)}%`), s.manual_override ? ` · Final ${S.score(s.final)}% (manual)` : '', ' ',
+      sum.replaceChildren(h('b', null, `${q?.index_label || 'Índice'}: ${S.score(q?.index)}%`), s.manual_override ? ` · Final ${S.score(s.final)}% (manual)` : '', ' ',
         risk ? h('span', { class: 'q-risk q-risk-' + q.risk }, risk[0]) : '', ` · ${q?.answered ?? 0}/${q?.total ?? 0} respondidas`);
       const weighted = q?.weighted && (q?.blocks || []).length > 1;
       st.replaceChildren(tbl(['Bloque', ...(weighted ? ['Peso'] : []), 'Preguntas', 'Cumplimiento', ...(weighted ? ['Aporte'] : []), 'Estado'],
@@ -691,7 +691,7 @@
       const it = items[c.code];
       if (it) body.append(questionRow(it, c, edit, refresh));
     });
-    el.append(bar, sum, h('p', { class: 'muted' }, 'Sí = 1, Parcialmente = 0,5, No = 0; N/A no cuenta. Índice = suma de (peso del bloque × cumplimiento). Riesgo bajo ≥ 80 %, medio ≥ 60 %, alto < 60 %. Un bloque no cumple el promedio requerido si su cumplimiento queda por debajo del 50 %.'),
+    el.append(bar, sum, h('p', { class: 'muted' }, 'Sí = 1, Parcialmente = 0,5, No = 0; N/A no cuenta. Cumplimiento del bloque = promedio de sus respuestas (un bloque sin respuestas vale 0). Índice = suma de (peso del bloque × cumplimiento). Riesgo bajo ≥ 80 %, medio ≥ 60 %, alto < 60 %. Un bloque no cumple el promedio requerido si sus puntos suman menos de la mitad de sus preguntas (las N/A cuentan como preguntas).'),
       st, ...(ws.manual_reason ? [h('div', { class: 'warn' }, 'Ajuste manual de la cédula: ' + ws.manual_reason)] : []),
       ...(!edit ? [h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'El cuestionario se responde en Trabajo de campo.' : 'Solo lectura.')] : []),
       h('div', { class: 'grid-wrap audit-questionnaire' }, h('table', null,

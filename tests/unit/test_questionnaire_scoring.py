@@ -41,11 +41,30 @@ def test_partial_counts_half_and_not_applicable_is_excluded():
     assert q["blocks"][0]["compliance"] == 75.0 and q["risk"] == "MEDIO" and q["pending"] == 0
 
 
-def test_pending_block_is_not_critical_and_unanswered_block_does_not_penalize():
+def test_pending_block_is_not_critical_yet():
     criteria, items = build([("1", 0.5, ["NO_CUMPLE", None]), ("2", 0.5, [None, None])])
     q = scoring.questionnaire_summary(criteria, items)
     assert q["critical"] == [] and q["pending"] == 3
-    assert q["index"] == 0.0                       # solo cuenta el bloque con respuestas
+
+
+def test_block_without_answers_counts_zero_like_the_excel():
+    # Excel: SI.ERROR(PROMEDIO(...); 0) -> un bloque todo N/A aporta 0 y su peso no se reparte.
+    criteria, items = build([("1", 0.5, ["CUMPLE", "CUMPLE"]), ("2", 0.5, ["NO_APLICA", "NO_APLICA"])])
+    q = scoring.questionnaire_summary(criteria, items)
+    assert q["blocks"][1]["compliance"] is None and q["blocks"][1]["contribution"] == 0.0
+    assert q["index"] == 50.0 and q["risk"] == "ALTO"
+
+
+def test_critical_counts_not_applicable_as_questions_like_the_excel():
+    # Excel: puntos < (preguntas / 2). 1 Sí + 3 N/A = 1 punto < 4/2 -> crítico, aunque su promedio sea 100 %.
+    criteria, items = build([("1", 1.0, ["CUMPLE", "NO_APLICA", "NO_APLICA", "NO_APLICA"])])
+    q = scoring.questionnaire_summary(criteria, items)
+    assert q["blocks"][0]["compliance"] == 100.0 and q["critical"] == ["Bloque 1"]
+
+
+def test_index_label_follows_the_excel():
+    assert scoring.index_label("SERV_SUC") == "Índice de Madurez (IMS)"
+    assert scoring.index_label("LOPCYMAT") == "Índice de cumplimiento LOPCYMAT"
 
 
 def test_unweighted_checklist_is_simple_average():

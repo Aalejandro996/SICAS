@@ -922,7 +922,7 @@ def sheet_statistics(ws):
     if ws["kind"] == "SISTEMAS":
         return scoring.system_statistics(ws["criteria"], ws["items"])
     if scoring.is_questionnaire(ws["criteria"]):
-        return scoring.questionnaire_summary(ws["criteria"], ws["items"])
+        return {**scoring.questionnaire_summary(ws["criteria"], ws["items"]), "index_label": scoring.index_label(ws["kind"])}
     return None
 
 

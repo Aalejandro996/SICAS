@@ -265,12 +265,20 @@ class SheetSummary:
 
 
 # ------------------------------------------------------------------ cédulas tipo cuestionario (LOPCYMAT, servicios, cartelera, ADS)
-# Metodología del Excel «Atributos Auditorias»: Sí = 1, Parcialmente = 0,5, No = 0, N/A no cuenta. Cumplimiento del
-# bloque = promedio de sus preguntas respondidas. Índice = suma de (peso x cumplimiento) de los bloques con respuestas
-# (los pesos se reparten entre esos bloques). Riesgo: >= 80 % bajo, >= 60 % medio, < 60 % alto. Bloque crítico
-# («no cumple el promedio requerido»): cumplimiento por debajo del 50 % con todas sus preguntas respondidas.
+# Mismas fórmulas del Excel «Atributos Auditorias» (hojas LOPCYMAT y Servicios Sucursal):
+#   Sí = 1, Parcialmente = 0,5, No = 0, N/A no cuenta.
+#   Cumplimiento del bloque = PROMEDIO de sus preguntas respondidas; sin respuestas vale 0 (SI.ERROR(...; 0)).
+#   Índice = SUMA(peso x cumplimiento) de todos los bloques. Riesgo: >= 80 % bajo, >= 60 % medio, < 60 % alto.
+#   Bloque crítico («no cumple el promedio requerido»): suma de puntos < (preguntas del bloque / 2), contando
+#   las N/A como preguntas. Se marca cuando el bloque está completo, para no señalar uno a medio responder.
 QUESTIONNAIRE_RISK = ((80.0, "BAJO"), (60.0, "MEDIO"))
 NEGATIVE_ANSWERS = ("NO_CUMPLE", "PARCIAL")
+# Nombre del índice en cada cédula, como en el Excel.
+INDEX_LABEL = {"SERV_SUC": "Índice de Madurez (IMS)", "LOPCYMAT": "Índice de cumplimiento LOPCYMAT"}
+
+
+def index_label(kind: str | None) -> str:
+    return INDEX_LABEL.get(str(kind or "").upper(), "Índice de cumplimiento")
 
 
 def is_questionnaire(criteria: list[dict]) -> bool:
@@ -308,14 +316,21 @@ def questionnaire_summary(criteria: list[dict], items: list[dict]) -> dict:
     for b in blocks.values():
         b["compliance"] = round(b["points"] / b["answered"] * 100, 2) if b["answered"] else None
         b["complete"] = b["answered"] + b["not_applicable"] + b["exceptions"] == b["questions"]
-        b["critical"] = bool(b["complete"] and b["compliance"] is not None and b["compliance"] < 50)
-        w = float(b["weight"]) if weighted else float(b["answered"])
-        b["contribution"] = round(w * b["compliance"], 2) if b["compliance"] is not None and weighted else None
-        if b["compliance"] is not None:
-            num += w * b["compliance"]
+        b["critical"] = bool(b["complete"] and b["points"] < b["questions"] / 2)
+        if weighted:
+            # Como el Excel: un bloque sin respuestas (o todo N/A) aporta 0 y su peso no se reparte.
+            w = float(b["weight"])
+            b["contribution"] = round(w * (b["compliance"] or 0.0), 2)
+            num += b["contribution"]
             den += w
+        else:
+            b["contribution"] = None
+            if b["compliance"] is not None:
+                num += b["answered"] * b["compliance"]
+                den += b["answered"]
         b["points"] = round(b["points"], 2)
-    index = round(num / den, 2) if den else None
+    any_answer = any(b["answered"] for b in blocks.values())
+    index = round(num / den, 2) if den and any_answer else None
     answered = sum(b["answered"] + b["not_applicable"] + b["exceptions"] for b in blocks.values())
     return {"blocks": list(blocks.values()), "index": index, "risk": questionnaire_risk(index), "weighted": weighted,
             "total": len(criteria), "answered": answered, "pending": len(criteria) - answered,
@@ -417,7 +432,7 @@ def evaluation_indicators(worksheets: list[dict], overall: dict, thresholds: dic
             ]
         sheets.append({"id": ws.get("id"), "title": ws.get("title"), "kind": ws.get("kind"),
                        "score": summary.final, "rating": summary.rating, "items": summary.items, "indicators": indicators,
-                       **({"blocks": blocks, "risk": risk} if blocks is not None else {})})
+                       **({"blocks": blocks, "risk": risk, "index_label": index_label(ws.get("kind"))} if blocks is not None else {})})
     return {"overall": {"score": overall.get("final"), "rating": overall.get("rating", "SIN_CALIFICAR"),
                         "items": sum(s["items"] for s in sheets)},
             "worksheets": sheets}
