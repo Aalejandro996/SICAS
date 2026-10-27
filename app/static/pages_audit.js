@@ -7,8 +7,9 @@
   const KINDS = [['SUSCRIPCION', 'Suscripción'], ['RECLAMO', 'Reclamo / indemnización'], ['SISTEMAS', 'Auditoría de Sistemas'],
     ['CXP', 'Cuentas por pagar'], ['CXC', 'Cuentas por cobrar'], ['ADMIN', 'Gestión administrativa'],
     ['CARTELERA', 'Cartelera fiscal y firmas autorizadas'], ['ADS', 'Evaluación ADS'], ['LOPCYMAT', 'Cuestionario LOPCYMAT'],
-    ['SERV_SUC', 'Administración y servicios en sucursales']];
-  const GENERAL_KINDS = ['CXP', 'CXC', 'ADMIN', 'CARTELERA', 'ADS', 'LOPCYMAT', 'SERV_SUC'];
+    ['SERV_SUC', 'Administración y servicios en sucursales'], ['TI_SUC', 'Evaluación TI de la sucursal']];
+  const GENERAL_KINDS = ['CXP', 'CXC', 'ADMIN', 'CARTELERA', 'ADS', 'LOPCYMAT', 'SERV_SUC', 'TI_SUC'];
+  const TI_RISK = { 1: 'BAJO', 2: 'MEDIO', 3: 'ALTO', 4: 'ALTO' };
   // Cuestionarios por bloques (Excel «Atributos Auditorias»): Sí / Parcialmente / No / N/A.
   const Q_RES = [['', '—'], ['CUMPLE', 'Sí'], ['PARCIAL', 'Parcialmente'], ['NO_CUMPLE', 'No'], ['NO_APLICA', 'N/A'], ['EXCEPCION', 'Excepción']];
   const Q_NEGATIVE = ['NO_CUMPLE', 'PARCIAL'];
@@ -600,6 +601,7 @@
     }
 
     if (isQuestionnaire(ws)) return questionnaireView(el, d, ws, edit, bar, wid);
+    if (ws.kind === 'TI_SUC') return tiView(el, d, ws, edit, bar, wid);
 
     if (edit) {
       bar.append(h('button', { onclick: async () => {
@@ -696,6 +698,73 @@
       ...(!edit ? [h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'El cuestionario se responde en Trabajo de campo.' : 'Solo lectura.')] : []),
       h('div', { class: 'grid-wrap audit-questionnaire' }, h('table', null,
         h('thead', null, h('tr', null, ['N°', 'Pregunta', 'Respuesta', 'Reseña (obligatoria si es No o Parcialmente)', ''].map((x) => h('th', null, x)))), body)));
+  }
+
+  // Evaluación TI de la sucursal: una fila por colaborador entrevistado; 15 preguntas de ciberseguridad (Sí es lo correcto)
+  // y 5 de perfiles y segregación de funciones (Sí es un conflicto). Al cerrar la auditoría pasa al módulo del Jefe de Sistemas.
+  function tiView(el, d, ws, edit, bar, wid) {
+    const st = d.statistics || {};
+    if (edit) bar.append(h('button', { onclick: async () => {
+      const v = await S.ask('Agregar colaborador entrevistado', [{ name: 'name', label: 'Nombre y apellido', required: true },
+        { name: 'role', label: 'Cargo / puesto de trabajo', required: true }], 'Agregar');
+      if (!v) return;
+      const ref = `${v.name.trim()} — ${v.role.trim()}`.slice(0, 60);
+      const r = await S.send(`${A}/worksheets/${wid}/items`, 'POST', { refs: [ref] });
+      if (r) { S.say(r.added ? 'Colaborador agregado.' : 'Ese colaborador ya está en la cédula.', !!r.added); reload(); }
+    } }, 'Agregar colaborador'));
+    if (edit && can('audit:rate')) {
+      bar.append(h('button', { class: 'secondary', onclick: () => manual(`${A}/worksheets/${wid}/rating`, ws.title, ws.manual_score) }, 'Ajustar nota de la cédula'));
+      if (ws.manual_score != null) bar.append(h('button', { class: 'secondary', onclick: () => clearManual(`${A}/worksheets/${wid}/rating`) }, 'Quitar ajuste'));
+    }
+    const risk = TI_RISK[st.level];
+    el.append(bar,
+      h('div', { class: 'row' }, h('b', null, `Nota: ${S.score(d.summary.final)}%`), d.summary.manual_override ? ' (manual)' : '', ' ',
+        st.level ? h('span', { class: 'q-risk q-risk-' + risk }, `${st.level_label} · ${st.risk}`) : h('span', { class: 'muted' }, 'Sin evaluar'),
+        ` · ${st.rated || 0} colaborador(es)`, st.sod_conflicts ? h('span', { class: 'q-risk q-risk-ALTO' }, ` ${st.sod_conflicts} con conflicto de perfiles`) : ''),
+      st.dictamen ? h('p', null, h('b', null, 'Dictamen preliminar: '), st.dictamen) : null,
+      h('p', { class: 'muted' }, 'Entreviste a cada colaborador. Módulo I (15 preguntas): «Sí» es lo correcto; 14 o más = Nivel 1 Óptimo, 11 a 13 = Nivel 2, 8 a 10 = Nivel 3, ' +
+        'menos de 8 = Nivel 4 Crítico. Módulo II (5 preguntas): cualquier «Sí» es un conflicto de perfiles y limita la nota del colaborador al nivel crítico. ' +
+        'La nota de la cédula es el promedio de los colaboradores. Al cerrar la auditoría, el resultado pasa al módulo Evaluación TI de sucursales del Jefe de Auditoría de Sistemas.'),
+      ...(!edit ? [h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'La evaluación se responde en Trabajo de campo.' : 'Solo lectura.')] : []),
+      (st.people || []).length ? tbl(['Colaborador', 'Prácticas (de 15)', 'Nota', 'Nivel', 'Perfiles / SoD', 'Dictamen', 'Respondidas', ''],
+        st.people.map((p) => [p.ref, p.score == null ? '—' : String(p.yes), p.final == null ? '—' : S.score(p.final) + '%',
+          p.level ? h('span', { class: 'q-risk q-risk-' + TI_RISK[p.level] }, p.level_label) : '—',
+          p.sod.length ? h('span', { class: 'q-risk q-risk-ALTO' }, 'Conflicto: ' + p.sod.map((c) => c.replace('TI-', '')).join(', ')) : (p.score == null ? '—' : 'Sin hallazgos'),
+          p.dictamen || '—', `${p.answered}/${p.total}`,
+          h('button', { class: 'sm', onclick: () => tiInterview(ws, ws.items.find((i) => i.id === p.id), edit) }, edit ? 'Responder' : 'Ver')]))
+        : h('div', { class: 'empty panel' }, 'Sin colaboradores: agregue a cada persona entrevistada en la sucursal.'),
+      (st.questions || []).some((q) => q.yes + q.no) ? h('details', null, h('summary', null, 'Resultado por pregunta'),
+        tbl(['N°', 'Aspecto', 'Sí', 'No', 'Desfavorable', 'ISO/IEC 27001:2022', 'COBIT 2019'], st.questions.map((q) => [q.number, q.topic, q.yes, q.no,
+          q.fail_rate == null ? '—' : S.score(q.fail_rate) + '%', q.iso, q.cobit]))) : null);
+  }
+
+  function tiInterview(ws, it, edit) {
+    const state = JSON.parse(JSON.stringify(it.results || {}));
+    const rows = (mod) => ws.criteria.filter((c) => c.module === mod).map((c) => {
+      const cur = state[c.code] || {};
+      const sel = h('select', { disabled: !edit }, [['', '—'], ['SI', 'Sí'], ['NO', 'No']].map(([v, l]) => h('option', { value: v, selected: v === (cur.r || '') }, l)));
+      const note = h('input', { disabled: !edit, value: cur.c || '', placeholder: 'Comentario (opcional)' });
+      const paint = () => { const bad = c.module === 'I' ? sel.value === 'NO' : sel.value === 'SI'; sel.parentElement && (sel.parentElement.className = bad ? 'res-NO_CUMPLE' : sel.value ? 'res-CUMPLE' : ''); };
+      const sync = () => { state[c.code] = { r: sel.value, c: note.value.trim() }; paint(); };
+      sel.addEventListener('change', sync); note.addEventListener('change', sync);
+      const td = h('td', null, sel); setTimeout(paint);
+      return h('tr', null, h('td', null, h('b', null, c.number)), h('td', { title: `${c.iso} · ${c.cobit}` }, c.text), td, h('td', null, note));
+    });
+    const table = (mod, title) => [h('h3', null, title), h('table', { class: 'ti-form' }, h('thead', null, h('tr', null, ['N°', 'Pregunta', 'Respuesta', 'Comentarios'].map((x) => h('th', null, x)))),
+      h('tbody', null, rows(mod)))];
+    const m = S.modal('Evaluación TI: ' + it.ref, h('div', { class: 'ti-interview' },
+      ...table('I', 'Módulo I: Prácticas de ciberseguridad y protección de información'),
+      ...table('II', 'Módulo II: Identificación de perfiles y segregación de funciones'),
+      h('p', { class: 'muted' }, 'En el Módulo II, «Sí» indica un conflicto de perfiles.')));
+    m.overlay.classList.add('wide');
+    if (edit) m.footer.append(h('button', { onclick: async (e) => {
+      e.target.disabled = true;
+      const r = await S.call(`${A}/items/${it.id}`, { method: 'PUT', json: { results: state, observation: it.observation || '' } });
+      e.target.disabled = false;
+      if (!r.ok) { S.say(S.err(r)); return; }
+      S.say('Respuestas guardadas.', true); m.close(); reload();
+    } }, 'Guardar'));
+    m.footer.append(h('button', { class: 'secondary', onclick: () => m.close() }, edit ? 'Cancelar' : 'Cerrar'));
   }
 
   function questionRow(it, c, edit, refresh) {

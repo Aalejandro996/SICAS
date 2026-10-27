@@ -481,8 +481,12 @@ def create_financial_worksheet(audit_id, kind, line, user):
             "metadata": row["metadata"] or {},
         }
 
-        # Cédulas tipo cuestionario: bloque y peso del bloque (scoring.questionnaire_summary).
         meta = row["metadata"] or {}
+        # Evaluación TI de la sucursal: preguntas SI / NO por colaborador (ti_branch).
+        if meta.get("module"):
+            criterion.update(evaluation_mode="TI_SUC", module=meta["module"], number=meta.get("number"), good=meta.get("good"),
+                             topic=meta.get("topic") or row["subsection"], iso=meta.get("iso"), cobit=meta.get("cobit"))
+        # Cédulas tipo cuestionario: bloque y peso del bloque (scoring.questionnaire_summary).
         if meta.get("block"):
             criterion.update(block=str(meta["block"]), block_title=meta.get("block_title") or row["section"],
                              block_weight=meta.get("block_weight"), number=meta.get("number"))
@@ -559,7 +563,8 @@ def create_financial_worksheet(audit_id, kind, line, user):
             t=template["code"],
             u=user,
         )
-        for criterion in criteria:
+        # En la Evaluación TI cada fila es un colaborador: se agregan después, no una por pregunta.
+        for criterion in ([] if kind == "TI_SUC" else criteria):
             x(
                 """
                 INSERT INTO engagement.items

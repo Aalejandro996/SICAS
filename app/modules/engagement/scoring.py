@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import ti_branch
 from .financial_rules import evaluate_criterion, RULE_SCORED
 
 POINTS = {"CUMPLE": 100.0, "PARCIAL": 50.0, "NO_CUMPLE": 0.0}
@@ -167,6 +168,10 @@ def item_score(criteria: list[dict], results: dict) -> float | None:
     # Auditoría de Sistemas: permanece exactamente en su rama propia.
     if is_system_criteria(criteria):
         return system_item_score(criteria, results)
+
+    # Evaluación TI de la sucursal: una fila por colaborador entrevistado.
+    if ti_branch.is_ti_criteria(criteria):
+        return ti_branch.item_score(criteria, results)
 
     # Auditoría Financiera: usa exclusivamente el motor financiero.
     if is_financial_criteria(criteria):
@@ -408,6 +413,20 @@ def evaluation_indicators(worksheets: list[dict], overall: dict, thresholds: dic
         if is_system_criteria(ws["criteria"]):
             stats = system_statistics(ws["criteria"], ws["items"])
             indicators = [{"key": k, "label": label, "value": int(stats.get(k) or 0)} for k, label in SYSTEM_INDICATORS]
+        elif ti_branch.is_ti_criteria(ws["criteria"]):
+            t = ti_branch.summary(ws["criteria"], ws["items"])
+            blocks = None
+            indicators = [
+                {"key": "collaborators", "label": "Colaboradores", "value": t["rated"]},
+                {"key": "avg_yes", "label": "Prácticas cumplidas (de 15)", "value": round(t["avg_yes"] or 0, 1)},
+                {"key": "sod", "label": "Conflictos de perfiles", "value": t["sod_conflicts"]},
+                {"key": "level", "label": "Nivel (1 óptimo a 4 crítico)", "value": t["level"] or "—"},
+            ]
+            sheets.append({"id": ws.get("id"), "title": ws.get("title"), "kind": ws.get("kind"), "score": summary.final,
+                           "rating": summary.rating, "items": summary.items, "indicators": indicators,
+                           "ti": {"people": [{k: p[k] for k in ("ref", "yes", "final", "level_label", "sod", "dictamen")} for p in t["people"]],
+                                  "dictamen": t["dictamen"], "level_label": t["level_label"], "risk": t["risk"]}})
+            continue
         elif is_questionnaire(ws["criteria"]):
             q = questionnaire_summary(ws["criteria"], ws["items"])
             counts = _response_counts(ws["criteria"], ws["items"])

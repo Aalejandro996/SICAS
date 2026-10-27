@@ -85,6 +85,8 @@ INSERT INTO iam.permissions(code, module, description) VALUES ('audit:systems_re
 INSERT INTO iam.permissions(code, module, description) VALUES ('audit:systems_manage', 'engagement', 'Crear y trabajar auditorías de sistemas/TI') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('audit:systems_execute', 'engagement', 'Pantalla operativa del Auditor de Sistemas') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('audit:systems_review', 'engagement', 'Supervisar auditorías e informes de sistemas/TI') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
+INSERT INTO iam.permissions(code, module, description) VALUES ('ti_branch:read', 'engagement', 'Ver los resultados de la Evaluación TI de las sucursales') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
+INSERT INTO iam.permissions(code, module, description) VALUES ('ti_branch:report', 'engagement', 'Generar el informe normativo de la Evaluación TI de las sucursales') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('auditlog:read', 'audit_log', 'Consultar el audit trail') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('auditlog:verify_chain', 'audit_log', 'Verificar integridad de la cadena de hashes') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('auditlog:export', 'audit_log', 'Exportar el audit trail') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
@@ -175,6 +177,7 @@ INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM 
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='CONTRALOR' AND p.code='rule:execute' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='CONTRALOR' AND p.code='rule:read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='CONTRALOR' AND p.code='template:manage' ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='CONTRALOR' AND p.code='ti_branch:read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='GERENCIA' AND p.code='audit:read_final' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='GERENCIA' AND p.code='audit:report_approve_gerente' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='GERENCIA' AND p.code='audit:sign_gerente' ON CONFLICT DO NOTHING;
@@ -272,6 +275,8 @@ INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM 
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='report:read_approved' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='report:submit' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='report:verify_signature' ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='ti_branch:read' ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='ti_branch:report' ON CONFLICT DO NOTHING;
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('report:draft', 'report:approve', 'Quien redacta no aprueba.') ON CONFLICT DO NOTHING;
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('report:draft', 'report:sign', 'Quien redacta no firma.') ON CONFLICT DO NOTHING;
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('ingestion:upload', 'finding:close', 'Quien carga datos no cierra hallazgos.') ON CONFLICT DO NOTHING;

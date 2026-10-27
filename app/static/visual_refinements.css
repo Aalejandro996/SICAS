@@ -2865,3 +2865,21 @@ tr[hidden] { display: none; }
 #page .holiday-cal button.day:hover, #page .holiday-cal button.day:focus-visible { outline: 2px solid #4a6fa5; outline-offset: -2px; }
 #page .holiday-cal button.mname { background: transparent !important; color: #1f3556 !important; border: 0 !important; padding: 0 !important; }
 #page .holiday-cal .month.big button.day { min-height: 72px; }
+
+/* Evaluación TI de sucursales */
+#page .ti-filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; }
+#page .ti-filters label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; min-width: 150px; }
+#page .ti-chart { width: 100%; max-width: 900px; height: auto; }
+#page .ti-chart .grid { stroke: #e3e8f0; }
+#page .ti-chart .axis, #page .ti-chart .val { font-size: 11px; fill: #4a5a70; }
+#page .ti-chart .lbl { font-size: 12px; fill: #22324a; }
+.overlay.wide .modal { max-width: min(1100px, 96vw); width: 96vw; }
+.ti-interview table.ti-form { width: 100%; }
+.ti-interview table.ti-form td { vertical-align: top; }
+.ti-interview table.ti-form input { width: 100%; }
+.overlay.wide .modal { max-height: 92vh; overflow: auto; }
+#page .ti-page .cal-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: #4a5a70; margin-top: 6px; }
+#page .ti-page .cal-legend span { display: inline-flex; align-items: center; gap: 6px; }
+#page .ti-page .sw { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
+.ti-interview table.ti-form td.res-CUMPLE { background: #d7f0df !important; }
+.ti-interview table.ti-form td.res-NO_CUMPLE { background: #f8d4d4 !important; }

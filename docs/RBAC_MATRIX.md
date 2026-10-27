@@ -123,6 +123,8 @@ Leyenda: ● permitido · (vacío) denegado.
 | `audit:systems_manage` | Crear y trabajar auditorías de sistemas/TI |  |  |  |  |
 | `audit:systems_execute` | Pantalla operativa del Auditor de Sistemas |  |  |  |  |
 | `audit:systems_review` | Supervisar auditorías e informes de sistemas/TI |  |  |  |  |
+| `ti_branch:read` | Ver los resultados de la Evaluación TI de las sucursales |  |  | ● |  |
+| `ti_branch:report` | Generar el informe normativo de la Evaluación TI de las sucursales |  |  |  |  |
 
 ## Audit trail
 

@@ -128,6 +128,9 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     "audit:systems_manage": ("engagement", "Crear y trabajar auditorías de sistemas/TI"),
     "audit:systems_execute": ("engagement", "Pantalla operativa del Auditor de Sistemas"),
     "audit:systems_review": ("engagement", "Supervisar auditorías e informes de sistemas/TI"),
+    # Evaluación TI de sucursales (módulo del Jefe de Auditoría de Sistemas)
+    "ti_branch:read": ("engagement", "Ver los resultados de la Evaluación TI de las sucursales"),
+    "ti_branch:report": ("engagement", "Generar el informe normativo de la Evaluación TI de las sucursales"),
     # Trazabilidad
     "auditlog:read": ("audit_log", "Consultar el audit trail"),
     "auditlog:verify_chain": ("audit_log", "Verificar integridad de la cadena de hashes"),
@@ -168,7 +171,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "auditlog:read", "auditlog:verify_chain", "auditlog:export",
         "audit:read", "audit:read_final", "audit:report_approve", "audit:sign_contralor",
         "audit:template_manage", "audit:unit_manage", "audit:annul_approve", "backup:restore_approve",
-        "admin:action_approve",
+        "admin:action_approve", "ti_branch:read",
     },
     GERENCIA: {
         "finding:read_summary",
@@ -203,6 +206,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "dashboard:operational",
         "audit:read", "audit:manage", "audit:rate", "audit:report_draft", "audit:report_submit", "audit:initial", "audit:pac_send", "audit:read_final",
         "audit:systems_read", "audit:systems_manage", "audit:systems_review", "audit:report_approve_jefe",
+        "ti_branch:read", "ti_branch:report",
     },
 }
 

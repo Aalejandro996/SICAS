@@ -15,7 +15,7 @@ from app.core.security.rbac import permission_required
 from . import assemble as asm
 from . import codification
 from . import score_snapshots
-from . import evidence_rules, observation_rules, offline, phase_documents, regulatory_rules, scoring, storage, system_questionnaire
+from . import evidence_rules, observation_rules, offline, phase_documents, regulatory_rules, scoring, storage, system_questionnaire, ti_branch
 from . import repositories as repo
 from . import workflow as wf
 from .pac import build_pac
@@ -923,6 +923,8 @@ def sheet_statistics(ws):
         return scoring.system_statistics(ws["criteria"], ws["items"])
     if scoring.is_questionnaire(ws["criteria"]):
         return {**scoring.questionnaire_summary(ws["criteria"], ws["items"]), "index_label": scoring.index_label(ws["kind"])}
+    if ti_branch.is_ti_criteria(ws["criteria"]):
+        return ti_branch.summary(ws["criteria"], ws["items"])
     return None
 
 
@@ -1374,7 +1376,8 @@ def audit_auto_observations(aid):
     if not catalog:
         return err("El catálogo normativo no está configurado", 409)
     existing = repo.active_rule_keys(a["id"])
-    drafts = [o for ws in repo.worksheets_with_items(a["id"]) for o in regulatory_rules.findings(ws, catalog)
+    drafts = [o for ws in repo.worksheets_with_items(a["id"])
+              for o in (ti_branch.findings(ws) if ti_branch.is_ti_criteria(ws["criteria"]) else regulatory_rules.findings(ws, catalog))
               if o["rule_key"] not in existing]
     if not drafts:
         return jsonify(created=0, note="No hay incumplimientos nuevos sin hallazgo.")
@@ -1572,6 +1575,13 @@ def update_item(iid):
                 return err("En Auditoría de Sistemas el control se responde solo SI o NO")
             if control in scoring.SYSTEM_CONTROL_VALUES or doc in scoring.SYSTEM_DOC_POINTS or evidence in scoring.SYSTEM_EVIDENCE_POINTS:
                 results[k] = {"control": control if control in scoring.SYSTEM_CONTROL_VALUES else "", "documental": doc if doc in scoring.SYSTEM_DOC_POINTS else "", "evidencia": evidence if evidence in scoring.SYSTEM_EVIDENCE_POINTS else ""}
+    elif ti_branch.is_ti_criteria(ws["criteria"]):
+        results = {}
+        for k, v in raw_results.items():
+            v = v if isinstance(v, dict) else {"r": v}
+            r, c = str(v.get("r") or "").upper(), str(v.get("c") or "").strip()[:500]
+            if k in codes and (r in ti_branch.ANSWERS or c):
+                results[k] = {"r": r if r in ti_branch.ANSWERS else "", "c": c}
     else:
         valid = set(scoring.POINTS) | {"NO_APLICA", "EXCEPCION"}
         results = {k: v for k, v in raw_results.items() if k in codes and v in valid}
@@ -1857,7 +1867,8 @@ def offline_template(aid):
     a, e = load(aid, write=True, phases="WORK")
     if e:
         return e
-    sheets = repo.worksheets_with_items(a["id"])
+    # La Evaluación TI de la sucursal se responde en línea (entrevista por colaborador).
+    sheets = [s for s in repo.worksheets_with_items(a["id"]) if not ti_branch.is_ti_criteria(s["criteria"])]
     if not sheets:
         return err("Cree primero las cédulas de la auditoría")
     data = offline.export_workbook({"id": a["id"], "code": a["code"], "title": a["title"], "unit": a["unit_name"]},
@@ -2896,8 +2907,19 @@ def pac_send(aid):
     snapshot = _phase_snapshot(a, "PAC_SENT", report=final, reason=f"PAC enviado a {to}")
     _change(a, "audit", a["id"], "PAC_SENT", {"to": to, "status": {"before": a.get("status"), "after": "CLOSED"}}, report=final)
     repo.mark_pac_sent(a["id"], to, me(), phase_snapshot=snapshot)
+    _publish_ti_results(a)
     log("PAC_SENT", entity_type="audit", entity_id=a["id"], after_data={"to": to, "emailed": emailed}, request_id=g.request_id)
     return jsonify(status="CLOSED", emailed=emailed, note=None if emailed else "Registrado como enviado y auditoría cerrada. Entregue el informe firmado y el PAC a la unidad (el correo automático no está configurado).")
+
+
+def _publish_ti_results(a):
+    """Al cerrar una auditoría con Evaluación TI de la sucursal, su resultado pasa al módulo del Jefe de Auditoría de Sistemas."""
+    try:
+        from app.modules.ti_branches.service import publish
+        publish(a["id"])
+    except Exception:  # noqa: BLE001 - el cierre de la auditoría no depende de este consolidado
+        repo.db.session.rollback()
+        current_app.logger.exception("No se pudo publicar la Evaluación TI de la auditoría %s", a["id"])
 
 
 @bp.get("/final-reports")
