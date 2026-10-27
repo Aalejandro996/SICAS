@@ -563,8 +563,9 @@ def create_financial_worksheet(audit_id, kind, line, user):
             t=template["code"],
             u=user,
         )
-        # En la Evaluación TI cada fila es un colaborador: se agregan después, no una por pregunta.
-        for criterion in ([] if kind == "TI_SUC" else criteria):
+        # Solo los cuestionarios llevan una fila por pregunta. En las demás cédulas cada fila es una póliza o
+        # siniestro (o un colaborador en la Evaluación TI) que el auditor agrega después.
+        for criterion in (criteria if criteria and all(c.get("block") for c in criteria) else []):
             x(
                 """
                 INSERT INTO engagement.items

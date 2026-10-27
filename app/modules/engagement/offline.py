@@ -30,7 +30,7 @@ def _xlsx():
     except ModuleNotFoundError as exc:
         raise OfflineError("El componente Excel no está instalado en el servidor. Instale openpyxl y reconstruya el contenedor API.") from exc
 
-from .templates import KINDS, LINES, RESULTS, RESULT_LABEL
+from .templates import KINDS, LINES, RESULTS, RESULT_LABEL, SHEET_PARSE, SHEET_VALUES
 
 MAGIC = "SICAS-OFFLINE-1"
 MAX_BYTES = 10 * 1024 * 1024
@@ -111,14 +111,14 @@ def export_workbook(audit: dict, sheets: list[dict], secret: bytes, exported_at:
         (f"Descargado el {exported_at:%d/%m/%Y %H:%M} por {exported_by}", False), ("", False),
         ("CÓMO USAR ESTE ARCHIVO", True),
         ("1. Trabaje en las hojas de las cédulas incluidas en este paquete. Una fila = un registro o control de la muestra.", False),
-        ("2. En cada columna de criterio elija: CUMPLE, PARCIAL, NO_CUMPLE, NO_APLICA o EXCEPCION (información no recibida).", False),
+        ("2. En cada columna de criterio elija: SI, NO, NO_APLICA o EXCEPCION (información no recibida).", False),
         ("3. Si usa EXCEPCION, describa en la última columna qué información no se recibió. Queda como limitación al alcance.", False),
         ("4. La calificación manual (0-100) es opcional y a criterio del Auditor; exige justificación (mínimo 10 caracteres).", False),
         ("5. Puede agregar filas nuevas al final: deje vacía la columna ID y escriba la Referencia.", False),
         ("6. NO modifique las columnas ID ni Referencia de filas existentes, ni las hojas ocultas, ni cambie los nombres de las hojas.", False),
         ("7. Al tener conexión: Auditorías → su auditoría → Sin conexión → Cargar archivo. Verá una vista previa antes de aplicar.", False),
         ("8. Las evidencias (fotos, documentos) se adjuntan en la aplicación al conectarse.", False), ("", False),
-        ("Ejemplo de una fila llena:  SIN-000123 | CUMPLE | PARCIAL | NO_CUMPLE | NO_APLICA | … | (manual) 70 | "
+        ("Ejemplo de una fila llena:  POL-000123 | SI | NO | NO_APLICA | SI | … | (manual) 70 | "
          "Subsanado en el sitio | Falta peritaje firmado | EXCEPCION: la sucursal no entregó la denuncia", False),
     ]
     for i, (t, b) in enumerate(lines, 1):
@@ -145,7 +145,7 @@ def export_workbook(audit: dict, sheets: list[dict], secret: bytes, exported_at:
         ws = wb.create_sheet(name)
         codes = [c["code"] for c in sh["criteria"]]
         ws["A1"] = f"{kind_label(sh.get('kind'))} — {line_label(sh.get('line'))}"; ws["A1"].font = Font(name=ARIAL, bold=True, size=12, color="1F3864")
-        ws["A2"] = "Criterios: ver hoja «Criterios». Valores: " + " / ".join(RESULTS); ws["A2"].font = Font(name=ARIAL, italic=True, size=9)
+        ws["A2"] = "Criterios: ver hoja «Criterios». Valores: " + " / ".join(SHEET_VALUES[r] for r in RESULTS); ws["A2"].font = Font(name=ARIAL, italic=True, size=9)
         headers = ["ID (no editar)", "Referencia (póliza / siniestro)"] + codes + TAIL
         for j, h in enumerate(headers, 1):
             c = ws.cell(row=HEADER_ROW, column=j, value=h)
@@ -157,7 +157,8 @@ def export_workbook(audit: dict, sheets: list[dict], secret: bytes, exported_at:
             _put(ws, r, 1, it["id"]).fill = fill_lock
             _put(ws, r, 2, it["ref"]).fill = fill_lock
             for k, code in enumerate(codes):
-                _put(ws, r, FIXED_LEFT + 1 + k, (it.get("results") or {}).get(code))
+                v = (it.get("results") or {}).get(code)
+                _put(ws, r, FIXED_LEFT + 1 + k, SHEET_VALUES.get(v, v))
             base_col = FIXED_LEFT + len(codes) + 1
             _put(ws, r, base_col, _num(it.get("manual_score")))
             _put(ws, r, base_col + 1, it.get("manual_reason"))
@@ -174,8 +175,8 @@ def export_workbook(audit: dict, sheets: list[dict], secret: bytes, exported_at:
                     c.fill = fill_in                                 # celdas de captura
                 elif r < FIRST_ROW + len(sh["items"]):
                     c.fill = fill_lock                               # ID y referencia existentes: no editar
-        dv = DataValidation(type="list", formula1='"' + ",".join(RESULTS) + '"', allow_blank=True, showErrorMessage=True,
-                            errorTitle="Valor no válido", error="Use: " + ", ".join(RESULTS))
+        dv = DataValidation(type="list", formula1='"' + ",".join(SHEET_VALUES[r] for r in RESULTS) + '"', allow_blank=True, showErrorMessage=True,
+                            errorTitle="Valor no válido", error="Use: " + ", ".join(SHEET_VALUES[r] for r in RESULTS))
         ws.add_data_validation(dv)
         dv.add(f"{get_column_letter(FIXED_LEFT + 1)}{FIRST_ROW}:{get_column_letter(FIXED_LEFT + len(codes))}{last}")
         mcol = get_column_letter(FIXED_LEFT + len(codes) + 1)
@@ -252,10 +253,12 @@ def parse_workbook(data: bytes, secret: bytes, expected_audit_id: str) -> tuple[
             for k, code in enumerate(codes):
                 v = vals[FIXED_LEFT + k]
                 v = str(v).strip().upper() if v not in (None, "") else ""
-                if v and v not in RESULTS:
-                    row["errors"].append(f"{code}: valor «{v}» no válido")
+                parsed = SHEET_PARSE.get(v)
+                # PARCIAL solo se conserva en filas existentes que ya lo tenían (respuesta anterior al cambio).
+                if v and (parsed is None or (parsed == "PARCIAL" and not item_id)):
+                    row["errors"].append(f"{code}: valor «{v}» no válido (use SI, NO, NO_APLICA o EXCEPCION)")
                 elif v:
-                    res[code] = v
+                    res[code] = parsed
             tail = vals[FIXED_LEFT + len(codes):]
             manual_raw, reason, obs, exc = tail
             try:

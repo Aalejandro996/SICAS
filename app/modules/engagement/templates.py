@@ -24,9 +24,17 @@ GENERAL_KINDS = ("CXP", "CXC", "ADMIN", "CARTELERA", "ADS", "LOPCYMAT", "SERV_SU
 # Cédulas tipo cuestionario (una fila por pregunta, agrupadas en bloques con peso; ver scoring.questionnaire_summary).
 QUESTIONNAIRE_KINDS = ("CARTELERA", "ADS", "LOPCYMAT", "SERV_SUC")
 TEMPLATE_KEYS = (("SUSCRIPCION", "AUTO"), ("SUSCRIPCION", "PATRIMONIAL"), ("SUSCRIPCION", "PERSONAL"), ("RECLAMO", "AUTO"), ("RECLAMO", "PATRIMONIAL"), ("RECLAMO", "PERSONAL"), ("SISTEMAS", "ERP_TI"))
-RESULTS = ("CUMPLE", "PARCIAL", "NO_CUMPLE", "NO_APLICA", "EXCEPCION")
-RESULT_LABEL = {"CUMPLE": "Cumple", "PARCIAL": "Cumple parcialmente", "NO_CUMPLE": "No cumple",
+# Respuestas de las cédulas: Sí, No, No aplica y Excepción. PARCIAL ya no se ofrece; solo se conserva en
+# las respuestas registradas antes del cambio (puntúa 50 y no se puede volver a elegir).
+RESULTS = ("CUMPLE", "NO_CUMPLE", "NO_APLICA", "EXCEPCION")
+LEGACY_RESULTS = ("PARCIAL",)
+RESULT_LABEL = {"CUMPLE": "Sí", "PARCIAL": "Parcial (respuesta anterior)", "NO_CUMPLE": "No",
                 "NO_APLICA": "No aplica", "EXCEPCION": "Excepción (información no recibida)"}
+# Valores del Excel sin conexión: se escriben SI / NO / NO_APLICA / EXCEPCION.
+SHEET_VALUES = {"CUMPLE": "SI", "NO_CUMPLE": "NO", "NO_APLICA": "NO_APLICA", "EXCEPCION": "EXCEPCION", "PARCIAL": "PARCIAL"}
+SHEET_PARSE = {"SI": "CUMPLE", "SÍ": "CUMPLE", "CUMPLE": "CUMPLE", "NO": "NO_CUMPLE", "NO_CUMPLE": "NO_CUMPLE",
+               "NO_APLICA": "NO_APLICA", "NO APLICA": "NO_APLICA", "N/A": "NO_APLICA", "EXCEPCION": "EXCEPCION",
+               "EXCEPCIÓN": "EXCEPCION", "PARCIAL": "PARCIAL"}
 
 # Ramos del sistema de origen -> línea de la cédula (editable)
 BRANCH_TO_LINE = {

@@ -10,8 +10,9 @@
     ['SERV_SUC', 'Administración y servicios en sucursales'], ['TI_SUC', 'Evaluación TI de la sucursal']];
   const GENERAL_KINDS = ['CXP', 'CXC', 'ADMIN', 'CARTELERA', 'ADS', 'LOPCYMAT', 'SERV_SUC', 'TI_SUC'];
   const TI_RISK = { 1: 'BAJO', 2: 'MEDIO', 3: 'ALTO', 4: 'ALTO' };
-  // Cuestionarios por bloques (Excel «Atributos Auditorias»): Sí / Parcialmente / No / N/A.
-  const Q_RES = [['', '—'], ['CUMPLE', 'Sí'], ['PARCIAL', 'Parcialmente'], ['NO_CUMPLE', 'No'], ['NO_APLICA', 'N/A'], ['EXCEPCION', 'Excepción']];
+  // Respuestas de todas las cédulas: Sí / No / No aplica / Excepción.
+  // PARCIAL solo aparece en respuestas registradas antes del cambio (no se puede volver a elegir).
+  const Q_RES = [['', '—'], ['CUMPLE', 'Sí'], ['NO_CUMPLE', 'No'], ['NO_APLICA', 'No aplica'], ['EXCEPCION', 'Excepción']];
   const Q_NEGATIVE = ['NO_CUMPLE', 'PARCIAL'];
   const Q_RISK = { BAJO: ['Riesgo bajo', 'LOW'], MEDIO: ['Riesgo medio', 'MEDIUM'], ALTO: ['Riesgo alto', 'HIGH'] };
   const isQuestionnaire = (ws) => ws.criteria.length > 0 && ws.criteria.every((c) => c.block);
@@ -24,7 +25,9 @@
   // Fases en las que se responden los controles (Sistemas: 1 a 3; resto: Trabajo de campo e Informe).
   const itemsPhase = (a) => (isSystems(a) ? SYSTEM_PHASES.slice(0, 3) : PHASES.slice(1)).includes(a?.phase);
   const workPhase = (a) => (isSystems(a) ? true : a?.phase !== 'PLANIFICACION');
-  const RES = [['', '—'], ['CUMPLE', 'Cumple'], ['PARCIAL', 'Parcial'], ['NO_CUMPLE', 'No cumple'], ['NO_APLICA', 'No aplica'], ['EXCEPCION', 'Excepción']];
+  const RES = Q_RES;
+  const LEGACY_RES = ['PARCIAL', 'Parcial (anterior)'];
+  const resOptions = (value) => (value === 'PARCIAL' ? [...RES, LEGACY_RES] : RES);
   const L = (v) => (v == null || v === '' ? '—' : (S.label2 || ((x) => x))(S.label(v)));
   let codes = null;
   const catalogs = async () => (codes = codes || await S.get(A + '/codification'));
@@ -605,12 +608,9 @@
 
     if (edit) {
       bar.append(h('button', { onclick: async () => {
-        const v = await S.ask('Agregar referencias', [{ name: 'refs', type: 'textarea', label: 'Números de póliza o siniestro (uno por línea)', required: true }], 'Agregar');
-        if (v) { const r = await S.send(`${A}/worksheets/${wid}/items`, 'POST', { refs: v.refs.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean) }); if (r) { S.say(r.added + ' ítems agregados.', true); reload(); } }
-      } }, 'Agregar referencias'), h('button', { onclick: async () => {
-        const v = await S.ask('Muestra aleatoria', [{ name: 'n', type: 'number', label: 'Cantidad de ítems (1 a 200)', value: 20, required: true }], 'Sacar muestra', 'Se toma de las pólizas/siniestros cargados en el período y línea del expediente.');
-        if (v) { const r = await S.send(`${A}/worksheets/${wid}/sample`, 'POST', { n: Number(v.n) }); if (r) { S.say(r.added + ' ítems agregados.' + (r.note ? ' ' + r.note : ''), true); reload(); } }
-      } }, 'Muestra aleatoria'));
+        const v = await S.ask('Agregar números de póliza', [{ name: 'refs', type: 'textarea', label: 'Números de póliza o siniestro a analizar (uno por línea)', required: true }], 'Agregar');
+        if (v) { const r = await S.send(`${A}/worksheets/${wid}/items`, 'POST', { refs: v.refs.split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean) }); if (r) { S.say(r.added + ' pólizas agregadas.', true); reload(); } }
+      } }, 'Agregar números de póliza'));
     }
     if (edit && can('audit:rate')) {
       bar.append(h('button', { class: 'secondary', onclick: () => manual(`${A}/worksheets/${wid}/rating`, ws.title, ws.manual_score) }, 'Ajustar nota de la cédula'));
@@ -654,7 +654,7 @@
             )
           )
         : h('div', { class: 'empty panel' },
-            'Sin ítems: agregue referencias o saque una muestra aleatoria.')
+            'Sin pólizas: use «Agregar números de póliza» para cargar las que va a analizar.')
     );
     if (ws.items.length) worksheetContent.push(S.paginate(wBody));
 
@@ -693,11 +693,11 @@
       const it = items[c.code];
       if (it) body.append(questionRow(it, c, edit, refresh));
     });
-    el.append(bar, sum, h('p', { class: 'muted' }, 'Sí = 1, Parcialmente = 0,5, No = 0; N/A no cuenta. Cumplimiento del bloque = promedio de sus respuestas (un bloque sin respuestas vale 0). Índice = suma de (peso del bloque × cumplimiento). Riesgo bajo ≥ 80 %, medio ≥ 60 %, alto < 60 %. Un bloque no cumple el promedio requerido si sus puntos suman menos de la mitad de sus preguntas (las N/A cuentan como preguntas).'),
+    el.append(bar, sum, h('p', { class: 'muted' }, 'Sí = 1, No = 0; No aplica y Excepción no cuentan. Cumplimiento del bloque = promedio de sus respuestas (un bloque sin respuestas vale 0). Índice = suma de (peso del bloque × cumplimiento). Riesgo bajo ≥ 80 %, medio ≥ 60 %, alto < 60 %. Un bloque no cumple el promedio requerido si sus puntos suman menos de la mitad de sus preguntas (las «No aplica» cuentan como preguntas).'),
       st, ...(ws.manual_reason ? [h('div', { class: 'warn' }, 'Ajuste manual de la cédula: ' + ws.manual_reason)] : []),
       ...(!edit ? [h('div', { class: 'warn' }, d.audit.phase === 'PLANIFICACION' ? 'El cuestionario se responde en Trabajo de campo.' : 'Solo lectura.')] : []),
       h('div', { class: 'grid-wrap audit-questionnaire' }, h('table', null,
-        h('thead', null, h('tr', null, ['N°', 'Pregunta', 'Respuesta', 'Reseña (obligatoria si es No o Parcialmente)', ''].map((x) => h('th', null, x)))), body)));
+        h('thead', null, h('tr', null, ['N°', 'Pregunta', 'Respuesta', 'Reseña (obligatoria si es No)', ''].map((x) => h('th', null, x)))), body)));
   }
 
   // Evaluación TI de la sucursal: una fila por colaborador entrevistado; 15 preguntas de ciberseguridad (Sí es lo correcto)
@@ -768,7 +768,7 @@
     const code = c.code;
     const state = { results: { ...(it.results || {}) }, observation: it.observation || '', info_exception: it.info_exception || '' };
     const saving = h('span', { class: 'saving' });
-    const sel = h('select', { disabled: !edit }, Q_RES.map(([v, l]) => h('option', { value: v, selected: v === (state.results[code] || '') }, l)));
+    const sel = h('select', { disabled: !edit }, resOptions(state.results[code]).map(([v, l]) => h('option', { value: v, selected: v === (state.results[code] || '') }, l)));
     const td = h('td', { class: 'res-' + (state.results[code] || '') }, sel);
     const obs = h('textarea', { disabled: !edit, value: state.observation, placeholder: 'Motivo de la respuesta negativa, evidencia o plan de acción' });
     const exc = h('textarea', { disabled: !edit, value: state.info_exception, placeholder: 'Qué información no se recibió', class: state.results[code] === 'EXCEPCION' ? '' : 'hidden' });
@@ -853,7 +853,7 @@
       const s = await S.get(`${A}/worksheets/${wid}`); if (s) paint(s.summary);
     }, 450); };
     const cells = ws.criteria.map((c) => {
-      const sel = h('select', { disabled: !edit }, RES.map(([v, l]) => h('option', { value: v, selected: v === (state.results[c.code] || '') }, l)));
+      const sel = h('select', { disabled: !edit }, resOptions(state.results[c.code]).map(([v, l]) => h('option', { value: v, selected: v === (state.results[c.code] || '') }, l)));
       const td = h('td', { class: 'res-' + (state.results[c.code] || '') }, sel);
       sel.addEventListener('change', () => {
         if (sel.value) state.results[c.code] = sel.value; else delete state.results[c.code];

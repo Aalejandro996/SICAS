@@ -20,7 +20,7 @@ from . import repositories as repo
 from . import workflow as wf
 from .pac import build_pac
 from .report_builder import SIG_BOX_CONTRALOR, SIG_BOX_GERENTE, body_hash, build_pdf, initials_of
-from .templates import AUDIT_KINDS, BRANCH_TO_LINE, GENERAL_KINDS, KINDS, LINES, TEMPLATE_KEYS, branches_for_line, validate_criteria
+from .templates import AUDIT_KINDS, BRANCH_TO_LINE, GENERAL_KINDS, KINDS, LINES, RESULTS, TEMPLATE_KEYS, branches_for_line, validate_criteria
 from app.modules.notifications.service import (
     notify_report_submitted, notify_report_jefe_approved, notify_report_returned, notify_report_signed,
 )
@@ -1585,8 +1585,10 @@ def update_item(iid):
             if k in codes and (r in ti_branch.ANSWERS or c):
                 results[k] = {"r": r if r in ti_branch.ANSWERS else "", "c": c}
     else:
-        valid = set(scoring.POINTS) | {"NO_APLICA", "EXCEPCION"}
-        results = {k: v for k, v in raw_results.items() if k in codes and v in valid}
+        # Sí / No / No aplica / Excepción. PARCIAL solo se conserva donde ya estaba (respuesta anterior al cambio).
+        prev = it.get("results") or {}
+        results = {k: v for k, v in raw_results.items()
+                   if k in codes and (v in RESULTS or (v == "PARCIAL" and prev.get(k) == "PARCIAL"))}
     guard = _item_phase_guard(a, it, results)
     if guard:
         return guard

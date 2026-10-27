@@ -150,16 +150,19 @@ class OfflineTest(unittest.TestCase):
     def test_update_new_and_invalid_rows(self):
         c0 = 3
         def f(ws, wb):
-            ws.cell(5, c0 + 1).value = "NO_CUMPLE"                        # actualiza SIN-0002
+            ws.cell(5, c0 + 1).value = "NO"                               # actualiza SIN-0002
             ws.cell(5, c0 + len(self.codes)).value = 55                    # manual
             ws.cell(5, c0 + len(self.codes) + 1).value = "Subsanado durante la visita"
-            ws.cell(7, 2).value = "SIN-9999"; ws.cell(7, c0).value = "PARCIAL"                  # fila nueva
+            ws.cell(7, 2).value = "SIN-9999"; ws.cell(7, c0).value = "SI"                       # fila nueva
+            ws.cell(10, 2).value = "SIN-6666"; ws.cell(10, c0).value = "PARCIAL"                # PARCIAL ya no se ofrece
             ws.cell(8, 2).value = "SIN-8888"; ws.cell(8, c0).value = "TAL VEZ"                  # valor inválido
             ws.cell(9, 2).value = "SIN-7777"; ws.cell(9, c0).value = "EXCEPCION"                # excepción sin detalle
         _, rows, errs, plan = self.run_import(self.edit(f))
         st = {p["ref"]: p["status"] for p in plan}
         self.assertEqual(st["SIN-0002"], "UPDATE"); self.assertEqual(st["SIN-9999"], "NEW")
         self.assertEqual(st["SIN-8888"], "INVALID"); self.assertEqual(st["SIN-7777"], "INVALID")
+        self.assertEqual(st["SIN-6666"], "INVALID")
+        self.assertEqual(next(p for p in plan if p["ref"] == "SIN-9999")["data"]["results"][self.codes[0]], "CUMPLE")
         upd = next(p for p in plan if p["ref"] == "SIN-0002")["data"]
         self.assertEqual((upd["manual"], upd["results"][self.codes[1]]), (55.0, "NO_CUMPLE"))
 

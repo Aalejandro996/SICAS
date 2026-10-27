@@ -1,6 +1,6 @@
 """
 Calificación de cédulas (lógica pura).
-  - Cada criterio se responde: CUMPLE (100), PARCIAL (50), NO_CUMPLE (0), NO_APLICA o EXCEPCION (no puntúan).
+  - Cada criterio se responde: CUMPLE (Sí, 100), NO_CUMPLE (No, 0), NO_APLICA o EXCEPCION (no puntúan). PARCIAL (50) solo en respuestas anteriores.
   - Nota automática de un ítem = promedio ponderado de los criterios que puntúan.
   - 2. El Auditor puede AJUSTARLA manualmente (0-100) con justificación obligatoria; la nota final es la manual.
   - Nota de cédula = promedio de las notas finales de sus ítems (o la manual de la cédula). Nota de auditoría = promedio
