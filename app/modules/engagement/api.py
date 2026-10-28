@@ -444,6 +444,46 @@ def new_file():
 
 
 # ------------------------------------------------------------------ auditorías
+@bp.get("/gaps")
+@permission_required("audit:read", "audit:read_final")
+def gaps():
+    """Brechas altas y medias de las auditorías visibles (para el Inicio).
+
+    Sistemas: brechas del cuestionario (alta = sin control, sin soporte y sin evidencia; media = con control y
+    soporte pero evidencia desactualizada). Demás auditorías: hallazgos vigentes de riesgo alto o medio cuyo plan
+    de acción no está cumplido. La Evaluación TI de la sucursal no cuenta (es informativa).
+    """
+    audits = [a for a in repo.list_audits(domains=sorted(audit_domains())) if visible(a)]
+    out = {"alto": 0, "medio": 0, "sistemas": {"alto": 0, "medio": 0}, "auditorias": {"alto": 0, "medio": 0}}
+    units = {}
+
+    def add(unit, origin, alto, medio):
+        out["alto"] += alto; out["medio"] += medio
+        out[origin]["alto"] += alto; out[origin]["medio"] += medio
+        u = units.setdefault(unit, {"unit": unit, "alto": 0, "medio": 0})
+        u["alto"] += alto; u["medio"] += medio
+
+    others = []
+    for a in audits:
+        if is_systems(a):
+            for ws in repo.worksheets_with_items(a["id"]):
+                if ws["kind"] == "SISTEMAS":
+                    st = scoring.system_statistics(ws["criteria"], ws["items"])
+                    add(a["unit_name"], "sistemas", int(st.get("brechas_alto") or 0), int(st.get("brechas_medio") or 0))
+        else:
+            others.append(a)
+    if others:
+        by_id = {a["id"]: a for a in others}
+        rows = repo.q("SELECT audit_id::text AS audit_id, risk, count(*) AS n FROM engagement.observations "
+                      "WHERE audit_id = ANY(CAST(:ids AS uuid[])) AND superseded_by IS NULL AND risk IN ('ALTO', 'MEDIO') "
+                      "AND pac_status <> 'CUMPLIDA' AND COALESCE(rule_key, '') NOT LIKE 'ti_suc:%' GROUP BY 1, 2", ids=list(by_id))
+        for r in rows:
+            add(by_id[r["audit_id"]]["unit_name"], "auditorias", int(r["n"]) if r["risk"] == "ALTO" else 0, int(r["n"]) if r["risk"] == "MEDIO" else 0)
+    out["by_unit"] = sorted((u for u in units.values() if u["alto"] or u["medio"]), key=lambda u: (-u["alto"], -u["medio"], u["unit"]))[:8]
+    out["audits"] = len(audits)
+    return jsonify(out)
+
+
 @bp.get("/auditors")
 @permission_required("audit:manage")
 def auditors():

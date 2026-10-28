@@ -2894,3 +2894,8 @@ tr[hidden] { display: none; }
 #page .audit-letter td.res-CUMPLE { background: #d7f0df !important; }
 #page .audit-letter td.res-NO_CUMPLE { background: #f8d4d4 !important; }
 #page .audit-letter select { min-width: 200px; }
+
+/* Inicio: unidades con más brechas, bajo la leyenda de la dona */
+#page .home-severity-panel .home-gap-head { margin-top: 10px; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: #6b7a90; }
+#page .home-severity-panel .home-panel-note { margin: 10px 0 0; }
+#page .home-severity-panel .home-gap-head .home-donut-percent { padding-left: 10px; }

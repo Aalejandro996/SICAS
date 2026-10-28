@@ -25,22 +25,9 @@
   };
 
   const modules = {
-    ops: {
-      src: '/static/pages_ops.js?v=20261028-ie1',
-      pages: [
-        { id: 'ingestion', title: 'Cargas', perms: ['ingestion:read'] },
-        { id: 'findings', title: 'Hallazgos', perms: ['finding:read'] },
-        { id: 'lcft', title: 'LC/FT', perms: ['lcft:alert_read'] },
-        {
-          id: 'reports',
-          title: 'Dictámenes',
-          perms: ['report:read', 'report:read_approved']
-        }
-      ]
-    },
-
+    // Cargas, Hallazgos, LC/FT y Dictámenes se retiraron del menú (ningún rol los ve).
     audit: {
-      src: '/static/pages_audit.js?v=20261028-ie1',
+      src: '/static/pages_audit.js?v=20261028-br1',
       pages: [
         {
           id: 'audits',
@@ -57,7 +44,7 @@
     },
 
     contralor: {
-      src: '/static/pages_contralor.js?v=20261028-ie1',
+      src: '/static/pages_contralor.js?v=20261028-br1',
       pages: [
         {
           id: 'contralor-dashboard',

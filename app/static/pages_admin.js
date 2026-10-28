@@ -11,23 +11,23 @@
     render: async (el) => {
       el.classList.add('home-dashboard');
 
-      const hasAnalytics = can('dashboard:operational', 'dashboard:executive');
       const hasAuditAccess = can('audit:read');
       const hasReportAccess = can(
         'audit:report_approve', 'audit:sign_gerente', 'audit:read_final'
       );
 
-      // Reutilizar las consultas existentes; no se introducen endpoints nuevos.
-      const overview = hasAnalytics
-        ? await S.get('/analytics/overview')
-        : null;
-
+      // Consultas del Inicio: auditorías, informes finales y brechas.
       const auditData = hasAuditAccess
         ? await S.get('/audits')
         : null;
 
       const reportData = hasReportAccess
         ? await S.get('/audits/final-reports')
+        : null;
+
+      // Brechas altas y medias de las auditorías visibles (reemplazan los hallazgos del motor analítico).
+      const gaps = can('audit:read', 'audit:read_final')
+        ? await S.get('/audits/gaps')
         : null;
 
       const audits = Array.isArray(auditData?.audits)
@@ -47,15 +47,6 @@
       const pendingReports = reports.filter(
         (r) => r.status !== 'SIGNED'
       );
-
-      const severity = overview?.open_findings_by_severity || {};
-      const totalFindings = Object.values(severity).reduce(
-        (sum, value) => sum + (Number(value) || 0), 0
-      );
-
-      const failedUploads = (overview?.ingestion || [])
-        .filter((job) => job.status === 'FAILED')
-        .reduce((sum, job) => sum + (Number(job.n) || 0), 0);
 
       const number = (value) => Number(value || 0).toLocaleString('es-ES');
 
@@ -116,13 +107,9 @@
         addMetric(pendingReports.length, 'Informes por atender');
       }
 
-      if (overview) {
-        addMetric(totalFindings, 'Hallazgos abiertos');
-        addMetric(Number(severity.CRITICAL || 0), 'Hallazgos críticos');
-
-        if (failedUploads > 0) {
-          addMetric(failedUploads, 'Cargas fallidas');
-        }
+      if (gaps) {
+        addMetric(gaps.alto, 'Brechas altas');
+        addMetric(gaps.medio, 'Brechas medias');
       }
 
       if (metrics.children.length) {
@@ -354,18 +341,16 @@
         const copy = h('div', { class: 'home-panel-title' });
 
         copy.append(
-          h('h3', null, 'Hallazgos abiertos por severidad'),
+          h('h3', null, 'Brechas altas y medias'),
           h('p', { class: 'home-panel-note' },
-            'Distribución de los hallazgos informados por el sistema')
+            'Sistemas: brechas del cuestionario. Demás auditorías: hallazgos vigentes de riesgo alto o medio con el plan de acción pendiente.')
         );
         heading.append(copy);
         panel.append(heading);
 
         const rows = [
-          { key: 'CRITICAL', label: 'Críticos', color: '#d9485f' },
-          { key: 'HIGH', label: 'Altos', color: '#ed8b32' },
-          { key: 'MEDIUM', label: 'Medios', color: '#e0b13e' },
-          { key: 'LOW', label: 'Bajos', color: '#3479b8' }
+          { key: 'alto', label: 'Brechas altas', color: '#d9485f' },
+          { key: 'medio', label: 'Brechas medias', color: '#e0b13e' }
         ].map((row) => ({
           ...row,
           value: Math.max(0, Number(values[row.key] || 0))
@@ -376,7 +361,7 @@
         const ring = h('div', {
           class: 'home-donut-ring',
           role: 'img',
-          'aria-label': `Total de hallazgos abiertos: ${number(total)}`
+          'aria-label': `Total de brechas altas y medias: ${number(total)}`
         });
 
         if (total > 0) {
@@ -399,7 +384,7 @@
         const hole = h('div', { class: 'home-donut-center' });
         hole.append(
           h('strong', null, number(total)),
-          h('span', null, 'abiertos')
+          h('span', null, 'brechas')
         );
         ring.append(hole);
         layout.append(ring);
@@ -426,6 +411,24 @@
           );
           legend.append(legendRow);
         });
+
+        // Origen de las brechas y unidades con más brechas.
+        const origin = h('p', { class: 'home-panel-note' },
+          `Sistemas: ${number(values.sistemas?.alto)} altas y ${number(values.sistemas?.medio)} medias · ` +
+          `Demás auditorías: ${number(values.auditorias?.alto)} altas y ${number(values.auditorias?.medio)} medias`);
+        legend.append(origin);
+        (values.by_unit || []).slice(0, 5).forEach((u) => {
+          const row = h('div', { class: 'home-donut-row' });
+          row.append(h('span', { class: 'home-donut-name' }, u.unit),
+            h('strong', { class: 'home-donut-count' }, number(u.alto)),
+            h('span', { class: 'home-donut-percent' }, number(u.medio)));
+          legend.append(row);
+        });
+        if ((values.by_unit || []).length) {
+          legend.insertBefore(h('div', { class: 'home-donut-row home-gap-head' },
+            h('span', { class: 'home-donut-name' }, 'Unidad'), h('strong', { class: 'home-donut-count' }, 'Altas'),
+            h('span', { class: 'home-donut-percent' }, 'Medias')), origin.nextSibling);
+        }
 
         layout.append(legend);
         panel.append(layout);
@@ -592,8 +595,8 @@
           ));
         }
       }
-      if (overview) {
-        charts.append(severityDonutPanel(severity));
+      if (gaps) {
+        charts.append(severityDonutPanel(gaps));
       }
 
       if (charts.children.length) {
@@ -972,37 +975,6 @@
     draw();
   } });
 
-  // ------------------------------------------------------------------ Audit trail
-  S.pages.push({ id: 'auditlog', title: 'Audit trail', perms: ['auditlog:read'], render: async (el) => {
-    el.append(h('h2', null, 'Audit trail (registro inmutable)'));
-    const actions = (await S.get('/auditlog/actions'))?.actions || [];
-    const f = { action: h('select', null, h('option', { value: '' }, '(todas)'), actions.map((a) => h('option', { value: a }, a))),
-      outcome: h('select', null, ['', 'SUCCESS', 'FAILURE', 'DENIED'].map((o) => h('option', { value: o }, o || '(todos)'))),
-      actor: h('input', { placeholder: 'usuario' }), desde: h('input', { type: 'date' }), hasta: h('input', { type: 'date' }) };
-    const out = h('div');
-    let offset = 0;
-    const load = async () => {
-      const q = new URLSearchParams({ limit: 100, offset });
-      for (const [k, v] of Object.entries(f)) if (v.value) q.set(k, v.value);
-      const d = await S.get('/auditlog?' + q);
-      if (!d) return;
-      out.replaceChildren(tbl(['#', 'Fecha', 'Usuario', 'Acción', 'Entidad', 'Resultado', 'IP'], d.events.map((e) => [e.id, fmt(e.occurred_at), e.actor_username || '—', e.action,
-        (e.entity_type || '') + (e.entity_id ? ' ' + String(e.entity_id).slice(0, 14) : ''), S.badge(e.outcome), e.ip || ''])),
-        h('div', { class: 'row' }, offset ? h('button', { class: 'secondary sm', onclick: () => { offset = Math.max(0, offset - 100); load(); } }, '← Anteriores') : null,
-          d.events.length === 100 ? h('button', { class: 'secondary sm', onclick: () => { offset += 100; load(); } }, 'Siguientes →') : null));
-    };
-    const bar = h('div', { class: 'toolbar' }, h('label', null, 'Acción', f.action), h('label', null, 'Resultado', f.outcome), h('label', null, 'Usuario', f.actor), h('label', null, 'Desde', f.desde), h('label', null, 'Hasta', f.hasta),
-      h('button', { onclick: () => { offset = 0; load(); } }, 'Buscar'));
-    if (can('auditlog:verify_chain')) bar.append(h('button', { class: 'secondary', onclick: async () => {
-      const d = await S.send('/auditlog/verify', 'POST');
-      if (d) S.modal('Verificación de integridad', h('div', null, d.ok ? h('div', { class: 'okbox' }, `Cadena íntegra: ${d.rows_checked} eventos verificados, sin inconsistencias.`)
-        : h('div', null, h('div', { class: 'warn' }, `¡${d.inconsistencies.length} inconsistencias detectadas!`), S.json(d.inconsistencies)))).footer.append(h('button', { onclick: (e) => e.target.closest('.overlay').remove() }, 'Cerrar'));
-    } }, 'Verificar integridad'));
-    el.append(bar, out);
-    load();
-  } });
-
-  // ------------------------------------------------------------------ Sistema
   S.pages.push({ id: 'system', title: 'Sistema', perms: ['health:read', 'backup:read'], render: async (el) => {
     const draw = async () => {
       el.replaceChildren(h('h2', null, 'Sistema'));
