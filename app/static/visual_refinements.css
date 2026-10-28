@@ -2883,3 +2883,14 @@ tr[hidden] { display: none; }
 #page .ti-page .sw { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
 .ti-interview table.ti-form td.res-CUMPLE { background: #d7f0df !important; }
 .ti-interview table.ti-form td.res-NO_CUMPLE { background: #f8d4d4 !important; }
+
+/* Auditoría de Sistemas, fases 2 y 3: controles de la carta de documentación */
+#page .audit-letter td { vertical-align: top; }
+#page .audit-letter textarea { min-width: 220px; min-height: 64px; }
+#page .audit-letter .letter-qs { display: grid; gap: 6px; }
+#page .audit-letter .letter-q { display: grid; grid-template-columns: 1fr 90px; gap: 8px; align-items: center; font-size: .85rem; }
+#page .audit-letter .letter-docs { display: grid; gap: 2px; margin-bottom: 6px; font-size: .82rem; }
+#page .audit-letter .letter-outcome { font-weight: 600; }
+#page .audit-letter td.res-CUMPLE { background: #d7f0df !important; }
+#page .audit-letter td.res-NO_CUMPLE { background: #f8d4d4 !important; }
+#page .audit-letter select { min-width: 200px; }

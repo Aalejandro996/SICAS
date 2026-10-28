@@ -137,23 +137,45 @@ class PhaseRulesApiTests(unittest.TestCase):
         for p in (patch.object(engagement_api, "log"), patch("app.core.audit.audit_service.audit")):
             p.start(); self.addCleanup(p.stop)
 
-    def put(self, control, doc="SI"):
+    def put(self, control, doc="SI", payload=None):
         with self.app.app_context():
             t = create_access_token(identity=AUDITOR, additional_claims={"mfa": True, "mfa_at": time.time(),
                                                                          "perms": ["audit:read", "audit:manage", "audit:systems_read"]})
+        body = payload if payload is not None else {"control": control, "documental": doc, "evidencia": "ACTUALIZADO"}
         return self.client.put(f"/audits/items/{self.item['id']}", headers={"Authorization": f"Bearer {t}"},
-                               json={"results": {"TI010": {"control": control, "documental": doc, "evidencia": "ACTUALIZADO"}}})
+                               json={"results": {"TI010": body}})
 
-    def test_documentacion_keeps_control_existence_from_levantamiento(self):
-        self.assertEqual(self.put("NO").status_code, 409)
-        self.assertEqual(self.put("SI", doc="NO").status_code, 200)
+    def saved(self):
+        return engagement_api.repo.update_item.call_args.args[1]["TI010"]
 
-    def test_pruebas_only_for_documented_controls(self):
-        self.audit["phase"] = "PRUEBAS_CAMPO"
-        response = self.put("SI")
+    def test_documentacion_registers_what_the_unit_delivered(self):
+        # La existencia del control se mantiene como en el Levantamiento, aunque se envíe otra.
+        self.assertEqual(self.put("NO", payload={"control": "NO", "doc_status": "DESACTUALIZADA", "doc_note": "Política 2023"}).status_code, 200)
+        r = self.saved()
+        self.assertEqual((r["control"], r["documental"], r["evidencia"], r["doc_status"]), ("SI", "SI", "DESACTUALIZADO", "DESACTUALIZADA"))
+        self.assertEqual(self.put("", payload={"doc_status": "TAL VEZ"}).status_code, 400)
+
+    def test_documentacion_only_for_controls_in_the_letter(self):
+        self.item["phase_results"]["LEVANTAMIENTO"]["results"]["TI010"]["documental"] = "NO"
+        response = self.put("", payload={"doc_status": "ACTUALIZADA"})
         self.assertEqual(response.status_code, 409)
-        self.assertIn("documentados", response.get_json()["error"])
+        self.assertIn("carta", response.get_json()["error"])
         engagement_api.repo.update_item.assert_not_called()
+
+    def test_pruebas_without_documentation_needs_justification_and_scores_zero(self):
+        self.audit["phase"] = "PRUEBAS_CAMPO"   # al cierre de Documentación la unidad no entregó (soporte NO)
+        self.assertEqual(self.put("", payload={"justification": "La unidad no respondió la carta en el plazo."}).status_code, 200)
+        r = self.saved()
+        self.assertTrue(r["sin_doc"]); self.assertEqual(r["outcome"], "SIN_DOC")
+        self.assertEqual(scoring.system_item_score([CRIT], {"TI010": r}), 0.0)
+
+    def test_pruebas_with_documentation_answers_three_questions(self):
+        self.audit["phase"] = "PRUEBAS_CAMPO"
+        self.item["phase_results"]["DOCUMENTACION"]["results"]["TI010"] = {"control": "SI", "doc_status": "ACTUALIZADA"}
+        self.assertEqual(self.put("", payload={"q1": "SI", "q2": "SI", "q3": "NO"}).status_code, 200)
+        r = self.saved()
+        self.assertEqual((r["outcome"], r["control"], r["documental"], r["evidencia"]), ("PARCIAL", "SI", "SI", "INEXISTENTE"))
+        self.assertEqual(scoring.system_item_score([CRIT], {"TI010": r}), 70.0)
 
     def test_controls_are_closed_in_informe(self):
         self.audit["phase"] = "INFORME"

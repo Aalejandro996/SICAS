@@ -1,4 +1,5 @@
-"""PDF del informe general de auditorías: introducción, objetivos, alcance, contenido, conclusión y firmas.
+"""PDF de los informes consolidados (Informe Ejecutivo e Informe de Documentación): introducción, objetivos,
+alcance, contenido, conclusión y firmas.
 
 No supera MAX_PAGES páginas: si el contenido no cabe, se imprime con un nivel de detalle progresivamente más
 compacto (el detalle completo de cada auditoría sigue disponible en SICAS).
@@ -25,8 +26,13 @@ NAVY = colors.HexColor("#1F3864")
 SITUATION_COLOR = {"CRITICA": "#F8D4D4", "ATENCION": "#FDE4C8", "ACEPTABLE": "#FFF1C2", "FAVORABLE": "#D7F0DF", "SIN_CALIFICAR": "#ECEFF4"}
 RISK_LABEL = {"ALTO": "Alto", "MEDIO": "Medio", "BAJO": "Bajo"}
 MARK = {"DRAFT": "BORRADOR", "RETURNED": "BORRADOR", "IN_REVIEW": "EN REVISIÓN"}
-# Detalle por nivel: hallazgos por auditoría, largo de la condición, largo del criterio normativo, auditorías con detalle.
-LEVELS = ((6, 360, None, None), (4, 200, 600, None), (3, 0, 380, None), (2, 0, 240, 40), (1, 0, 160, 25), (0, 0, 120, 15))
+# Detalle por nivel: hallazgos por auditoría en el cuadro, (sin uso), largo del criterio normativo, auditorías con detalle.
+LEVELS = ((15, 0, None, None), (10, 0, 600, None), (6, 0, 380, None), (4, 0, 240, 40), (3, 0, 160, 25), (2, 0, 120, 15))
+RISK_SHADE = {"ALTO": "#F8D4D4", "MEDIO": "#FFF1C2", "BAJO": "#E1EAF7"}
+DOC_LABEL = {"ACTUALIZADA": "Recibida y actualizada", "DESACTUALIZADA": "Recibida, desactualizada", "NO_ENTREGADA": "No entregada",
+             "SIN_RESPUESTA": "Sin respuesta", None: "Pendiente"}
+DOC_SHADE = {"ACTUALIZADA": "#D7F0DF", "DESACTUALIZADA": "#FFF1C2", "NO_ENTREGADA": "#F8D4D4", "SIN_RESPUESTA": "#F8D4D4"}
+NAME = {"EJECUTIVO": "Informe Ejecutivo", "DOCUMENTACION": "Informe de Documentación"}
 
 
 def _pct(v):
@@ -73,8 +79,8 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
     small = ParagraphStyle("s", parent=text, fontSize=7.5, leading=9.5, textColor=colors.HexColor("#3A4A60"))
     cell = ParagraphStyle("c", parent=text, fontSize=fs - 1, leading=fs + 1.5)
     hdr = ParagraphStyle("hd", parent=cell, textColor=colors.white, fontName="Helvetica-Bold")
-    h1 = ParagraphStyle("h1", parent=ss["Heading1"], fontSize=13.5, textColor=NAVY, spaceBefore=9 if level < 3 else 5, spaceAfter=4)
-    h2 = ParagraphStyle("h2", parent=ss["Heading2"], fontSize=10.5, textColor=NAVY, spaceBefore=6 if level < 3 else 3, spaceAfter=3)
+    h1 = ParagraphStyle("h1", parent=ss["Heading1"], fontSize=13.5, textColor=NAVY, spaceBefore=9 if level < 3 else 5, spaceAfter=4, keepWithNext=1)
+    h2 = ParagraphStyle("h2", parent=ss["Heading2"], fontSize=10.5, textColor=NAVY, spaceBefore=6 if level < 3 else 3, spaceAfter=3, keepWithNext=1)
     P = lambda t, st=cell: Paragraph(escape("" if t is None else str(t)).replace("\n", "<br/>"), st)
     mark = MARK.get(state.get("status"))
     k = body["kpis"]
@@ -92,7 +98,7 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
             canvas.translate(LETTER[0] / 2, LETTER[1] / 2); canvas.rotate(45); canvas.drawCentredString(0, 0, mark)
             canvas.rotate(-45); canvas.translate(-LETTER[0] / 2, -LETTER[1] / 2)
         canvas.setFillColor(colors.grey); canvas.setFont("Helvetica", 7.5)
-        canvas.drawString(2 * cm, 1.2 * cm, f"{body['company']} · Contraloría · Informe general {body['code']} (rev. {body.get('revision', 1)})")
+        canvas.drawString(2 * cm, 1.2 * cm, f"{body['company']} · Contraloría · {NAME.get(body.get('kind'), 'Informe')} {body['code']} (rev. {body.get('revision', 1)})")
         canvas.drawRightString(LETTER[0] - 2 * cm, 1.2 * cm, f"Pág. {doc.page}")
         canvas.restoreState()
 
@@ -109,16 +115,23 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=LETTER, leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2.1 * cm, bottomMargin=1.9 * cm,
-                            title=f"Informe general {body['code']} — {body['title']}", author=body["company"], subject="Informe general de auditorías")
+                            title=f"{NAME.get(body.get('kind'), 'Informe')} {body['code']} — {body['title']}", author=body["company"], subject=NAME.get(body.get("kind"), "Informe"))
     W = doc.width
     s = [Paragraph(escape(body["company"]), h2), Paragraph("CONTRALORÍA CORPORATIVA", ParagraphStyle("cc", parent=h2, fontSize=9.5)),
-         Paragraph("INFORME GENERAL DE AUDITORÍAS", ParagraphStyle("t", parent=h1, fontSize=18)), P(body["title"], h2), Spacer(1, 3)]
+         Paragraph(NAME.get(body.get("kind"), "Informe").upper(), ParagraphStyle("t", parent=h1, fontSize=18)), P(body["title"], h2), Spacer(1, 3)]
     author = body.get("author") or {}
+    doc_kind = body.get("kind") == "DOCUMENTACION"
     s.append(table([[P("Informe N°"), P(body["code"]), P("Fecha de emisión"), P(_date(body["generated_on"]))],
                     [P("Auditorías"), P(k["audits"]), P("Unidades / sucursales"), P(k["units"])],
-                    [P("Período revisado"), P(f"{_date(body['period']['from'])} a {_date(body['period']['to'])}"), P("Calificación promedio"), P(_pct(k["avg_score"]))],
+                    ([P("Controles pedidos"), P(k["requested"]), P("Documentación obtenida"), P(f"{k['received']} ({_pct(k['rate'])})")] if doc_kind else
+                     [P("Período del informe"), P((body.get("period_label") or "").capitalize()), P("Calificación promedio"), P(_pct(k["avg_score"]))]),
                     [P("Elaborado por"), P(f"{author.get('name', '—')} ({author.get('role', 'Auditor')})"), P("Revisión"), P(body.get("revision", 1))]],
                    [W * 0.2, W * 0.32, W * 0.24, W * 0.24], header=False))
+    if doc_kind:
+        s += _documentation(body, level, W, text, small, cell, hdr, h1, h2, table, P)
+        s.append(KeepTogether(_signatures(state, W, text, small, cell, hdr, h1, table, P)))
+        doc.build(s, onFirstPage=furniture, onLaterPages=furniture)
+        return buf.getvalue(), doc.page
 
     # 1. Introducción
     s += [Paragraph("1. Introducción", h1), P(body["introduction"], text)]
@@ -126,10 +139,10 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
     s += [Paragraph("2. Objetivos", h1)] + [P(f"• {o}", text) for o in body["objectives"]]
     # 3. Alcance
     s += [Paragraph("3. Alcance", h1), P(body["scope"], text), Spacer(1, 4)]
-    rows = [[Paragraph(x, hdr) for x in ("Auditoría", "Unidad / sucursal", "Tipo", "Fase", "Período", "Calificación")]]
+    rows = [[Paragraph(x, hdr) for x in ("Auditoría", "Unidad / sucursal", "Tipo", "Cierre", "Período revisado", "Calificación")]]
     for a in body["audits"]:
         rows.append([P(a["code"]), P(a["unit"]), P(KIND_LABEL.get(a["audit_kind"], a["audit_kind"] or "Sistemas")),
-                     P(PHASE_LABEL.get(a["phase"], a["phase"])), P(f"{_date(a['period']['from'])} a {_date(a['period']['to'])}"),
+                     P(_date(a.get("closed_at"))), P(f"{_date(a['period']['from'])} a {_date(a['period']['to'])}"),
                      P(f"{_pct(a['score'])} · {_rating(a['rating'])}" if a["score"] is not None else "Sin calificar")])
     s.append(table(rows, [W * x for x in (0.17, 0.22, 0.12, 0.12, 0.2, 0.17)]))
 
@@ -159,23 +172,18 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
         s.append(P(f"Se detallan las {audits_n} auditorías con situación más desfavorable de {len(body['audits'])}; el resto se resume en el alcance "
                    "y en la situación por unidad.", small))
     for a in detail:
-        br = a["by_risk"]
-        block = [Paragraph(f"<b>{escape(a['code'])}</b> · {escape(a['unit'])} · fase de {escape(PHASE_LABEL.get(a['phase'], a['phase']).lower())} · "
-                            f"calificación {_pct(a['score'])} ({escape(_rating(a['rating']))}) · situación {SITUATION_LABEL[a['situation']].lower()} · "
-                            f"hallazgos: {br['ALTO']} alto, {br['MEDIO']} medio, {br['BAJO']} bajo"
-                            + (f" · {a['limitations']} limitación(es)" if a["limitations"] else ""), text)]
+        # Breve párrafo y cuadro de hallazgos (título y nivel de riesgo).
+        block = [Paragraph(f"<b>{escape(a['code'])} · {escape(a['unit'])}</b> — calificación {_pct(a['score'])} ({escape(_rating(a['rating']))}), "
+                           f"situación {SITUATION_LABEL[a['situation']].lower()}", text), P(a.get("summary") or "", cell), Spacer(1, 2)]
         obs = a["observations"][:obs_n]
-        for o in obs:
-            line = f"<b>[{RISK_LABEL.get(o['risk'], o['risk'] or '—')}]</b> {escape(_cut(o['title'], 220))}"
-            if cond_n and o.get("condition"):
-                line += f" — {escape(_cut(o['condition'], cond_n))}"
-            block.append(Paragraph("• " + line, cell))
-        if len(a["observations"]) > len(obs):
-            block.append(P(f"… y {len(a['observations']) - len(obs)} hallazgo(s) más en SICAS.", small))
-        block.append(Spacer(1, 4))
-        s.append(KeepTogether(block) if level < 3 else block[0])
-        if level >= 3:
-            s += block[1:]
+        if obs:
+            rows = [[Paragraph(x, hdr) for x in ("N°", "Hallazgo", "Riesgo")]]
+            rows += [[P(i), P(o["title"]), P(RISK_LABEL.get(o["risk"], o["risk"] or "—"))] for i, o in enumerate(obs, 1)]
+            block.append(table(rows, [W * 0.06, W * 0.78, W * 0.16], shade={i: RISK_SHADE.get(o["risk"], "#FFFFFF") for i, o in enumerate(obs, 1)}))
+            if len(a["observations"]) > len(obs):
+                block.append(P(f"… y {len(a['observations']) - len(obs)} hallazgo(s) más en SICAS.", small))
+        block.append(Spacer(1, 6))
+        s.append(KeepTogether(block))
 
     s.append(Paragraph("4.3 Hallazgos por tema normativo (SUDEASEG)", h2))
     if body["topics"]:
@@ -188,7 +196,6 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
                      Paragraph("<b>Criterio:</b> " + escape(_cut(t["criteria"], crit_n)), cell)]
             if level < 2:
                 block.append(Paragraph("<b>Efecto:</b> " + escape(_cut(t["effect"], crit_n)), cell))
-                block += [P("• " + e) for e in t["examples"][: 3 if level == 0 else 2]]
             block.append(Spacer(1, 4))
             s.append(KeepTogether(block))
     else:
@@ -205,6 +212,43 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
     s.append(KeepTogether(_signatures(state, W, text, small, cell, hdr, h1, table, P)))
     doc.build(s, onFirstPage=furniture, onLaterPages=furniture)
     return buf.getvalue(), doc.page
+
+
+def _documentation(body, level, W, text, small, cell, hdr, h1, h2, table, P):
+    """Secciones del Informe de Documentación (Sistemas)."""
+    k, t = body["kpis"], body["kpis"]["totals"]
+    s = [Paragraph("1. Introducción", h1), P(body["introduction"], text),
+         Paragraph("2. Objetivos", h1)] + [P(f"• {o}", text) for o in body["objectives"]]
+    s += [Paragraph("3. Alcance", h1), P(body["scope"], text), Spacer(1, 4)]
+    hs = ParagraphStyle("hs", parent=hdr, fontSize=6.8, leading=8.5)
+    rows = [[Paragraph(x, hs) for x in ("Auditoría", "Unidad", "Pedidos", "Actualiz.", "Desactualiz.", "No entreg.", "Sin resp.", "Pend.", "% obtenido")]]
+    for a in body["audits"]:
+        c = a["counts"]
+        rows.append([P(a["code"]), P(a["unit"]), P(a["requested"]), P(c["ACTUALIZADA"]), P(c["DESACTUALIZADA"]), P(c["NO_ENTREGADA"]),
+                     P(c["SIN_RESPUESTA"]), P(c["PENDIENTE"]), P(_pct(a["rate"]))])
+    rows.append([P("Total"), P(""), P(k["requested"]), P(t["ACTUALIZADA"]), P(t["DESACTUALIZADA"]), P(t["NO_ENTREGADA"]), P(t["SIN_RESPUESTA"]),
+                 P(t["PENDIENTE"]), P(_pct(k["rate"]))])
+    s.append(table(rows, [W * x for x in (0.17, 0.17, 0.08, 0.09, 0.11, 0.09, 0.09, 0.07, 0.13)]))
+    cap = (60, 40, 25, 15, 10, 6)[level]
+    for n, a in enumerate(body["audits"]):
+        block = ([Paragraph("4. Contenido: documentación obtenida por auditoría", h1)] if n == 0 else []) + [
+            Paragraph(f"<b>{escape(a['code'])} · {escape(a['unit'])}</b>", text), P(a["summary"], cell), Spacer(1, 2)]
+        letter = a["letter"][:cap]
+        if letter:
+            rows = [[Paragraph(x, hdr) for x in ("Control", "Documentación pedida", "Lo obtenido", "Adjuntos")]]
+            rows += [[P(c["ref"]), P(c["question"] + (f" — {c['note']}" if c.get("note") and level < 3 else "")), P(DOC_LABEL.get(c["status"], "Pendiente")),
+                      P(c["documents"])] for c in letter]
+            block.append(table(rows, [W * 0.12, W * 0.56, W * 0.2, W * 0.12],
+                               shade={i: DOC_SHADE[c["status"]] for i, c in enumerate(letter, 1) if c["status"] in DOC_SHADE}))
+            if len(a["letter"]) > len(letter):
+                block.append(P(f"… y {len(a['letter']) - len(letter)} control(es) más en SICAS.", small))
+        block.append(Spacer(1, 6))
+        if len(letter) <= 25:
+            s.append(KeepTogether(block))
+        else:
+            s += block
+    s += [Paragraph("5. Conclusión", h1)] + [P(c, text) for c in body["conclusion"]]
+    return s
 
 
 def _image(data, w, h):

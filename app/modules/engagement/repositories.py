@@ -563,9 +563,10 @@ def create_financial_worksheet(audit_id, kind, line, user):
             t=template["code"],
             u=user,
         )
-        # Solo los cuestionarios llevan una fila por pregunta. En las demás cédulas cada fila es una póliza o
-        # siniestro (o un colaborador en la Evaluación TI) que el auditor agrega después.
-        for criterion in (criteria if criteria and all(c.get("block") for c in criteria) else []):
+        # Los cuestionarios (por bloques y el de Sistemas) llevan una fila por pregunta o control. En las demás
+        # cédulas cada fila es una póliza o siniestro (o un colaborador en la Evaluación TI) que el auditor agrega después.
+        per_question = kind == "SISTEMAS" or (criteria and all(c.get("block") for c in criteria))
+        for criterion in (criteria if per_question else []):
             x(
                 """
                 INSERT INTO engagement.items

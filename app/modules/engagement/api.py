@@ -15,7 +15,7 @@ from app.core.security.rbac import permission_required
 from . import assemble as asm
 from . import codification
 from . import score_snapshots
-from . import evidence_rules, observation_rules, offline, phase_documents, regulatory_rules, scoring, storage, system_questionnaire, ti_branch
+from . import evidence_rules, observation_rules, offline, phase_documents, regulatory_rules, scoring, storage, system_questionnaire, systems_docs, ti_branch
 from . import repositories as repo
 from . import workflow as wf
 from .pac import build_pac
@@ -647,6 +647,15 @@ def phase(aid):
                  and not any(scoring.item_score(ws["criteria"], i["results"]) is not None for i in ws["items"])]
         if not sheets or empty:
             return err("Para cerrar la fase, cada cédula debe tener al menos un control calificado" + (": " + ", ".join(empty) if empty else ""))
+    if forward and is_systems(a) and a["phase"] in ("DOCUMENTACION", "PRUEBAS_CAMPO"):
+        missing = [code for ws in sheets if ws["kind"] == "SISTEMAS" for code in systems_docs.pending(ws["items"], a["phase"])]
+        if missing:
+            what = ("registre lo obtenido de la unidad (documentación recibida, desactualizada, no entregada o sin respuesta)"
+                    if a["phase"] == "DOCUMENTACION" else
+                    "responda las tres preguntas de la prueba o, si no hay documentación, escriba el justificativo "
+                    f"(mínimo {systems_docs.MIN_JUSTIFICATION} caracteres)")
+            return err(f"Para cerrar la fase, {what} en {len(missing)} control(es) de la carta: "
+                       + ", ".join(missing[:15]) + ("…" if len(missing) > 15 else ""), 409)
     if not forward and not note:
         return err("Para retroceder de fase indique el motivo")
     snapshot = _phase_snapshot(a, "PHASE_CHANGE", reason=note)
@@ -943,6 +952,22 @@ def worksheet(wid):
     ws, a, e = ws_for(wid)
     if e:
         return e
+    letter = None
+    if ws["kind"] == "SISTEMAS" and is_systems(a):
+        # Carta de documentación: qué se pidió, qué se obtuvo y los documentos adjuntos de cada control.
+        docs = {}
+        for ev in repo.evidence(a["id"]):
+            if ev.get("item_id"):
+                docs.setdefault(ev["item_id"], []).append({"id": ev["id"], "filename": ev["filename"], "uploaded_at": ev["uploaded_at"]})
+        for it in ws["items"]:
+            it["in_letter"] = systems_docs.in_letter(it)
+            it["lev_control"] = systems_docs.levantamiento_control(it)
+            it["doc_status"] = systems_docs.documentation_status(it)
+            it["documents"] = docs.get(it["id"], [])
+        letter = {"questions": [{"key": k, "text": t} for k, t in systems_docs.QUESTIONS], "doc_labels": systems_docs.DOC_LABEL,
+                  "result_labels": systems_docs.RESULT_LABEL, "min_justification": systems_docs.MIN_JUSTIFICATION,
+                  "pending": systems_docs.pending(ws["items"], a["phase"]) if a["phase"] in ("DOCUMENTACION", "PRUEBAS_CAMPO") else [],
+                  "requested": sum(1 for it in ws["items"] if it["in_letter"])}
     for it in ws["items"]:
         it["auto_score"] = scoring.item_score(ws["criteria"], it["results"])
         it["final_score"] = scoring.final_score(it["auto_score"], it["manual_score"])
@@ -951,7 +976,7 @@ def worksheet(wid):
     return jsonify(worksheet=ws, summary=s.__dict__, statistics=stats, audit={"id": a["id"], "code": a["code"], "phase": a["phase"], "status": a["status"]},
                    editable=repo.is_member(a["id"], me()) and a["status"] == "IN_PROGRESS" and a["phase"] in phase_group(a, "ITEMS")
                    and not final_locked(a["id"]),
-                   phase_rules=_phase_rules(a))
+                   phase_rules=_phase_rules(a), letter=letter)
 
 @bp.post("/worksheets/<uuid:wid>/system-questionnaire/import")
 @permission_required("audit:manage", "audit:systems_execute")
@@ -1565,7 +1590,19 @@ def update_item(iid):
     d = request.get_json(silent=True) or {}
     codes = {c["code"] for c in ws["criteria"]}
     raw_results = d.get("results") or {}
-    if scoring.is_system_criteria(ws["criteria"]):
+    sys_phase = a.get("phase") if is_systems(a) and scoring.is_system_criteria(ws["criteria"]) else None
+    if sys_phase in ("DOCUMENTACION", "PRUEBAS_CAMPO"):
+        # Fases 2 y 3: solo los controles pedidos en la carta de solicitud de documentación.
+        if not systems_docs.in_letter(it):
+            return err("Este control no se pidió en la carta de documentación: conserva el resultado del Levantamiento", 409)
+        payload = raw_results.get(it["ref"]) if isinstance(raw_results.get(it["ref"]), dict) else {}
+        try:
+            result = (systems_docs.documentation_result(it, payload) if sys_phase == "DOCUMENTACION"
+                      else systems_docs.field_result(it, payload))
+        except ValueError as ex:
+            return err(str(ex))
+        results = {it["ref"]: result}
+    elif scoring.is_system_criteria(ws["criteria"]):
         results = {}
         for k, v in raw_results.items():
             if k not in codes or not isinstance(v, dict):
@@ -1589,7 +1626,7 @@ def update_item(iid):
         prev = it.get("results") or {}
         results = {k: v for k, v in raw_results.items()
                    if k in codes and (v in RESULTS or (v == "PARCIAL" and prev.get(k) == "PARCIAL"))}
-    guard = _item_phase_guard(a, it, results)
+    guard = None if sys_phase in ("DOCUMENTACION", "PRUEBAS_CAMPO") else _item_phase_guard(a, it, results)
     if guard:
         return guard
     obs = str(d.get("observation") or "").strip()[:2000] or None

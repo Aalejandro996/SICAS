@@ -62,6 +62,11 @@ def system_item_score(criteria: list[dict], results: dict) -> float | None:
         r = results.get(c["code"]) or {}
         if not isinstance(r, dict):
             continue
+        if r.get("sin_doc"):
+            # Pruebas de campo sin documentación (con justificativo): el control vale 0.
+            w = float(c.get("weight") or 1)
+            den += w
+            continue
         control = str(r.get("control", "")).upper()
         doc = str(r.get("documental", "")).upper()
         evidence = str(r.get("evidencia", "")).upper()

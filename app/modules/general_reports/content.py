@@ -1,8 +1,12 @@
-"""Contenido del informe general de auditorías (lógica pura, probada sin base de datos).
+"""Contenido de los informes consolidados de auditorías (lógica pura, probada sin base de datos).
 
-Reúne varias auditorías en fase de Documentación o de Informe y, con el motor de reglas, redacta:
-introducción, alcance, objetivos, contenido (situación por unidad, resultados por auditoría y hallazgos
-por tema normativo con el criterio SUDEASEG del catálogo) y conclusión.
+Informe Ejecutivo (ambos dominios): auditorías CERRADAS en un trimestre, semestre o año, según su fecha de
+cierre. Con el motor de reglas redacta introducción, objetivos, alcance, contenido (situación por unidad,
+resultados por auditoría con un párrafo breve y el cuadro de hallazgos con su nivel de riesgo, y hallazgos por
+tema normativo con el criterio SUDEASEG del catálogo) y conclusión.
+
+Informe de Documentación (Sistemas): auditorías en fase de Documentación y lo obtenido de cada control
+pedido en la carta de solicitud (recibido actualizado o desactualizado, no entregado o sin respuesta).
 
 Reglas de la situación de cada unidad (a partir de la calificación promedio y de los hallazgos vigentes):
   CRITICA   3 o más hallazgos de riesgo alto, o calificación < 50 %
@@ -17,16 +21,31 @@ from datetime import date
 
 from app.modules.engagement.regulatory_rules import topic_for
 
-ELIGIBLE_PHASES = ("DOCUMENTACION", "INFORME")
+REPORT_KINDS = {"EJECUTIVO": "Informe Ejecutivo", "DOCUMENTACION": "Informe de Documentación"}
+PERIOD_TYPES = {"TRIMESTRE": 4, "SEMESTRE": 2, "ANUAL": 1}
+ORDINAL = {1: "primer", 2: "segundo", 3: "tercer", 4: "cuarto"}
+DOC_ORDER = ("ACTUALIZADA", "DESACTUALIZADA", "NO_ENTREGADA", "SIN_RESPUESTA")
 RISKS = ("ALTO", "MEDIO", "BAJO")
 SITUATIONS = ("CRITICA", "ATENCION", "ACEPTABLE", "FAVORABLE", "SIN_CALIFICAR")
 SITUATION_LABEL = {"CRITICA": "Crítica", "ATENCION": "Requiere atención", "ACEPTABLE": "Aceptable", "FAVORABLE": "Favorable",
                    "SIN_CALIFICAR": "Sin calificar"}
 DOMAIN_LABEL = {"FINANCIERA": "auditorías operativas, especiales, administrativas y financieras",
                 "SISTEMAS": "auditorías de sistemas y tecnología de la información", "GENERAL": "auditorías"}
-PHASE_LABEL = {"DOCUMENTACION": "Documentación", "INFORME": "Informe"}
+PHASE_LABEL = {"DOCUMENTACION": "Documentación", "INFORME": "Informe", "LEVANTAMIENTO": "Levantamiento",
+               "PRUEBAS_CAMPO": "Pruebas de campo", "PLANIFICACION": "Planificación", "TRABAJO_CAMPO": "Trabajo de campo"}
 KIND_LABEL = {"OPERATIVA": "Operativa", "ESPECIAL": "Especial", "ADMINISTRATIVA": "Administrativa", "FINANCIERA": "Financiera"}
 MAX_AUDITS = 60
+
+
+def period_range(ptype: str, n: int, year: int) -> tuple[date, date, str]:
+    """(inicio, fin exclusivo, etiqueta) del trimestre, semestre o año."""
+    if ptype not in PERIOD_TYPES or not 1 <= n <= PERIOD_TYPES[ptype] or not 2000 <= year <= 2100:
+        raise ValueError("Período inválido: trimestre 1 a 4, semestre 1 o 2, o año")
+    months = 12 // PERIOD_TYPES[ptype]
+    start = date(year, (n - 1) * months + 1, 1)
+    end = date(year + 1, 1, 1) if n * months == 12 else date(year, n * months + 1, 1)
+    label = (f"año {year}" if ptype == "ANUAL" else f"{ORDINAL[n]} {ptype.lower()} de {year}")
+    return start, end, label
 
 
 def situation(score: float | None, by_risk: dict) -> str:
@@ -69,8 +88,27 @@ def classify(observation: dict, catalog: list[dict]) -> dict:
     return topic_for(catalog, observation.get("title"), observation.get("criteria"), observation.get("condition"))
 
 
+def _dmy(v) -> str:
+    v = str(v or "")[:10]
+    return f"{v[8:10]}/{v[5:7]}/{v[:4]}" if len(v) == 10 else "—"
+
+
+def audit_summary(a: dict, by_risk: dict) -> str:
+    """Párrafo breve de una auditoría para el Informe Ejecutivo."""
+    n = sum(by_risk.values())
+    score = a.get("score")
+    head = (f"Auditoría practicada a {a['unit_name']}"
+            + (f", cerrada el {_dmy(a.get('closed_at'))}" if a.get("closed_at") else "")
+            + (f" (período revisado del {_dmy(a.get('period_from'))} al {_dmy(a.get('period_to'))})" if a.get("period_from") else "") + ". ")
+    grade = (f"Obtuvo una calificación de {_pct(score)}" if score is not None else "No registra calificación")
+    if not n:
+        return head + grade + " y no presenta hallazgos vigentes."
+    return (head + grade + f" con {n} hallazgo(s): {by_risk['ALTO']} de riesgo alto, {by_risk['MEDIO']} medio y {by_risk['BAJO']} bajo"
+            + (". Los de riesgo alto requieren acción prioritaria." if by_risk["ALTO"] else "."))
+
+
 def build(*, audits: list[dict], catalog: list[dict], company: str, domain: str, title: str, code: str, author: dict,
-          filters_text: str, today: date, objective: str | None = None, revision: int = 1) -> dict:
+          filters_text: str, today: date, objective: str | None = None, revision: int = 1, period_label: str = "") -> dict:
     """Cuerpo del informe. `audits`: auditorías ya leídas con su calificación y sus observaciones vigentes.
 
     Cada auditoría: id, code, title, unit_name, unit_kind, audit_kind, phase, status, period_from, period_to,
@@ -90,9 +128,9 @@ def build(*, audits: list[dict], catalog: list[dict], company: str, domain: str,
             "audit_kind": a.get("audit_kind"), "phase": a["phase"], "status": a.get("status"),
             "period": {"from": str(a.get("period_from") or ""), "to": str(a.get("period_to") or "")},
             "score": a.get("score"), "rating": a.get("rating"), "by_risk": by_risk, "limitations": int(a.get("limitations") or 0),
-            "situation": situation(a.get("score"), by_risk),
-            "observations": [{"title": o["title"], "risk": o.get("risk"), "condition": _cut(o.get("condition"), 600),
-                              "recommendation": _cut(o.get("recommendation"), 400), "pac_status": o.get("pac_status"),
+            "situation": situation(a.get("score"), by_risk), "closed_at": str(a.get("closed_at") or "")[:10],
+            "summary": audit_summary(a, by_risk),
+            "observations": [{"title": _cut(o["title"], 240), "risk": o.get("risk"), "pac_status": o.get("pac_status"),
                               "topic": classify(o, catalog)["topic"] if catalog else None} for o in obs],
         })
         for o in obs:
@@ -139,23 +177,22 @@ def build(*, audits: list[dict], catalog: list[dict], company: str, domain: str,
     # ------------------------------------------------------ textos del motor de reglas
     n_units, n_audits = len(unit_rows), len(results)
     kinds = sorted({KIND_LABEL.get(r["audit_kind"], r["audit_kind"]) for r in results if r["audit_kind"]})
-    phases = sorted({PHASE_LABEL.get(r["phase"], r["phase"]) for r in results})
     introduction = (
-        f"La Contraloría Corporativa de {company}, a través de su equipo de auditoría, presenta el informe general {code} "
-        f"sobre {n_audits} {domain_label} practicadas a {n_units} unidad(es) y/o sucursal(es) que se encuentran en fase de "
-        f"{_join(phases).lower()}. El informe consolida la calificación de cada auditoría, los hallazgos vigentes y su "
-        f"tratamiento normativo, con el fin de presentar a la Gerencia y a la Contraloría el estado actual de la "
+        f"La Contraloría Corporativa de {company}, a través de su equipo de auditoría, presenta el Informe Ejecutivo {code} "
+        f"del {period_label}: {n_audits} auditoría(s) cerrada(s) en el período ({domain_label}), practicadas a {n_units} "
+        f"unidad(es) y/o sucursal(es). El informe resume la calificación de cada auditoría, sus hallazgos con el nivel de riesgo que "
+        f"representan y su tratamiento normativo, para presentar a la Gerencia y a la Contraloría el estado de la "
         f"organización en las unidades evaluadas, tomando en cuenta las disposiciones de la Superintendencia de la "
         f"Actividad Aseguradora (SUDEASEG) y la normativa interna aplicable.")
     scope = (
-        f"Comprende {n_audits} auditoría(s){' de tipo ' + _join(kinds).lower() if kinds else ''} en fase de "
-        f"{_join(phases).lower()}, con períodos revisados entre {period['from'] or '—'} y {period['to'] or '—'}. "
-        f"Criterio de selección: {filters_text}. Se consideran las cédulas de trabajo, las calificaciones y los hallazgos "
-        f"vigentes registrados en SICAS a la fecha de emisión; las auditorías que aún no cierran su fase pueden variar.")
+        f"Comprende las auditorías{' de tipo ' + _join(kinds).lower() if kinds else ''} cerradas (finalizadas) en el "
+        f"{period_label}, con períodos revisados entre {_dmy(period['from'])} y {_dmy(period['to'])}. "
+        f"Criterio de selección: {filters_text}. Se consideran las calificaciones y los hallazgos vigentes registrados en "
+        f"SICAS a la fecha de emisión.")
     objectives = [objective] if objective else []
     objectives += [
-        "Presentar el estado actual de control interno de las unidades y sucursales evaluadas.",
-        "Consolidar las calificaciones y los hallazgos de las auditorías seleccionadas, con su nivel de riesgo.",
+        f"Presentar el resultado de las auditorías cerradas en el {period_label} y el estado de control interno de las unidades evaluadas.",
+        "Resumir los hallazgos de cada auditoría con el nivel de riesgo que representan.",
         "Relacionar los hallazgos con los requisitos normativos de la SUDEASEG y la normativa interna aplicable.",
         "Identificar las unidades y los temas que requieren acción prioritaria de la Gerencia.",
     ]
@@ -184,9 +221,70 @@ def build(*, audits: list[dict], catalog: list[dict], company: str, domain: str,
     recommendations = [f"{t['label'].capitalize()}: {t['recommendation']}" for t in top]
 
     return {
-        "kind": "GENERAL", "code": code, "title": title, "company": company, "domain": domain, "revision": revision,
-        "generated_on": today.isoformat(), "author": author, "filters": filters_text,
+        "kind": "EJECUTIVO", "code": code, "title": title, "company": company, "domain": domain, "revision": revision,
+        "generated_on": today.isoformat(), "author": author, "filters": filters_text, "period_label": period_label,
         "introduction": introduction, "scope": scope, "objectives": objectives, "period": period,
         "kpis": kpis, "units": unit_rows, "audits": results, "topics": topic_rows,
         "conclusion": conclusion, "recommendations": recommendations,
     }
+
+
+def build_documentation(*, audits: list[dict], company: str, title: str, code: str, author: dict, filters_text: str,
+                        today: date, objective: str | None = None, revision: int = 1) -> dict:
+    """Informe de Documentación (Sistemas): lo obtenido de cada control pedido en la carta de solicitud.
+
+    Cada auditoría: id, code, title, unit_name, phase, period_from, period_to, letter [{ref, question, status, note, documents}].
+    """
+    audits = sorted(audits, key=lambda a: (a["unit_name"], a["code"]))
+    rows, totals = [], {k: 0 for k in (*DOC_ORDER, "PENDIENTE")}
+    for a in audits:
+        counts = {k: 0 for k in (*DOC_ORDER, "PENDIENTE")}
+        for c in a.get("letter") or []:
+            counts[c["status"] if c["status"] in DOC_ORDER else "PENDIENTE"] += 1
+        requested = sum(counts.values())
+        received = counts["ACTUALIZADA"] + counts["DESACTUALIZADA"]
+        for k in counts:
+            totals[k] += counts[k]
+        rate = round(received / requested * 100, 2) if requested else None
+        missing = counts["NO_ENTREGADA"] + counts["SIN_RESPUESTA"]
+        summary = (f"Auditoría practicada a {a['unit_name']}: la carta pidió la documentación de {requested} control(es); "
+                   f"se recibió la de {received} ({counts['ACTUALIZADA']} actualizada y {counts['DESACTUALIZADA']} desactualizada)"
+                   + (f", {counts['NO_ENTREGADA']} no la tienen o no la entregaron y {counts['SIN_RESPUESTA']} quedaron sin respuesta" if missing else "")
+                   + (f"; {counts['PENDIENTE']} aún sin registrar" if counts["PENDIENTE"] else "") + "."
+                   + (" Lo no obtenido baja la calificación en Pruebas de campo (el control vale 0 con justificativo)." if missing else ""))
+        rows.append({"id": a["id"], "code": a["code"], "title": a.get("title") or "", "unit": a["unit_name"], "phase": a.get("phase"),
+                     "period": {"from": str(a.get("period_from") or ""), "to": str(a.get("period_to") or "")},
+                     "counts": counts, "requested": requested, "received": received, "rate": rate, "summary": summary,
+                     "letter": [{"ref": c["ref"], "question": _cut(c["question"], 200), "status": c["status"],
+                                 "note": _cut(c.get("note"), 200), "documents": c.get("documents", 0)} for c in a.get("letter") or []]})
+    requested = sum(totals.values())
+    received = totals["ACTUALIZADA"] + totals["DESACTUALIZADA"]
+    rate = round(received / requested * 100, 2) if requested else None
+    low = [r["code"] for r in rows if r["rate"] is not None and r["rate"] < 50]
+    introduction = (
+        f"La Contraloría Corporativa de {company}, a través de su equipo de Auditoría de Sistemas, presenta el Informe de "
+        f"Documentación {code} sobre {len(rows)} auditoría(s) de sistemas en fase de Documentación. Por cada control que la "
+        f"unidad declaró documentado en el levantamiento se pidió su documentación mediante la carta de solicitud; el informe "
+        f"muestra lo obtenido, lo desactualizado, lo no entregado y lo que quedó sin respuesta.")
+    scope = (f"Comprende {len(rows)} auditoría(s) en fase de Documentación. Criterio de selección: {filters_text}. "
+             "Se considera lo registrado en SICAS a la fecha de emisión; la fase sigue abierta y puede variar.")
+    objectives = ([objective] if objective else []) + [
+        "Informar el estado de la documentación solicitada a cada unidad mediante la carta de solicitud.",
+        "Identificar los controles sin documentación o sin respuesta, que bajan la calificación en Pruebas de campo.",
+        "Apoyar el seguimiento con las unidades para obtener la documentación pendiente.",
+    ]
+    conclusion = [f"Se pidió la documentación de {requested} control(es) y se obtuvo la de {received} "
+                  f"({_pct(rate) if rate is not None else 'sin datos'}): {totals['ACTUALIZADA']} actualizada, {totals['DESACTUALIZADA']} "
+                  f"desactualizada, {totals['NO_ENTREGADA']} no entregada y {totals['SIN_RESPUESTA']} sin respuesta."]
+    if low:
+        conclusion.append(f"Menos de la mitad de la documentación se obtuvo en {_join(low)}: se recomienda gestionar la respuesta de esas unidades antes de Pruebas de campo.")
+    if totals["DESACTUALIZADA"]:
+        conclusion.append("La documentación desactualizada debe actualizarse y aprobarse por la unidad responsable.")
+    if totals["PENDIENTE"]:
+        conclusion.append(f"Quedan {totals['PENDIENTE']} control(es) sin registrar lo obtenido.")
+    return {"kind": "DOCUMENTACION", "code": code, "title": title, "company": company, "domain": "SISTEMAS", "revision": revision,
+            "generated_on": today.isoformat(), "author": author, "filters": filters_text,
+            "introduction": introduction, "scope": scope, "objectives": objectives,
+            "kpis": {"audits": len(rows), "units": len({r["unit"] for r in rows}), "requested": requested, "received": received,
+                     "rate": rate, "totals": totals},
+            "audits": rows, "conclusion": conclusion}

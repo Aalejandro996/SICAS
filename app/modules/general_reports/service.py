@@ -1,4 +1,4 @@
-"""Acceso a datos del informe general de auditorías."""
+"""Acceso a datos de los informes consolidados (Informe Ejecutivo e Informe de Documentación)."""
 from __future__ import annotations
 
 import json
@@ -6,11 +6,10 @@ import uuid
 
 from app.modules.engagement import assemble as asm
 from app.modules.engagement import repositories as repo
+from app.modules.engagement import systems_docs
 from app.modules.engagement.repositories import q, q1, x, db
 
-from .content import ELIGIBLE_PHASES
-
-REPORT_SQL = ("SELECT r.id::text, r.code, r.audit_domain, r.title, r.status, r.filters, r.audit_ids::text[] AS audit_ids, r.body, "
+REPORT_SQL = ("SELECT r.id::text, r.code, r.audit_domain, r.report_kind, r.period, r.needs_refresh, r.title, r.status, r.filters, r.audit_ids::text[] AS audit_ids, r.body, "
               "r.body_sha256, r.revision, r.created_by::text, r.created_at, r.updated_at, "
               "r.auditor_signed_by::text, r.auditor_signed_at, r.auditor_signed_sha256, r.auditor_signature_sha256, "
               "r.jefe_by::text, r.jefe_at, r.jefe_sha256, r.jefe_signature_sha256, "
@@ -26,10 +25,19 @@ class StaleState(Exception):
 TEAM = "EXISTS (SELECT 1 FROM engagement.team t WHERE t.audit_id = a.id AND t.user_id = CAST(:me AS uuid))"
 
 
-def candidates(domains, f, user):
-    """Auditorías propias del Auditor (es del equipo), en fase de Documentación o de Informe, con los filtros de la pantalla."""
-    where = ["a.status <> 'ANULADA'", "a.phase = ANY(CAST(:ph AS text[]))", TEAM]
-    p = {"ph": [f["phase"]] if f.get("phase") in ELIGIBLE_PHASES else list(ELIGIBLE_PHASES), "me": user}
+def _scope(kind, period):
+    """Condición de elegibilidad: Ejecutivo = cerradas en el período (fecha de cierre); Documentación = en fase 2 de Sistemas."""
+    if kind == "DOCUMENTACION":
+        return ["a.status = 'IN_PROGRESS'", "a.phase = 'DOCUMENTACION'", "a.audit_domain = 'SISTEMAS'"], {}
+    return (["a.status = 'CLOSED'", "a.pac_sent_at >= CAST(:p0 AS date)", "a.pac_sent_at < CAST(:p1 AS date)"],
+            {"p0": str(period["from"]), "p1": str(period["until"])})
+
+
+def candidates(domains, f, user, kind, period):
+    """Auditorías propias del Auditor (es del equipo) que entran en el informe, con los filtros de la pantalla."""
+    where, p = _scope(kind, period)
+    where += ["a.status <> 'ANULADA'", TEAM]
+    p["me"] = user
     if "ALL" not in domains:
         where.append("a.audit_domain = ANY(CAST(:d AS text[]))"); p["d"] = sorted(domains)
     if f.get("audit_kind"):
@@ -38,16 +46,10 @@ def candidates(domains, f, user):
         where.append("u.id = :u"); p["u"] = int(f["unit_id"])
     if f.get("unit_kind"):
         where.append("u.kind = :uk"); p["uk"] = f["unit_kind"]
-    if f.get("status"):
-        where.append("a.status = :st"); p["st"] = f["status"]
-    if f.get("from"):
-        where.append("f.period_to >= :pf"); p["pf"] = f["from"]
-    if f.get("to"):
-        where.append("f.period_from <= :pt"); p["pt"] = f["to"]
     if f.get("q"):
         where.append("(a.code ILIKE :qq OR u.name ILIKE :qq OR f.title ILIKE :qq)"); p["qq"] = f"%{f['q']}%"
     return q("SELECT a.id::text, a.code, a.audit_kind, a.audit_domain, a.phase, a.status, f.title, f.period_from, f.period_to, "
-             "u.id AS unit_id, u.name AS unit_name, u.kind AS unit_kind "
+             "a.pac_sent_at AS closed_at, u.id AS unit_id, u.name AS unit_name, u.kind AS unit_kind "
              "FROM engagement.audits a JOIN engagement.files f ON f.id = a.file_id JOIN engagement.units u ON u.id = f.unit_id "
              "WHERE " + " AND ".join(where) + " ORDER BY u.name, a.code LIMIT 300", **p)
 
@@ -57,8 +59,22 @@ def units(domains, user):
     if "ALL" not in domains:
         cond = "AND a.audit_domain = ANY(CAST(:d AS text[])) "; p["d"] = sorted(domains)
     return q("SELECT DISTINCT u.id, u.name, u.kind FROM engagement.audits a JOIN engagement.files f ON f.id = a.file_id "
-             "JOIN engagement.units u ON u.id = f.unit_id WHERE a.status <> 'ANULADA' AND a.phase = ANY(CAST(:ph AS text[])) AND " + TEAM + " "
-             + cond + "ORDER BY u.name", ph=list(ELIGIBLE_PHASES), **p)
+             "JOIN engagement.units u ON u.id = f.unit_id WHERE a.status <> 'ANULADA' AND " + TEAM + " "
+             + cond + "ORDER BY u.name", **p)
+
+
+def documentation_data(a):
+    """Controles de la carta de documentación y lo obtenido (Informe de Documentación)."""
+    docs = {}
+    for ev in repo.evidence(a["id"]):
+        if ev.get("item_id"):
+            docs.setdefault(ev["item_id"], []).append(ev["id"])
+    letter = []
+    for ws in repo.worksheets_with_items(a["id"]):
+        if ws["kind"] == "SISTEMAS":
+            letter += systems_docs.letter_rows(ws["items"], ws["criteria"], docs)
+    return {"id": a["id"], "code": a["code"], "title": a["title"], "unit_name": a["unit_name"], "phase": a["phase"],
+            "period_from": a["period_from"], "period_to": a["period_to"], "letter": letter}
 
 
 def audit_data(a, thresholds, overall_for):
@@ -72,7 +88,7 @@ def audit_data(a, thresholds, overall_for):
     return {"id": a["id"], "code": a["code"], "title": a["title"], "unit_name": a["unit_name"], "unit_kind": a["unit_kind"],
             "audit_kind": a.get("audit_kind"), "audit_domain": a.get("audit_domain"), "phase": a["phase"], "status": a["status"],
             "period_from": a["period_from"], "period_to": a["period_to"], "score": overall.get("final"), "rating": overall.get("rating"),
-            "limitations": limitations,
+            "limitations": limitations, "closed_at": a.get("pac_sent_at"),
             # La Evaluación TI de la sucursal es informativa (módulo del Jefe de Sistemas): sus hallazgos no entran.
             "observations": [o for o in repo.observations(a["id"]) if not str(o.get("rule_key") or "").startswith("ti_suc:")]}
 
@@ -84,17 +100,18 @@ def catalog(domain):
     return repo.regulatory_catalog()
 
 
-def next_code(domain, year):
-    prefix = f"IG-{domain[0]}-{year}-"
+def next_code(kind, domain, year):
+    prefix = f"{'ID' if kind == 'DOCUMENTACION' else 'IE'}-{domain[0]}-{year}-"
     row = q1("SELECT count(*) AS n FROM engagement.general_reports WHERE code LIKE :p", p=prefix + "%")
     return f"{prefix}{int(row['n']) + 1:03d}"
 
 
-def create(domain, title, filters, audit_ids, body, sha, user, actor_role):
+def create(kind, period, domain, title, filters, audit_ids, body, sha, user, actor_role):
     rid = str(uuid.uuid4())
-    x("INSERT INTO engagement.general_reports (id, code, audit_domain, title, filters, audit_ids, body, body_sha256, created_by) "
-      "VALUES (CAST(:i AS uuid), :c, :d, :t, CAST(:f AS jsonb), CAST(:a AS uuid[]), CAST(:b AS jsonb), :h, CAST(:u AS uuid))",
-      i=rid, c=body["code"], d=domain, t=title, f=json.dumps(filters, default=str), a=audit_ids, b=json.dumps(body, default=str), h=sha, u=user)
+    x("INSERT INTO engagement.general_reports (id, code, report_kind, period, audit_domain, title, filters, audit_ids, body, body_sha256, created_by) "
+      "VALUES (CAST(:i AS uuid), :c, :k, CAST(:pe AS jsonb), :d, :t, CAST(:f AS jsonb), CAST(:a AS uuid[]), CAST(:b AS jsonb), :h, CAST(:u AS uuid))",
+      i=rid, c=body["code"], k=kind, pe=json.dumps(period, default=str) if period else None, d=domain, t=title,
+      f=json.dumps(filters, default=str), a=audit_ids, b=json.dumps(body, default=str), h=sha, u=user)
     _event(rid, "GENERATED", None, "DRAFT", sha, user, actor_role)
     db.session.commit()
     return rid
@@ -117,7 +134,7 @@ def search(user, domains_review, can_read_approved, creator):
         cond.append("r.status = 'APPROVED'")
     if not cond:
         return []
-    rows = q("SELECT r.id::text, r.code, r.audit_domain, r.title, r.status, r.revision, cardinality(r.audit_ids) AS audits, "
+    rows = q("SELECT r.id::text, r.code, r.audit_domain, r.report_kind, r.period, r.title, r.status, r.revision, cardinality(r.audit_ids) AS audits, "
              "r.created_at, r.updated_at, r.auditor_signed_at, r.jefe_at, cu.full_name AS created_by_name, r.created_by::text, "
              "(r.body->'kpis'->>'avg_score')::numeric AS avg_score, r.body->'kpis'->'by_situation' AS by_situation, "
              "(SELECT count(*) FROM engagement.general_report_acks k WHERE k.report_id = r.id) AS acks "
@@ -160,7 +177,7 @@ def transition(rep, status, action, user, role, comment=None, **fields):
 
 def replace_body(rep, body, sha, audit_ids, user, role):
     row = x("UPDATE engagement.general_reports SET body = CAST(:b AS jsonb), body_sha256 = :h, audit_ids = CAST(:a AS uuid[]), "
-            "revision = revision + 1, updated_at = now() WHERE id = CAST(:i AS uuid) AND body_sha256 = :old AND status = :st RETURNING id",
+            "revision = revision + 1, needs_refresh = FALSE, updated_at = now() WHERE id = CAST(:i AS uuid) AND body_sha256 = :old AND status = :st RETURNING id",
             b=json.dumps(body, default=str), h=sha, a=audit_ids, i=rep["id"], old=rep["body_sha256"], st=rep["status"]).first()
     if row is None:
         db.session.rollback()
@@ -189,3 +206,23 @@ def signature_by_sha(user_id, sha):
         return None
     r = q1("SELECT content FROM engagement.signature_assets WHERE user_id = CAST(:u AS uuid) AND sha256 = :s LIMIT 1", u=user_id, s=sha)
     return bytes(r["content"]) if r else None
+
+
+def refresh(rep, body, sha, audit_ids, user, role):
+    """Actualiza con la data vigente un informe anterior al Informe Ejecutivo que sí cumple: vuelve a borrador."""
+    x("UPDATE engagement.general_reports SET body = CAST(:b AS jsonb), body_sha256 = :h, audit_ids = CAST(:a AS uuid[]), "
+      "title = :t, status = 'DRAFT', revision = revision + 1, needs_refresh = FALSE, auditor_signed_by = NULL, auditor_signed_at = NULL, "
+      "auditor_signed_sha256 = NULL, auditor_signature_sha256 = NULL, jefe_by = NULL, jefe_at = NULL, jefe_sha256 = NULL, "
+      "jefe_signature_sha256 = NULL, updated_at = now() WHERE id = CAST(:i AS uuid)",
+      b=json.dumps(body, default=str), h=sha, a=audit_ids, i=rep["id"])
+    _event(rep["id"], "REGENERATED", rep["status"], "DRAFT", sha, user, role,
+           "Actualizado al Informe Ejecutivo con la data vigente (las aprobaciones anteriores quedan sin efecto)")
+    db.session.commit()
+
+
+def delete(rid):
+    """Elimina un informe que ya no cumple las condiciones (con su bitácora y recepciones)."""
+    for table in ("general_report_acks", "general_report_events"):
+        x(f"DELETE FROM engagement.{table} WHERE report_id = CAST(:r AS uuid)", r=rid)
+    x("DELETE FROM engagement.general_reports WHERE id = CAST(:r AS uuid)", r=rid)
+    db.session.commit()

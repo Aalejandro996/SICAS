@@ -131,10 +131,10 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     # Evaluación TI de sucursales (módulo del Jefe de Auditoría de Sistemas)
     "ti_branch:read": ("engagement", "Ver los resultados de la Evaluación TI de las sucursales"),
     "ti_branch:report": ("engagement", "Generar el informe normativo de la Evaluación TI de las sucursales"),
-    # Informe general de auditorías (consolidado de auditorías en fase de Documentación o de Informe)
-    "general_report:create": ("engagement", "Generar, firmar y enviar al Jefe el informe general de auditorías"),
-    "general_report:review": ("engagement", "Aprobar o devolver el informe general de auditorías (Jefe de Auditoría)"),
-    "general_report:read_approved": ("engagement", "Recibir y consultar el informe general de auditorías aprobado"),
+    # Informe Ejecutivo (auditorías cerradas por período) e Informe de Documentación (Sistemas)
+    "general_report:create": ("engagement", "Generar el Informe Ejecutivo (y en Sistemas el de Documentación) y enviarlo al Jefe"),
+    "general_report:review": ("engagement", "Aprobar o devolver el Informe Ejecutivo y el de Documentación (Jefe de Auditoría)"),
+    "general_report:read_approved": ("engagement", "Recibir y consultar el Informe Ejecutivo y el de Documentación aprobados"),
     # Trazabilidad
     "auditlog:read": ("audit_log", "Consultar el audit trail"),
     "auditlog:verify_chain": ("audit_log", "Verificar integridad de la cadena de hashes"),
@@ -235,7 +235,7 @@ SOD_CONFLICTS: list[tuple[str, str, str]] = [
     ("audit:report_draft", "audit:sign_contralor", "Quien genera el informe no lo firma como Contralor."),
     ("audit:report_draft", "audit:sign_gerente", "Quien genera el informe no lo firma como Gerente de Control Interno."),
     ("audit:sign_contralor", "audit:sign_gerente", "Las dos firmas finales las ponen personas distintas."),
-    ("general_report:create", "general_report:review", "Quien elabora el informe general no lo aprueba."),
+    ("general_report:create", "general_report:review", "Quien elabora el Informe Ejecutivo no lo aprueba."),
 ]
 
 

@@ -125,9 +125,9 @@ Leyenda: ● permitido · (vacío) denegado.
 | `audit:systems_review` | Supervisar auditorías e informes de sistemas/TI |  |  |  |  |
 | `ti_branch:read` | Ver los resultados de la Evaluación TI de las sucursales |  |  | ● |  |
 | `ti_branch:report` | Generar el informe normativo de la Evaluación TI de las sucursales |  |  |  |  |
-| `general_report:create` | Generar, firmar y enviar al Jefe el informe general de auditorías |  | ● |  |  |
-| `general_report:review` | Aprobar o devolver el informe general de auditorías (Jefe de Auditoría) |  |  |  |  |
-| `general_report:read_approved` | Recibir y consultar el informe general de auditorías aprobado |  |  | ● | ● |
+| `general_report:create` | Generar el Informe Ejecutivo (y en Sistemas el de Documentación) y enviarlo al Jefe |  | ● |  |  |
+| `general_report:review` | Aprobar o devolver el Informe Ejecutivo y el de Documentación (Jefe de Auditoría) |  |  |  |  |
+| `general_report:read_approved` | Recibir y consultar el Informe Ejecutivo y el de Documentación aprobados |  |  | ● | ● |
 
 ## Audit trail
 
@@ -160,7 +160,7 @@ Ningún usuario puede acumular ambos permisos de un par. El servicio de asignaci
 | `audit:report_draft` | `audit:sign_contralor` | Quien genera el informe no lo firma como Contralor. |
 | `audit:report_draft` | `audit:sign_gerente` | Quien genera el informe no lo firma como Gerente de Control Interno. |
 | `audit:sign_contralor` | `audit:sign_gerente` | Las dos firmas finales las ponen personas distintas. |
-| `general_report:create` | `general_report:review` | Quien elabora el informe general no lo aprueba. |
+| `general_report:create` | `general_report:review` | Quien elabora el Informe Ejecutivo no lo aprueba. |
 
 ## Reglas adicionales (no expresables solo con permisos)
 

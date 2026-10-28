@@ -407,8 +407,8 @@
       }
       const hint = {
         LEVANTAMIENTO: 'Fase 1: responda o cargue la cédula. Las brechas generan observaciones con riesgo, criterio, causa, efecto y recomendación.',
-        DOCUMENTACION: 'Fase 2: solicite la documentación y verifique el soporte documental y la evidencia. La existencia del control se mantiene.',
-        PRUEBAS_CAMPO: 'Fase 3: pruebe en campo solo los controles documentados (SI). Los demás conservan el resultado de Documentación.',
+        DOCUMENTACION: 'Fase 2: emita la carta de solicitud y, por cada control pedido, registre lo obtenido (recibida actualizada, desactualizada, no entregada o sin respuesta) y adjunte el documento.',
+        PRUEBAS_CAMPO: 'Fase 3: en los controles con documentación responda las tres preguntas de la prueba; en los que no la tienen escriba el justificativo (el control vale 0).',
         INFORME: 'Fase 4: la nota final es el promedio de las fases 1, 2 y 3. Genere el informe final.'
       }[a.phase];
       phasesPanel = section('Notas por fase', hint,
@@ -571,6 +571,7 @@
     paint(d.summary);
     const bar = h('div', { class: 'toolbar' }, h('button', { class: 'secondary', onclick: () => { location.hash = `#/audits/${ctx.aid}/cedulas`; } }, '← Cédulas'));
 
+    if (ws.kind === 'SISTEMAS' && d.letter && ['DOCUMENTACION', 'PRUEBAS_CAMPO'].includes(d.audit.phase)) return letterView(el, d, ws, edit, bar, wid, sum);
     if (ws.kind === 'SISTEMAS') {
       if (edit) {
         const input = h('input', { type: 'file', accept: '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', class: 'hidden' });
@@ -659,6 +660,94 @@
     if (ws.items.length) worksheetContent.push(S.paginate(wBody));
 
     el.append(...worksheetContent);
+  }
+
+  // Auditoría de Sistemas, fases 2 y 3: solo los controles pedidos en la carta de documentación.
+  function letterView(el, d, ws, edit, bar, wid, sum) {
+    const L2 = d.letter, phase = d.audit.phase, docPhase = phase === 'DOCUMENTACION';
+    const criteria = Object.fromEntries(ws.criteria.map((c) => [c.code, c]));
+    const items = ws.items.filter((it) => it.in_letter), others = ws.items.length - items.length;
+    const pend = h('span');
+    const paintPending = (list) => pend.replaceChildren(list.length ? h('span', { class: 'q-risk q-risk-ALTO' }, `${list.length} pendiente(s) para cerrar la fase`)
+      : h('span', { class: 'q-risk q-risk-BAJO' }, 'Listo para cerrar la fase'));
+    paintPending(L2.pending);
+    const refresh = async () => { const f = await S.get(`${A}/worksheets/${wid}`); if (f) { paint(f.summary); paintPending(f.letter.pending); } };
+    const paint = (s) => sum.replaceChildren(S.ratingBadge(s.rating), ` Nota de la fase ${S.score(s.final)}% · ${L2.requested} control(es) pedidos en la carta`);
+    paint(d.summary);
+    bar.append(h('button', { class: 'secondary', onclick: async () => {
+      const v = await S.ask('Carta de solicitud de documentación', [{ name: 'due', label: 'Fecha límite de entrega', type: 'date' }], 'Generar carta');
+      if (v) S.openFile(`${A}/${d.audit.id}/documentation-request.pdf${v.due ? '?due=' + encodeURIComponent(v.due) : ''}`, `${d.audit.code}_solicitud_documentacion.pdf`, false);
+    } }, 'Carta de solicitud (PDF)'));
+    if (!docPhase) bar.append(h('button', { class: 'secondary', onclick: () => S.openFile(`${A}/${d.audit.id}/field-tests.pdf`, `${d.audit.code}_programa_pruebas_campo.pdf`, false) }, 'Programa de pruebas (PDF)'));
+    const save = (it, payload, saving, scoreCell) => async () => {
+      saving.textContent = 'guardando…';
+      const r = await S.call(`${A}/items/${it.id}`, { method: 'PUT', json: { results: { [it.ref]: payload }, observation: it.observation || '' } });
+      if (!r.ok) { saving.textContent = ''; return S.say(S.err(r)); }
+      saving.textContent = 'guardado'; scoreCell.textContent = S.score(r.data.auto_score); refresh();
+    };
+    const yesNo = (value, onChange) => {
+      const sel = h('select', { disabled: !edit }, [['', '—'], ['SI', 'Sí'], ['NO', 'No']].map(([v, l]) => h('option', { value: v, selected: v === (value || '') }, l)));
+      sel.addEventListener('change', () => onChange(sel.value));
+      return sel;
+    };
+    const docsCell = (it) => {
+      const list = h('div', { class: 'letter-docs' }, ...(it.documents || []).map((x) => h('a', { href: '#', onclick: (e) => { e.preventDefault(); S.openFile(`${A}/evidence/${x.id}/download`, x.filename); } }, x.filename)));
+      if (!edit || !docPhase) return h('td', null, list.children.length ? list : h('span', { class: 'muted' }, 'Sin documentos'));
+      const input = h('input', { type: 'file', class: 'hidden' });
+      input.addEventListener('change', async () => {
+        const file = input.files?.[0]; if (!file) return;
+        const form = new FormData(); form.append('file', file); form.append('item_id', it.id); form.append('description', `Documentación del control ${it.ref}`);
+        const r = await S.upload(`${A}/${d.audit.id}/evidence`, form); input.value = '';
+        if (!r.ok) return S.say(S.err(r));
+        it.documents = [...(it.documents || []), { id: r.data.id, filename: file.name }];
+        list.append(h('a', { href: '#', onclick: (e) => { e.preventDefault(); S.openFile(`${A}/evidence/${r.data.id}/download`, file.name); } }, file.name));
+        S.say('Documento adjunto.', true);
+      });
+      return h('td', null, list, input, h('button', { class: 'sm secondary', onclick: () => input.click() }, 'Adjuntar'));
+    };
+    const rows = items.map((it) => {
+      const c = criteria[it.ref] || {}, cur = (it.results || {})[it.ref] || {};
+      const saving = h('span', { class: 'saving' }), score = h('td', null, S.score(it.auto_score));
+      const head = [h('td', null, h('b', null, it.ref)), h('td', { title: c.text || '' }, c.text || it.ref)];
+      if (docPhase) {
+        const payload = { doc_status: it.doc_status || '', doc_note: cur.doc_note || '' };
+        const sel = h('select', { disabled: !edit }, [['', '— Pendiente —'], ...Object.entries(L2.doc_labels)].map(([v, l]) => h('option', { value: v, selected: v === payload.doc_status }, l)));
+        const td = h('td', { class: payload.doc_status ? (['ACTUALIZADA', 'DESACTUALIZADA'].includes(payload.doc_status) ? 'res-CUMPLE' : 'res-NO_CUMPLE') : '' }, sel);
+        sel.addEventListener('change', () => { payload.doc_status = sel.value; td.className = sel.value ? (['ACTUALIZADA', 'DESACTUALIZADA'].includes(sel.value) ? 'res-CUMPLE' : 'res-NO_CUMPLE') : ''; save(it, payload, saving, score)(); });
+        const note = h('textarea', { disabled: !edit, value: payload.doc_note, placeholder: 'Documento recibido, fecha de aprobación o respuesta de la unidad' });
+        note.addEventListener('change', () => { payload.doc_note = note.value; save(it, payload, saving, score)(); });
+        return h('tr', null, ...head, h('td', null, it.lev_control === 'SI' ? 'Sí' : it.lev_control === 'NO' ? 'No' : '—'), td, h('td', null, note), docsCell(it), score, h('td', null, saving));
+      }
+      const withDocs = ['ACTUALIZADA', 'DESACTUALIZADA'].includes(it.doc_status);
+      const docLabel = h('td', { class: withDocs ? 'res-CUMPLE' : 'res-NO_CUMPLE' }, L2.doc_labels[it.doc_status] || 'Sin registrar');
+      if (withDocs) {
+        const payload = { q1: cur.q1 || '', q2: cur.q2 || '', q3: cur.q3 || '', test_note: cur.test_note || '' };
+        const out = h('span', { class: 'letter-outcome' }, L2.result_labels[cur.outcome] || 'Pendiente');
+        const qs = L2.questions.map((q) => h('label', { class: 'letter-q' }, q.text, yesNo(payload[q.key], (v) => {
+          payload[q.key] = v;
+          const yes = L2.questions.filter((x) => payload[x.key] === 'SI').length, all = L2.questions.every((x) => payload[x.key]);
+          out.textContent = all ? L2.result_labels[yes === 3 ? 'CUMPLE' : yes === 0 ? 'NO_CUMPLE' : 'PARCIAL'] : 'Pendiente';
+          save(it, payload, saving, score)();
+        })));
+        return h('tr', null, ...head, docLabel, h('td', { colspan: 2 }, h('div', { class: 'letter-qs' }, ...qs), h('div', null, h('b', null, 'Resultado: '), out)), docsCell(it), score, h('td', null, saving));
+      }
+      const payload = { justification: cur.justification || '' };
+      const just = h('textarea', { disabled: !edit, value: payload.justification, placeholder: `Justificativo obligatorio (mínimo ${L2.min_justification} caracteres): por qué no se obtuvo la documentación` });
+      just.addEventListener('change', () => { payload.justification = just.value; save(it, payload, saving, score)(); });
+      return h('tr', null, ...head, docLabel, h('td', { colspan: 2 }, just, h('div', { class: 'muted' }, 'Sin documentación: el control vale 0 en Pruebas de campo.')), docsCell(it), score, h('td', null, saving));
+    });
+    const headers = docPhase ? ['ID', 'Control pedido en la carta', 'Existe (Levantamiento)', 'Lo obtenido de la unidad', 'Nota', 'Documentos', 'Puntaje', '']
+      : ['ID', 'Control pedido en la carta', 'Documentación', 'Prueba de campo', '', 'Documentos', 'Puntaje', ''];
+    const body = h('tbody', null, rows);
+    el.append(...[bar, h('div', { class: 'row' }, sum, ' ', pend),
+      h('div', { class: 'okbox' }, docPhase
+        ? 'Se muestran solo los controles pedidos en la carta de solicitud (los que la unidad declaró documentados en el Levantamiento). Registre lo obtenido y adjunte el documento. Lo no entregado o sin respuesta baja la nota y queda sin documentación para Pruebas de campo.'
+        : 'Controles con documentación: responda las tres preguntas (3 Sí = cumple, 1 o 2 = cumple parcialmente, 0 = no cumple). Controles sin documentación: escriba el justificativo para poder cerrar la fase; el control vale 0.'),
+      others ? h('p', { class: 'muted' }, `${others} control(es) no se pidieron en la carta (no documentados en el Levantamiento): conservan el resultado del Levantamiento.`) : null,
+      ...(!edit ? [h('div', { class: 'warn' }, 'Solo lectura.')] : []),
+      items.length ? h('div', { class: 'grid-wrap audit-letter' }, h('table', null, h('thead', null, h('tr', null, headers.map((x) => h('th', null, x)))), body))
+        : h('div', { class: 'empty panel' }, 'La unidad no declaró controles documentados en el Levantamiento: la carta no pide documentación.'),
+      items.length ? S.paginate(body, 15) : null].filter(Boolean));
   }
 
   // Cuestionario por bloques: índice ponderado, riesgo y bloques que no cumplen el promedio requerido.

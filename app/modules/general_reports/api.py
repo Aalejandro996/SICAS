@@ -1,4 +1,5 @@
-"""API del informe general de auditorías.
+"""API de los informes consolidados: Informe Ejecutivo (auditorías cerradas por trimestre, semestre o año; ambos
+dominios) e Informe de Documentación (Sistemas: auditorías en fase de Documentación y lo obtenido de la carta).
 
 Flujo: Auditor genera (DRAFT) -> firma y envía al Jefe (IN_REVIEW) -> el Jefe de Auditoría de su dominio aprueba
 (APPROVED, distribuido a Gerencia y Contralor) o devuelve (RETURNED, el Auditor regenera y vuelve a firmar).
@@ -71,59 +72,74 @@ def review_domains():
 
 
 def _filters(src):
-    def day(name):
-        v = str(src.get(name) or "").strip()
-        return date.fromisoformat(v[:10]).isoformat() if v else None
     kind = str(src.get("audit_kind") or "").upper()
     unit_kind = str(src.get("unit_kind") or "").upper()
-    status = str(src.get("status") or "").upper()
-    phase = str(src.get("phase") or "").upper()
     unit = str(src.get("unit_id") or "")
-    return {"phase": phase if phase in content.ELIGIBLE_PHASES else None, "audit_kind": kind if kind in AUDIT_KINDS else None,
-            "unit_id": int(unit) if unit.isdigit() else None, "unit_kind": unit_kind if unit_kind in ("SUCURSAL", "UNIDAD") else None,
-            "status": status if status in ("IN_PROGRESS", "CLOSED") else None, "from": day("from"), "to": day("to"),
-            "q": str(src.get("q") or "").strip()[:60] or None}
+    return {"audit_kind": kind if kind in AUDIT_KINDS else None, "unit_id": int(unit) if unit.isdigit() else None,
+            "unit_kind": unit_kind if unit_kind in ("SUCURSAL", "UNIDAD") else None, "q": str(src.get("q") or "").strip()[:60] or None}
 
 
-def _filters_text(f, unit_name=None):
-    parts = [f"fase de {content.PHASE_LABEL[f['phase']].lower()}" if f.get("phase") else "fases de documentación e informe",
-             f"tipo {content.KIND_LABEL[f['audit_kind']].lower()}" if f.get("audit_kind") else None,
+def _kind(raw, domain):
+    """Tipos de informe del dominio: Ejecutivo (ambos) y Documentación (solo Sistemas)."""
+    kind = str(raw or "EJECUTIVO").upper()
+    if kind not in content.REPORT_KINDS or (kind == "DOCUMENTACION" and domain != "SISTEMAS"):
+        raise ValueError("Tipo de informe inválido para su dominio")
+    return kind
+
+
+def _period(src):
+    """{type, n, year, from, until, label} del trimestre, semestre o año elegido."""
+    ptype = str(src.get("period_type") or src.get("type") or "").upper()
+    try:
+        n = int(src.get("period_n") or src.get("n") or 1)
+        year = int(src.get("year") or date.today().year)
+    except (TypeError, ValueError):
+        raise ValueError("Período inválido")
+    start, until, label = content.period_range(ptype, 1 if ptype == "ANUAL" else n, year)
+    return {"type": ptype, "n": 1 if ptype == "ANUAL" else n, "year": year, "from": start.isoformat(), "until": until.isoformat(), "label": label}
+
+
+def _filters_text(kind, f, period, unit_name=None):
+    base = (f"auditorías cerradas en el {period['label']}" if kind == "EJECUTIVO" else "auditorías de Sistemas en fase de Documentación")
+    parts = [base, f"tipo {content.KIND_LABEL[f['audit_kind']].lower()}" if f.get("audit_kind") else None,
              f"unidad {unit_name}" if unit_name else None,
              {"SUCURSAL": "sucursales", "UNIDAD": "unidades administrativas"}.get(f.get("unit_kind")),
-             {"IN_PROGRESS": "en curso", "CLOSED": "cerradas"}.get(f.get("status")),
-             f"períodos desde {f['from']}" if f.get("from") else None, f"hasta {f['to']}" if f.get("to") else None,
              f"búsqueda «{f['q']}»" if f.get("q") else None]
-    return ", ".join(p for p in parts if p) + " (auditorías seleccionadas por el Auditor)"
+    return ", ".join(p for p in parts if p) + " (auditorías del Auditor seleccionadas por él)"
 
 
 @bp.get("/candidates")
 @permission_required("general_report:create")
 def candidates():
-    try:
-        f = _filters(request.args)
-    except ValueError:
-        return err("Fecha inválida (AAAA-MM-DD)")
     domain = creator_domain()
-    return jsonify(audits=service.candidates({domain}, f, eng.me()), units=service.units({domain}, eng.me()), domain=domain,
-                   phases=list(content.ELIGIBLE_PHASES), max_audits=content.MAX_AUDITS)
+    try:
+        kind, f = _kind(request.args.get("kind"), domain), _filters(request.args)
+        period = _period(request.args) if kind == "EJECUTIVO" else None
+    except ValueError as ex:
+        return err(str(ex))
+    return jsonify(audits=service.candidates({domain}, f, eng.me(), kind, period), units=service.units({domain}, eng.me()),
+                   domain=domain, kinds={k: v for k, v in content.REPORT_KINDS.items() if k == "EJECUTIVO" or domain == "SISTEMAS"},
+                   period=period, max_audits=content.MAX_AUDITS)
 
 
-def _build(domain, title, objective, audit_ids, f, code, revision=1, author=None):
-    """Lee las auditorías elegibles y arma el cuerpo con el motor de reglas. Devuelve (cuerpo, ids usados, ids descartados)."""
-    eligible = {a["id"]: a for a in service.candidates({domain}, {}, eng.me())}
+def _build(kind, period, domain, title, objective, audit_ids, f, code, owner, revision=1, author=None):
+    """Lee las auditorías elegibles del Auditor y arma el cuerpo con el motor de reglas. (cuerpo, usados, descartados)."""
+    eligible = {a["id"] for a in service.candidates({domain}, {}, owner, kind, period)}
     used, dropped, data = [], [], []
     for aid in audit_ids:
         a = repo.get_audit(aid) if aid in eligible else None
         if a is None:
             dropped.append(aid); continue
         used.append(aid)
-        data.append(service.audit_data(a, eng.thresholds, eng.overall_for))
+        data.append(service.documentation_data(a) if kind == "DOCUMENTACION" else service.audit_data(a, eng.thresholds, eng.overall_for))
     if not data:
         return None, used, dropped
     unit_name = next((a["unit_name"] for a in data if f.get("unit_id")), None)
-    body = content.build(audits=data, catalog=service.catalog(domain), company=repo.company() or current_app.config["COMPANY_NAME"],
-                         domain=domain, title=title, code=code, author=author, filters_text=_filters_text(f, unit_name),
-                         today=date.today(), objective=objective, revision=revision)
+    company = repo.company() or current_app.config["COMPANY_NAME"]
+    common = dict(company=company, title=title, code=code, author=author, filters_text=_filters_text(kind, f, period or {}, unit_name),
+                  today=date.today(), objective=objective, revision=revision)
+    body = (content.build_documentation(audits=data, **common) if kind == "DOCUMENTACION" else
+            content.build(audits=data, catalog=service.catalog(domain), domain=domain, period_label=period["label"], **common))
     return json.loads(json.dumps(body, default=str)), used, dropped
 
 
@@ -140,25 +156,30 @@ def _ids(raw):
 @permission_required("general_report:create")
 def create():
     d = request.get_json(silent=True) or {}
-    title = str(d.get("title") or "").strip()
+    domain = creator_domain()
     objective = str(d.get("objective") or "").strip()[:600] or None
-    if not 5 <= len(title) <= 200:
-        return err("Título: entre 5 y 200 caracteres")
     try:
+        kind = _kind(d.get("kind"), domain)
+        period = _period(d.get("period") or {}) if kind == "EJECUTIVO" else None
         ids, f = _ids(d.get("audit_ids")), _filters(d.get("filters") or {})
     except ValueError as ex:
         return err(str(ex))
-    domain = creator_domain()
+    title = str(d.get("title") or "").strip() or (f"{content.REPORT_KINDS[kind]} — {period['label']}" if period
+                                                  else f"{content.REPORT_KINDS[kind]} — {date.today():%d/%m/%Y}")
+    if not 5 <= len(title) <= 200:
+        return err("Título: entre 5 y 200 caracteres")
     user = (repo.user_brief(eng.me()) or {})
     author = {"name": user.get("name") or g.claims.get("username"), "role": _role_label()}
-    code = service.next_code(domain, date.today().year)
-    body, used, dropped = _build(domain, title, objective, ids, f, code, author=author)
+    code = service.next_code(kind, domain, date.today().year)
+    body, used, dropped = _build(kind, period, domain, title, objective, ids, f, code, eng.me(), author=author)
     if body is None:
-        return err("Ninguna de las auditorías seleccionadas es suya (de su equipo) y está en fase de Documentación o de Informe", 409)
+        return err("Ninguna de las auditorías seleccionadas es suya (de su equipo) y "
+                   + ("está cerrada en el período elegido" if kind == "EJECUTIVO" else "está en fase de Documentación"), 409)
     sha = body_hash(body)
-    rid = service.create(domain, title, {**f, "objective": objective}, used, body, sha, eng.me(), _role_label())
+    rid = service.create(kind, period, domain, title, {**f, "objective": objective}, used, body, sha, eng.me(), _role_label())
     log("GENERAL_REPORT_GENERATED", entity_type="general_report", entity_id=rid,
-        after_data={"code": code, "auditorias": len(used), "sha256": sha}, request_id=g.request_id)
+        after_data={"code": code, "kind": kind, "period": (period or {}).get("label"), "auditorias": len(used), "sha256": sha},
+        request_id=g.request_id)
     return jsonify(id=rid, code=code, dropped=dropped), 201
 
 
@@ -169,11 +190,37 @@ def search():
     rows = service.search(eng.me(), review_domains(), "general_report:read_approved" in p, "general_report:create" in p)
     for r in rows:
         r["status_label"] = STATUS_LABEL.get(r["status"], r["status"])
+        r["kind_label"] = content.REPORT_KINDS.get(r["report_kind"], r["report_kind"])
     return jsonify(reports=rows, can_create="general_report:create" in p)
+
+
+def _refresh(rep):
+    """Informe anterior al Informe Ejecutivo: si cumple, se actualiza con la data vigente; si no, se elimina."""
+    period = rep.get("period") or {}
+    try:
+        period = _period(period) if rep["report_kind"] == "EJECUTIVO" else None
+    except ValueError:
+        period = None
+    body = None
+    if period or rep["report_kind"] == "DOCUMENTACION":
+        f = {k: v for k, v in (rep["filters"] or {}).items() if k in ("audit_kind", "unit_id", "unit_kind", "q")}
+        title = f"{content.REPORT_KINDS[rep['report_kind']]} — {period['label']}" if period else rep["title"]
+        body, used, _ = _build(rep["report_kind"], period, rep["audit_domain"], title, (rep["filters"] or {}).get("objective"),
+                               rep["audit_ids"], f, rep["code"], rep["created_by"], revision=rep["revision"] + 1, author=rep["body"].get("author"))
+    if body is None:
+        service.delete(rep["id"])
+        log("GENERAL_REPORT_DELETED", entity_type="general_report", entity_id=rep["id"],
+            metadata={"motivo": "No cumple las condiciones del Informe Ejecutivo"}, request_id=g.request_id)
+        return None
+    service.refresh(rep, body, body_hash(body), used, eng.me(), _role_label())
+    log("GENERAL_REPORT_REFRESHED", entity_type="general_report", entity_id=rep["id"], request_id=g.request_id)
+    return service.get(rep["id"])
 
 
 def _load(rid):
     rep = service.get(rid)
+    if rep is not None and rep.get("needs_refresh"):
+        rep = _refresh(rep)
     if rep is None:
         return None, err("No encontrado", 404)
     p, uid = _perms(), eng.me()
@@ -250,10 +297,14 @@ def regenerate(rid):
     except ValueError as ex:
         return err(str(ex))
     f = {k: v for k, v in (rep["filters"] or {}).items() if k != "objective"}
-    body, used, dropped = _build(rep["audit_domain"], rep["title"], (rep["filters"] or {}).get("objective"), ids, f, rep["code"],
-                                 revision=rep["revision"] + 1, author=rep["body"].get("author"))
+    try:
+        period = _period(rep["period"] or {}) if rep["report_kind"] == "EJECUTIVO" else None
+    except ValueError as ex:
+        return err(str(ex))
+    body, used, dropped = _build(rep["report_kind"], period, rep["audit_domain"], rep["title"], (rep["filters"] or {}).get("objective"),
+                                 ids, f, rep["code"], rep["created_by"], revision=rep["revision"] + 1, author=rep["body"].get("author"))
     if body is None:
-        return err("Ninguna de las auditorías sigue en fase de Documentación o de Informe", 409)
+        return err("Ninguna de las auditorías sigue cumpliendo las condiciones del informe", 409)
     sha = body_hash(body)
     try:
         service.replace_body(rep, body, sha, used, eng.me(), _role_label())
@@ -262,6 +313,10 @@ def regenerate(rid):
     log("GENERAL_REPORT_REGENERATED", entity_type="general_report", entity_id=rep["id"], after_data={"sha256": sha, "auditorias": len(used)},
         request_id=g.request_id)
     return jsonify(status=rep["status"], dropped=dropped)
+
+
+def _name(rep):
+    return content.REPORT_KINDS.get(rep.get("report_kind"), "Informe")
 
 
 def _target(rep):
@@ -295,8 +350,8 @@ def sign(rid):
     log("GENERAL_REPORT_SIGNED_SENT", entity_type="general_report", entity_id=rep["id"], after_data={"sha256": rep["body_sha256"]},
         request_id=g.request_id)
     role = "JEFE_AUDITORIA_SISTEMAS" if rep["audit_domain"] == "SISTEMAS" else "JEFE_AUDITORIA_FINANCIERA"
-    _notify("informe general enviado", notify._role_user_ids([role]), rep, "sent", "Informe general recibido para revisión",
-            f"El informe general {rep['code']} fue emitido por el Auditor y está pendiente de su revisión.")
+    _notify("informe general enviado", notify._role_user_ids([role]), rep, "sent", f"{_name(rep)} recibido para revisión",
+            f"El {_name(rep).lower()} {rep['code']} fue emitido por el Auditor y está pendiente de su revisión.")
     return jsonify(status="IN_REVIEW", note="Informe enviado al Jefe de Auditoría.")
 
 
@@ -322,10 +377,10 @@ def approve(rid):
     log("GENERAL_REPORT_APPROVED", entity_type="general_report", entity_id=rep["id"], after_data={"sha256": rep["body_sha256"]},
         request_id=g.request_id)
     _notify("informe general aprobado", notify._role_user_ids(["GERENCIA", "CONTRALOR"]), rep, "approved",
-            "Informe general de auditorías aprobado",
-            f"El Jefe de Auditoría aprobó el informe general {rep['code']}: estado actual de las unidades evaluadas.")
-    _notify("informe general aprobado (auditor)", [rep["created_by"]], rep, "approved-author", "Su informe general fue aprobado",
-            f"El informe general {rep['code']} fue aprobado y enviado a Gerencia y al Contralor.")
+            f"{_name(rep)} aprobado",
+            f"El Jefe de Auditoría aprobó el {_name(rep).lower()} {rep['code']}: estado de las unidades evaluadas.")
+    _notify("informe general aprobado (auditor)", [rep["created_by"]], rep, "approved-author", f"Su {_name(rep).lower()} fue aprobado",
+            f"El {_name(rep).lower()} {rep['code']} fue aprobado y enviado a Gerencia y al Contralor.")
     return jsonify(status="APPROVED", note="Informe aprobado y enviado a Gerencia y al Contralor.")
 
 
@@ -346,8 +401,8 @@ def return_report(rid):
     except service.StaleState as ex:
         return err(str(ex), 409)
     log("GENERAL_REPORT_RETURNED", entity_type="general_report", entity_id=rep["id"], metadata={"comment": comment}, request_id=g.request_id)
-    _notify("informe general devuelto", [rep["created_by"]], rep, "returned", "Informe general devuelto",
-            f"El Jefe de Auditoría devolvió el informe general {rep['code']}: {comment[:300]}")
+    _notify("informe general devuelto", [rep["created_by"]], rep, "returned", f"{_name(rep)} devuelto",
+            f"El Jefe de Auditoría devolvió el {_name(rep).lower()} {rep['code']}: {comment[:300]}")
     return jsonify(status="RETURNED")
 
 
