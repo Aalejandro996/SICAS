@@ -1321,14 +1321,14 @@
       if (workPhase(a)) bar.append(h('button', { onclick: gen('PREVIO') }, 'Generar informe previo (hacia la unidad)'));
       if (a.phase === 'INFORME') bar.append(h('button', { onclick: gen('FINAL') }, 'Generar informe final'));
     }
-    el.append(bar, a.phase !== 'INFORME' ? h('div', { class: 'warn' }, 'El informe final se genera en la fase Informe. El informe previo puede generarse desde Trabajo de campo.') : null,
+    el.append(...[bar, a.phase !== 'INFORME' ? h('div', { class: 'warn' }, 'El informe final se genera en la fase Informe. El informe previo puede generarse desde Trabajo de campo.') : null,
       tbl(['Código', 'Tipo', 'Versión', 'Estado', 'Generó', 'Creado', 'Enviado / aprobado'], d.reports.map((r) => [r.code || '—', r.kind === 'PREVIO' ? 'Previo' : 'Final', 'v' + r.version, S.badge(r.status), r.created_by_name, fmt(r.created_at),
         r.sent_to ? 'Enviado a ' + r.sent_to : r.approved_by_name ? 'Aprobó ' + r.approved_by_name : '']), (i) => openReport(d.reports[i].id, reload)),
       h('div', { class: 'panel' }, h('h3', null, 'PAC — Plan de Acción Correctiva (anexo en Excel)'),
         h('p', { class: 'muted' }, 'Contiene las observaciones y los campos que completa la unidad. El envío se habilita cuando el informe final está firmado por el Contralor y el Gerente de Control Interno; al enviarlo se cierra la auditoría.'),
         h('div', { class: 'row' }, h('button', { class: 'secondary', onclick: () => S.openFile(`${A}/${ctx.aid}/pac.xlsx`, `PAC_${a.code}.xlsx`, false) }, 'Descargar PAC (.xlsx)'),
           ctx.d.is_member && can('audit:pac_send') && a.status === 'IN_PROGRESS' && d.reports.some((r) => r.kind === 'FINAL' && r.status === 'SIGNED') ? h('button', { class: 'ok', onclick: sendPac }, 'Enviar PAC a la unidad y cerrar') : null),
-        a.pac_sent_at ? h('div', { class: 'okbox' }, `PAC enviado a ${a.pac_sent_to} el ${fmt(a.pac_sent_at)}. Auditoría cerrada.`) : null));
+        a.pac_sent_at ? h('div', { class: 'okbox' }, `PAC enviado${a.pac_sent_to ? ' a ' + a.pac_sent_to : ''} el ${fmt(a.pac_sent_at)} · Auditoría cerrada.`) : null)].filter(Boolean));
   }
   async function sendPac() {
     const v = await S.ask('Enviar PAC a la unidad', [{ name: 'to', label: 'Destinatario (nombre y, para envío automático, correo)', placeholder: 'Nombre Apellido <correo@empresa.com>', required: true }], 'Enviar y cerrar');
