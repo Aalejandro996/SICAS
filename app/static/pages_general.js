@@ -46,7 +46,7 @@
       const d = await S.get(API + '/candidates' + (qs() ? '?' + qs() : ''));
       if (!d) return;
       if (!units.length) { units = d.units; unitSel.replaceChildren(...[['', 'Todas'], ...units.map((u) => [u.id, u.name])].map(([v, l]) => h('option', { value: v }, l))); }
-      if (!d.audits.length) { results.replaceChildren(h('div', { class: 'empty panel' }, 'No hay auditorías en fase de Documentación o de Informe con esos filtros.')); return; }
+      if (!d.audits.length) { results.replaceChildren(h('div', { class: 'empty panel' }, 'No tiene auditorías propias en fase de Documentación o de Informe con esos filtros.')); return; }
       const boxes = d.audits.map((a) => {
         const c = h('input', { type: 'checkbox', checked: picked.has(a.id), 'aria-label': 'Seleccionar ' + a.code });
         c.addEventListener('change', () => { if (c.checked) picked.add(a.id); else picked.delete(a.id); paint(); });
@@ -70,7 +70,7 @@
     }) }, 'Generar informe');
     el.replaceChildren(h('div', { class: 'toolbar' }, h('button', { class: 'secondary', onclick: () => go('') }, '← Informes generales')),
       h('h2', null, 'Nuevo informe general'),
-      h('p', { class: 'muted' }, 'Solo aparecen las auditorías de su alcance en fase de Documentación o de Informe. Filtre y marque las que desea consolidar.'),
+      h('p', { class: 'muted' }, 'Solo aparecen sus auditorías (de las que forma parte del equipo) en fase de Documentación o de Informe. Filtre y marque las que desea consolidar.'),
       h('div', { class: 'panel ti-filters' },
         h('label', null, 'Fase', select('phase', [['', 'Documentación e Informe'], ['DOCUMENTACION', 'Documentación'], ['INFORME', 'Informe']])),
         h('label', null, 'Tipo de auditoría', select('audit_kind', [['', 'Todos'], ...Object.entries(KIND)])),

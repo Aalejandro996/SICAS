@@ -104,13 +104,13 @@ def candidates():
     except ValueError:
         return err("Fecha inválida (AAAA-MM-DD)")
     domain = creator_domain()
-    return jsonify(audits=service.candidates({domain}, f), units=service.units({domain}), domain=domain,
+    return jsonify(audits=service.candidates({domain}, f, eng.me()), units=service.units({domain}, eng.me()), domain=domain,
                    phases=list(content.ELIGIBLE_PHASES), max_audits=content.MAX_AUDITS)
 
 
 def _build(domain, title, objective, audit_ids, f, code, revision=1, author=None):
     """Lee las auditorías elegibles y arma el cuerpo con el motor de reglas. Devuelve (cuerpo, ids usados, ids descartados)."""
-    eligible = {a["id"]: a for a in service.candidates({domain}, {})}
+    eligible = {a["id"]: a for a in service.candidates({domain}, {}, eng.me())}
     used, dropped, data = [], [], []
     for aid in audit_ids:
         a = repo.get_audit(aid) if aid in eligible else None
@@ -154,7 +154,7 @@ def create():
     code = service.next_code(domain, date.today().year)
     body, used, dropped = _build(domain, title, objective, ids, f, code, author=author)
     if body is None:
-        return err("Ninguna de las auditorías seleccionadas está en fase de Documentación o de Informe dentro de su alcance", 409)
+        return err("Ninguna de las auditorías seleccionadas es suya (de su equipo) y está en fase de Documentación o de Informe", 409)
     sha = body_hash(body)
     rid = service.create(domain, title, {**f, "objective": objective}, used, body, sha, eng.me(), _role_label())
     log("GENERAL_REPORT_GENERATED", entity_type="general_report", entity_id=rid,

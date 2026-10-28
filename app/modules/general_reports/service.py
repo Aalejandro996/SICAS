@@ -23,10 +23,13 @@ class StaleState(Exception):
     pass
 
 
-def candidates(domains, f):
-    """Auditorías en fase de Documentación o de Informe del dominio, con los filtros de la pantalla."""
-    where = ["a.status <> 'ANULADA'", "a.phase = ANY(CAST(:ph AS text[]))"]
-    p = {"ph": [f["phase"]] if f.get("phase") in ELIGIBLE_PHASES else list(ELIGIBLE_PHASES)}
+TEAM = "EXISTS (SELECT 1 FROM engagement.team t WHERE t.audit_id = a.id AND t.user_id = CAST(:me AS uuid))"
+
+
+def candidates(domains, f, user):
+    """Auditorías propias del Auditor (es del equipo), en fase de Documentación o de Informe, con los filtros de la pantalla."""
+    where = ["a.status <> 'ANULADA'", "a.phase = ANY(CAST(:ph AS text[]))", TEAM]
+    p = {"ph": [f["phase"]] if f.get("phase") in ELIGIBLE_PHASES else list(ELIGIBLE_PHASES), "me": user}
     if "ALL" not in domains:
         where.append("a.audit_domain = ANY(CAST(:d AS text[]))"); p["d"] = sorted(domains)
     if f.get("audit_kind"):
@@ -49,12 +52,12 @@ def candidates(domains, f):
              "WHERE " + " AND ".join(where) + " ORDER BY u.name, a.code LIMIT 300", **p)
 
 
-def units(domains):
-    p, cond = {}, ""
+def units(domains, user):
+    p, cond = {"me": user}, ""
     if "ALL" not in domains:
         cond = "AND a.audit_domain = ANY(CAST(:d AS text[])) "; p["d"] = sorted(domains)
     return q("SELECT DISTINCT u.id, u.name, u.kind FROM engagement.audits a JOIN engagement.files f ON f.id = a.file_id "
-             "JOIN engagement.units u ON u.id = f.unit_id WHERE a.status <> 'ANULADA' AND a.phase = ANY(CAST(:ph AS text[])) "
+             "JOIN engagement.units u ON u.id = f.unit_id WHERE a.status <> 'ANULADA' AND a.phase = ANY(CAST(:ph AS text[])) AND " + TEAM + " "
              + cond + "ORDER BY u.name", ph=list(ELIGIBLE_PHASES), **p)
 
 

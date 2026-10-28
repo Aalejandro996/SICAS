@@ -26,7 +26,7 @@
 
   const modules = {
     ops: {
-      src: '/static/pages_ops.js?v=20261028-ig1',
+      src: '/static/pages_ops.js?v=20261028-ig2',
       pages: [
         { id: 'ingestion', title: 'Cargas', perms: ['ingestion:read'] },
         { id: 'findings', title: 'Hallazgos', perms: ['finding:read'] },
@@ -40,7 +40,7 @@
     },
 
     audit: {
-      src: '/static/pages_audit.js?v=20261028-ig1',
+      src: '/static/pages_audit.js?v=20261028-ig2',
       pages: [
         {
           id: 'audits',
@@ -57,7 +57,7 @@
     },
 
     contralor: {
-      src: '/static/pages_contralor.js?v=20261028-ig1',
+      src: '/static/pages_contralor.js?v=20261028-ig2',
       pages: [
         {
           id: 'contralor-dashboard',
