@@ -68,6 +68,7 @@ button.danger { background: var(--err); } button.ok { background: var(--ok); }
 .badge.CRITICAL, .badge.FAILURE, .badge.FAILED, .badge.INACTIVE { background: #b00020; } .badge.HIGH, .badge.DENIED { background: #d9480f; }
 .badge.MEDIUM, .badge.PROCESSING, .badge.QUEUED, .badge.PENDING, .badge.RUNNING { background: #b8860b; } .badge.LOW { background: #4a6fa5; }
 .badge.OK, .badge.SUCCESS, .badge.COMPLETED, .badge.SIGNED, .badge.APPROVED, .badge.ACTIVE, .badge.CLOSED_RESOLVED { background: #1b6e3c; }
+.badge.IN_REVIEW { background: #b8860b; } .badge.RETURNED { background: #b00020; }
 .empty { padding: 18px; text-align: center; color: #666; }
 .overlay { position: fixed; inset: 0; background: rgba(15,25,50,.55); display: flex; align-items: flex-start; justify-content: center; padding: 40px 12px; overflow: auto; z-index: 50; }
 .modal { background: #fff; border-radius: 10px; padding: 20px 22px; width: min(720px, 100%); box-shadow: 0 8px 30px rgba(0,0,0,.35); }

@@ -131,6 +131,10 @@ PERMISSIONS: dict[str, tuple[str, str]] = {
     # Evaluación TI de sucursales (módulo del Jefe de Auditoría de Sistemas)
     "ti_branch:read": ("engagement", "Ver los resultados de la Evaluación TI de las sucursales"),
     "ti_branch:report": ("engagement", "Generar el informe normativo de la Evaluación TI de las sucursales"),
+    # Informe general de auditorías (consolidado de auditorías en fase de Documentación o de Informe)
+    "general_report:create": ("engagement", "Generar, firmar y enviar al Jefe el informe general de auditorías"),
+    "general_report:review": ("engagement", "Aprobar o devolver el informe general de auditorías (Jefe de Auditoría)"),
+    "general_report:read_approved": ("engagement", "Recibir y consultar el informe general de auditorías aprobado"),
     # Trazabilidad
     "auditlog:read": ("audit_log", "Consultar el audit trail"),
     "auditlog:verify_chain": ("audit_log", "Verificar integridad de la cadena de hashes"),
@@ -156,7 +160,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "regulatory:read", "regulatory:generate",
         "dashboard:operational",
         "audit:read", "audit:general_read", "audit:manage", "audit:rate", "audit:report_draft", "audit:report_submit",
-        "audit:initial", "audit:pac_send", "audit:read_final",
+        "audit:initial", "audit:pac_send", "audit:read_final", "general_report:create",
     },
     CONTRALOR: {
         "ingestion:read", "ingestion:review_rejects",
@@ -171,13 +175,13 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "auditlog:read", "auditlog:verify_chain", "auditlog:export",
         "audit:read", "audit:read_final", "audit:report_approve", "audit:sign_contralor",
         "audit:template_manage", "audit:unit_manage", "audit:annul_approve", "backup:restore_approve",
-        "admin:action_approve", "ti_branch:read",
+        "admin:action_approve", "ti_branch:read", "general_report:read_approved",
     },
     GERENCIA: {
         "finding:read_summary",
         "report:read_approved", "report:verify_signature",
         "dashboard:executive",
-        "audit:read_final", "audit:sign_gerente", "audit:report_approve_gerente",
+        "audit:read_final", "audit:sign_gerente", "audit:report_approve_gerente", "general_report:read_approved",
     },
     AUDITOR_FINANCIERO: {
         "ingestion:upload", "ingestion:read", "ingestion:review_rejects", "ingestion:cancel",
@@ -185,7 +189,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "report:draft", "report:read", "report:submit", "report:read_approved", "report:verify_signature", "report:export",
         "dashboard:operational",
         "audit:read", "audit:manage", "audit:rate", "audit:report_draft", "audit:report_submit", "audit:initial", "audit:pac_send", "audit:read_final",
-        "audit:financial_read", "audit:financial_manage", "audit:financial_execute",
+        "audit:financial_read", "audit:financial_manage", "audit:financial_execute", "general_report:create",
     },
     JEFE_AUDITORIA_FINANCIERA: {
         "ingestion:read", "ingestion:review_rejects", "rule:read", "rule:execute",
@@ -194,19 +198,20 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "dashboard:operational",
         "audit:read", "audit:manage", "audit:rate", "audit:report_draft", "audit:report_submit", "audit:initial", "audit:pac_send", "audit:read_final",
         "audit:financial_read", "audit:financial_manage", "audit:financial_review", "audit:report_approve_jefe",
+        "general_report:review",
     },
     AUDITOR_SISTEMAS: {
         "report:draft", "report:read", "report:submit", "report:read_approved", "report:verify_signature", "report:export",
         "dashboard:operational",
         "audit:read", "audit:manage", "audit:rate", "audit:report_draft", "audit:report_submit", "audit:initial", "audit:pac_send", "audit:read_final",
-        "audit:systems_read", "audit:systems_manage", "audit:systems_execute",
+        "audit:systems_read", "audit:systems_manage", "audit:systems_execute", "general_report:create",
     },
     JEFE_AUDITORIA_SISTEMAS: {
         "report:draft", "report:read", "report:submit", "report:read_approved", "report:verify_signature", "report:export",
         "dashboard:operational",
         "audit:read", "audit:manage", "audit:rate", "audit:report_draft", "audit:report_submit", "audit:initial", "audit:pac_send", "audit:read_final",
         "audit:systems_read", "audit:systems_manage", "audit:systems_review", "audit:report_approve_jefe",
-        "ti_branch:read", "ti_branch:report",
+        "ti_branch:read", "ti_branch:report", "general_report:review",
     },
 }
 
@@ -230,6 +235,7 @@ SOD_CONFLICTS: list[tuple[str, str, str]] = [
     ("audit:report_draft", "audit:sign_contralor", "Quien genera el informe no lo firma como Contralor."),
     ("audit:report_draft", "audit:sign_gerente", "Quien genera el informe no lo firma como Gerente de Control Interno."),
     ("audit:sign_contralor", "audit:sign_gerente", "Las dos firmas finales las ponen personas distintas."),
+    ("general_report:create", "general_report:review", "Quien elabora el informe general no lo aprueba."),
 ]
 
 

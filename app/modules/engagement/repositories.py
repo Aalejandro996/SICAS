@@ -798,7 +798,7 @@ def set_ws_manual(ws_id, score, reason, user):
 # ------------------------------------------------------------------ observaciones y evidencias
 OBS_SQL = ("SELECT id::text, audit_id::text, item_id::text, seq, title, condition, criteria, cause, effect, recommendation, risk, unit_decision, unit_response, "
            "unit_response_at, pac_action, pac_owner, pac_due, pac_status, origin, covered_items::text[] AS covered_items, "
-           "superseded_by::text AS superseded_by FROM engagement.observations ")
+           "superseded_by::text AS superseded_by, rule_key FROM engagement.observations ")
 
 
 def observations(audit_id):

@@ -12,6 +12,7 @@ def register_blueprints(app):
     from app.modules.rules_admin.api import bp as rules_admin_bp
     from app.modules.schedule.api import bp as schedule_bp
     from app.modules.ti_branches.api import bp as ti_branches_bp
+    from app.modules.general_reports.api import bp as general_reports_bp
     from .health import bp as health_bp
 
     p = "/api/v1"
@@ -29,6 +30,7 @@ def register_blueprints(app):
     app.register_blueprint(rules_admin_bp, url_prefix=f"{p}/rules-admin")
     app.register_blueprint(schedule_bp, url_prefix=f"{p}/schedule")
     app.register_blueprint(ti_branches_bp, url_prefix=f"{p}/ti-branches")
+    app.register_blueprint(general_reports_bp, url_prefix=f"{p}/general-reports")
 
     @app.get("/")
     def index():

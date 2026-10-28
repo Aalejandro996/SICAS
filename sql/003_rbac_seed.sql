@@ -87,6 +87,9 @@ INSERT INTO iam.permissions(code, module, description) VALUES ('audit:systems_ex
 INSERT INTO iam.permissions(code, module, description) VALUES ('audit:systems_review', 'engagement', 'Supervisar auditorías e informes de sistemas/TI') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('ti_branch:read', 'engagement', 'Ver los resultados de la Evaluación TI de las sucursales') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('ti_branch:report', 'engagement', 'Generar el informe normativo de la Evaluación TI de las sucursales') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
+INSERT INTO iam.permissions(code, module, description) VALUES ('general_report:create', 'engagement', 'Generar, firmar y enviar al Jefe el informe general de auditorías') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
+INSERT INTO iam.permissions(code, module, description) VALUES ('general_report:review', 'engagement', 'Aprobar o devolver el informe general de auditorías (Jefe de Auditoría)') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
+INSERT INTO iam.permissions(code, module, description) VALUES ('general_report:read_approved', 'engagement', 'Recibir y consultar el informe general de auditorías aprobado') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('auditlog:read', 'audit_log', 'Consultar el audit trail') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('auditlog:verify_chain', 'audit_log', 'Verificar integridad de la cadena de hashes') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
 INSERT INTO iam.permissions(code, module, description) VALUES ('auditlog:export', 'audit_log', 'Exportar el audit trail') ON CONFLICT (code) DO UPDATE SET module = EXCLUDED.module, description = EXCLUDED.description;
@@ -121,6 +124,7 @@ INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM 
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR' AND p.code='finding:escalate' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR' AND p.code='finding:read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR' AND p.code='finding:triage' ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR' AND p.code='general_report:create' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR' AND p.code='ingestion:cancel' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR' AND p.code='ingestion:read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR' AND p.code='ingestion:review_rejects' ON CONFLICT DO NOTHING;
@@ -155,6 +159,7 @@ INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM 
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='CONTRALOR' AND p.code='finding:close' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='CONTRALOR' AND p.code='finding:read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='CONTRALOR' AND p.code='finding:triage' ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='CONTRALOR' AND p.code='general_report:read_approved' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='CONTRALOR' AND p.code='ingestion:read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='CONTRALOR' AND p.code='ingestion:review_rejects' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='CONTRALOR' AND p.code='kpi:export' ON CONFLICT DO NOTHING;
@@ -183,6 +188,7 @@ INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM 
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='GERENCIA' AND p.code='audit:sign_gerente' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='GERENCIA' AND p.code='dashboard:executive' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='GERENCIA' AND p.code='finding:read_summary' ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='GERENCIA' AND p.code='general_report:read_approved' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='GERENCIA' AND p.code='report:read_approved' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='GERENCIA' AND p.code='report:verify_signature' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_FINANCIERO' AND p.code='audit:financial_execute' ON CONFLICT DO NOTHING;
@@ -200,6 +206,7 @@ INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM 
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_FINANCIERO' AND p.code='finding:escalate' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_FINANCIERO' AND p.code='finding:read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_FINANCIERO' AND p.code='finding:triage' ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_FINANCIERO' AND p.code='general_report:create' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_FINANCIERO' AND p.code='ingestion:cancel' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_FINANCIERO' AND p.code='ingestion:read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_FINANCIERO' AND p.code='ingestion:review_rejects' ON CONFLICT DO NOTHING;
@@ -228,6 +235,7 @@ INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM 
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_FINANCIERA' AND p.code='finding:escalate' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_FINANCIERA' AND p.code='finding:read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_FINANCIERA' AND p.code='finding:triage' ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_FINANCIERA' AND p.code='general_report:review' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_FINANCIERA' AND p.code='ingestion:read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_FINANCIERA' AND p.code='ingestion:review_rejects' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_FINANCIERA' AND p.code='report:draft' ON CONFLICT DO NOTHING;
@@ -250,6 +258,7 @@ INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM 
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_SISTEMAS' AND p.code='audit:systems_manage' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_SISTEMAS' AND p.code='audit:systems_read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_SISTEMAS' AND p.code='dashboard:operational' ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_SISTEMAS' AND p.code='general_report:create' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_SISTEMAS' AND p.code='report:draft' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_SISTEMAS' AND p.code='report:export' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='AUDITOR_SISTEMAS' AND p.code='report:read' ON CONFLICT DO NOTHING;
@@ -269,6 +278,7 @@ INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM 
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='audit:systems_read' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='audit:systems_review' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='dashboard:operational' ON CONFLICT DO NOTHING;
+INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='general_report:review' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='report:draft' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='report:export' ON CONFLICT DO NOTHING;
 INSERT INTO iam.role_permissions(role_id, permission_id) SELECT r.id, p.id FROM iam.roles r, iam.permissions p WHERE r.code='JEFE_AUDITORIA_SISTEMAS' AND p.code='report:read' ON CONFLICT DO NOTHING;
@@ -294,4 +304,5 @@ INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('audit
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('audit:report_draft', 'audit:sign_contralor', 'Quien genera el informe no lo firma como Contralor.') ON CONFLICT DO NOTHING;
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('audit:report_draft', 'audit:sign_gerente', 'Quien genera el informe no lo firma como Gerente de Control Interno.') ON CONFLICT DO NOTHING;
 INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('audit:sign_contralor', 'audit:sign_gerente', 'Las dos firmas finales las ponen personas distintas.') ON CONFLICT DO NOTHING;
+INSERT INTO iam.sod_conflicts(permission_a, permission_b, reason) VALUES ('general_report:create', 'general_report:review', 'Quien elabora el informe general no lo aprueba.') ON CONFLICT DO NOTHING;
 COMMIT;
