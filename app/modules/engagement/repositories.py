@@ -237,6 +237,15 @@ def create_audit(file_id, d, members, user):
     return aid, code
 
 
+def replace_team(audit_id, members):
+    """Reemplaza el equipo auditor (el evento de bitácora ya está en la transacción)."""
+    x("DELETE FROM engagement.team WHERE audit_id = CAST(:a AS uuid)", a=str(audit_id))
+    for m in members:
+        x("INSERT INTO engagement.team (audit_id, user_id, role, initials) VALUES (CAST(:a AS uuid), CAST(:u AS uuid), :r, :i)",
+          a=str(audit_id), u=m["user_id"], r=m["role"], i=m["initials"])
+    db.session.commit()
+
+
 def _insert_phase_score_snapshot(snapshot):
     x(
         "INSERT INTO engagement.phase_score_snapshots "
@@ -945,7 +954,7 @@ REP_SQL = ("SELECT r.id::text, r.audit_id::text, r.kind, r.code, r.version, r.st
            "r.approved_at, r.approved_by::text, r.approved_body_sha256, "
            "r.jefe_approved_by::text AS jefe_approved_by, r.jefe_approved_body_sha256, "
            "r.gerente_approved_by::text AS gerente_approved_by, r.gerente_approved_body_sha256, "
-           "r.contralor_approved_by::text AS contralor_approved_by, r.contralor_approved_body_sha256, "
+           "r.contralor_approved_by::text AS contralor_approved_by, r.contralor_approved_body_sha256, r.gerencia_omitted, "
            "r.created_by::text, r.sent_to, r.sent_at, c.username AS created_by_name, a.username AS approved_by_name "
            "FROM engagement.reports r JOIN iam.users c ON c.id = r.created_by LEFT JOIN iam.users a ON a.id = r.approved_by ")
 
@@ -1093,7 +1102,7 @@ def transition_report(rid, *, expected_status, expected_sha256, status, action, 
         "sent_to", "sent_at", "sent_by",
         "jefe_approved_by", "jefe_approved_at", "jefe_approved_body_sha256",
         "gerente_approved_by", "gerente_approved_at", "gerente_approved_body_sha256",
-        "contralor_approved_by", "contralor_approved_at", "contralor_approved_body_sha256",
+        "contralor_approved_by", "contralor_approved_at", "contralor_approved_body_sha256", "gerencia_omitted",
     }
     uuid_cols = {
         "approved_by", "sent_by",
@@ -1326,3 +1335,12 @@ def active_signature(user_id, kind="COMPLETA"):
     if r:
         r["content"] = bytes(r["content"])
     return r
+
+
+def gerencia_available() -> bool:
+    """Hay Gerente en el cargo: un usuario activo con el rol Gerencia o un suplente vigente de Gerencia."""
+    row = q1("SELECT (EXISTS (SELECT 1 FROM iam.users u JOIN iam.user_roles ur ON ur.user_id = u.id JOIN iam.roles r ON r.id = ur.role_id "
+             "WHERE r.code = 'GERENCIA' AND u.is_active AND u.removed_at IS NULL) OR EXISTS (SELECT 1 FROM engagement.delegations d "
+             "JOIN iam.users u ON u.id = d.delegate_id WHERE d.stage = 'GERENCIA' AND d.revoked_at IS NULL "
+             "AND current_date BETWEEN d.starts_on AND d.ends_on AND u.is_active)) AS ok")
+    return bool(row and row["ok"])

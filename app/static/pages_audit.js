@@ -219,6 +219,9 @@
     const obj = ta('Objetivos de la auditoría'), scope = ta('Alcance'), proc = ta('Procedimientos / metodología (opcional)');
     const ps = h('input', { type: 'date' }), pe = h('input', { type: 'date' });
     const members = who.auditors.map((a) => ({ a, el: h('input', { type: 'checkbox' }) }));
+    // El Jefe de Auditoría crea la auditoría sin formar parte del equipo (segregación de funciones): elige al Auditor responsable.
+    const jefe = can('audit:report_approve_jefe');
+    const leaderSel = h('select', null, h('option', { value: '' }, '— Seleccione —'), who.auditors.map((a) => h('option', { value: a.id }, a.name)));
     const m = dlg('Nueva auditoría', h('div', null,
       h('label', null, 'Expediente', sel), h('label', null, 'Modalidad', mod), h('label', null, 'Lugar', loc),
       h('p', { class: 'muted' }, 'Codificación de los informes: SIGLAS-PROCESO-TIPO-COMPAÑÍA-CORRELATIVO-AÑO (p. ej. P-S-G-SC-001-2026). La auditoría toma el código del expediente con el sufijo -A1, -A2…'),
@@ -227,7 +230,9 @@
       h('label', null, 'Objetivos', obj), h('label', null, 'Alcance', scope), h('label', null, 'Procedimientos', proc),
       h('div', { class: 'toolbar' }, h('label', null, 'Inicio previsto', ps), h('label', null, 'Fin previsto', pe)),
       h('div', { class: 'toolbar' }, h('label', null, 'Responsable de la unidad', cn), h('label', null, 'Cargo', cr)),
-      h('p', { class: 'muted' }, 'Otros auditores del equipo (usted forma parte automáticamente):'),
+      jefe ? h('label', null, 'Auditor responsable', leaderSel) : null,
+      h('p', { class: 'muted' }, jefe ? 'Otros auditores del equipo (usted, como Jefe de Auditoría, no forma parte del equipo para poder revisar y aprobar el informe):'
+        : 'Otros auditores del equipo (usted forma parte automáticamente):'),
       h('div', { class: 'checklist' }, members.map((x) => h('label', null, x.el, x.a.name)))));
     m.footer.append(closeBtn(m, 'Cancelar'), h('button', { onclick: async () => {
       const file = open.find((x) => x.id === sel.value),
@@ -237,6 +242,11 @@
         objectives: obj.value, scope: scope.value, procedures: proc.value, planned_start: ps.value, planned_end: pe.value,
         contact_name: cn.value, contact_role: cr.value, member_ids: members.filter((x) => x.el.checked).map((x) => x.a.id),
         plan_type: planSel.value, process: procSel.value, frequency: freqSel.value, report_company: repCoSel.value };
+      if (jefe) {
+        if (!leaderSel.value) return S.say('Seleccione el Auditor responsable');
+        body.leader_id = leaderSel.value;
+        body.member_ids = body.member_ids.filter((x) => x !== leaderSel.value);
+      }
       const r = await S.send(A, 'POST', body);
       if (r) { m.close(); S.say('Auditoría creada: ' + r.code, true); location.hash = '#/audits/' + r.id + '/cedulas'; }
     } }, 'Crear auditoría'));
@@ -463,7 +473,8 @@
         h('div', { class: 'audit-team-info' },
           h('b', null, t.name),
           h('span', null, h('span', { class: 'muted' }, 'Rol: '), t.system_role || 'Auditor')))))
-        : h('p', { class: 'muted' }, 'Sin integrantes registrados.'));
+        : h('p', { class: 'muted' }, 'Sin integrantes registrados.'),
+      d.can_edit_team ? h('div', { class: 'row' }, h('button', { class: 'sm', onclick: () => editTeam(team) }, 'Cambiar equipo')) : null);
 
     // ---- evolución por fase
     const phaseSnapshots = Array.isArray(d.phase_snapshots) ? d.phase_snapshots : [];
@@ -524,6 +535,26 @@
     if (!v) return;
     const r = await S.send(`${A}/${ctx.aid}`, 'PUT', v);
     if (r) { S.say(r.note || 'Datos actualizados.', true); reload(); }
+  }
+
+  // El Jefe de Auditoría cambia el equipo de una auditoría en curso (con motivo; queda en la bitácora).
+  async function editTeam(team) {
+    const who = await S.get(A + '/auditors');
+    if (!who) return;
+    const leader = team.find((t) => t.role === 'LIDER')?.user_id || '';
+    const leaderSel = h('select', null, h('option', { value: '' }, '— Seleccione —'),
+      who.auditors.map((a) => h('option', { value: a.id, selected: a.id === leader }, a.name)));
+    const members = who.auditors.map((a) => ({ a, el: h('input', { type: 'checkbox', checked: team.some((t) => t.user_id === a.id && t.role !== 'LIDER') }) }));
+    const reason = h('textarea', { placeholder: 'Motivo del cambio (mínimo 10 caracteres; queda en la bitácora)' });
+    const m = dlg('Cambiar equipo auditor', h('div', null, h('label', null, 'Auditor responsable', leaderSel),
+      h('p', { class: 'muted' }, 'Otros auditores del equipo:'), h('div', { class: 'checklist' }, members.map((x) => h('label', null, x.el, x.a.name))),
+      h('label', null, 'Motivo', reason)));
+    m.footer.append(closeBtn(m, 'Cancelar'), h('button', { onclick: async () => {
+      if (!leaderSel.value) return S.say('Seleccione el Auditor responsable');
+      const r = await S.send(`${A}/${ctx.aid}/team`, 'PUT', { leader_id: leaderSel.value, reason: reason.value,
+        member_ids: members.filter((x) => x.el.checked && x.a.id !== leaderSel.value).map((x) => x.a.id) });
+      if (r) { m.close(); S.say('Equipo actualizado.', true); reload(); }
+    } }, 'Guardar'));
   }
 
   async function movePhase(to) {

@@ -5,6 +5,8 @@ FINAL:
   Jefe: devolver | aprobar -> GERENCIA
   Gerente: devolver | aprobar+firmar -> CONTRALOR
   Contralor: devolver | aprobar+firmar -> SIGNED
+  Sin Gerente en el cargo (ningún usuario activo con el rol ni suplente): el Jefe aprueba -> CONTRALOR y la etapa
+  de Gerencia queda omitida (gerencia_omitted); el Contralor firma sin la firma previa de Gerencia.
 
 Las aprobaciones de Jefe, Gerente y Contralor quedan atadas al SHA-256 del contenido.
 Las firmas PAdES de Gerente y Contralor también quedan atadas al contenido firmado.
@@ -35,6 +37,7 @@ class ReportState:
     approved_by: str | None = None
     approved_body_sha256: str | None = None
     signed_roles: dict[str, str] = field(default_factory=dict)
+    gerencia_omitted: bool = False
     signed_hashes: dict[str, str] = field(default_factory=dict)
 
 
@@ -83,7 +86,7 @@ def can_gerente_review(s: ReportState, actor: str) -> None:
 def can_contralor_review(s: ReportState, actor: str) -> None:
     _need(s.kind == "FINAL" and s.status == "CONTRALOR", "El informe no está pendiente del Contralor")
     _need(s.jefe_approved_body_sha256 == s.body_sha256, "Falta la aprobación vigente del Jefe")
-    _need(s.gerente_approved_body_sha256 == s.body_sha256, "Falta la aprobación vigente de Gerencia")
+    _need(s.gerencia_omitted or s.gerente_approved_body_sha256 == s.body_sha256, "Falta la aprobación vigente de Gerencia")
     _need(actor != s.created_by and actor not in s.team_ids, "El Contralor no puede pertenecer al equipo auditor")
     _need(actor != s.jefe_approved_by and actor != s.gerente_approved_by, "El Contralor debe ser distinto de los revisores anteriores")
     _need(s.contralor_approved_body_sha256 in (None, s.body_sha256), "La aprobación del Contralor no corresponde al contenido actual")
@@ -132,7 +135,7 @@ def can_sign(s: ReportState, actor: str, role: str) -> None:
 
 
 def is_fully_signed(s: ReportState) -> bool:
-    return {"CONTRALOR", "GERENTE_CI"} <= set(s.signed_roles)
+    return ({"CONTRALOR"} if s.gerencia_omitted else {"CONTRALOR", "GERENTE_CI"}) <= set(s.signed_roles)
 
 
 def can_send_pac(final: ReportState | None) -> None:

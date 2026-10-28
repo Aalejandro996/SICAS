@@ -69,6 +69,14 @@ class WorkflowTest(unittest.TestCase):
         base = dict(kind="FINAL", status="DRAFT", created_by="lead", body_sha256="h1", team_ids=["lead", "aud2"])
         base.update(kw); return wf.ReportState(**base)
 
+    def test_without_gerente_contralor_signs_alone(self):
+        s = self.st(status="CONTRALOR", jefe_approved_by="jefe", jefe_approved_body_sha256="h1", gerencia_omitted=True)
+        wf.can_sign(s, "contralor", "CONTRALOR")
+        s.signed_roles["CONTRALOR"] = "contralor"
+        self.assertTrue(wf.is_fully_signed(s))
+        with self.assertRaises(wf.WorkflowError):                          # sin la marca, falta la aprobación de Gerencia
+            wf.can_sign(self.st(status="CONTRALOR", jefe_approved_by="jefe", jefe_approved_body_sha256="h1"), "contralor", "CONTRALOR")
+
     def test_submit_requires_all_initials_from_team(self):
         with self.assertRaises(wf.WorkflowError): wf.can_submit_final(self.st(initialed_ids={"lead"}), "lead")
         wf.can_submit_final(self.st(initialed_ids={"lead", "aud2"}), "lead")

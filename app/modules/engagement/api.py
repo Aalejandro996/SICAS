@@ -23,6 +23,7 @@ from .report_builder import SIG_BOX_CONTRALOR, SIG_BOX_GERENTE, body_hash, build
 from .templates import AUDIT_KINDS, BRANCH_TO_LINE, GENERAL_KINDS, KINDS, LINES, RESULTS, TEMPLATE_KEYS, branches_for_line, validate_criteria
 from app.modules.notifications.service import (
     notify_report_submitted, notify_report_jefe_approved, notify_report_returned, notify_report_signed,
+    notify_report_gerencia_omitted,
 )
 
 bp = Blueprint("engagement", __name__)
@@ -260,6 +261,11 @@ def final_locked(audit_id) -> bool:
     if latest is None or latest["status"] not in LOCKING:
         return False
     return not (latest["status"] == "SIGNED" and repo.reopening(latest["id"]))
+
+
+def is_domain_jefe(domain) -> bool:
+    """Jefe de Auditoría del dominio (por su rol o por suplencia)."""
+    return "audit:report_approve_jefe" in perms() and can_review_domain(domain)
 
 
 def can_edit_data(a) -> bool:
@@ -554,12 +560,16 @@ def new_audit():
     if data["planned_start"] and data["planned_end"] and data["planned_end"] < data["planned_start"]:
         return err("La fecha de fin no puede ser anterior a la de inicio")
     eligible = {a["id"]: a for a in repo.eligible_auditors(domain)}
-    # No existe el rol de líder: quien crea la auditoría queda como responsable interno del equipo.
+    # El Jefe de Auditoría del dominio crea la auditoría y asigna el equipo SIN formar parte de él, para poder
+    # revisar y aprobar su informe sin conflicto de segregación de funciones. Un Auditor queda como responsable.
+    jefe = is_domain_jefe(domain)
+    if jefe and not d.get("leader_id"):
+        return err("Seleccione el Auditor responsable de la auditoría")
     leader, members = str(d.get("leader_id") or me()), [str(m) for m in d.get("member_ids", [])]
     ids = list(dict.fromkeys([leader, *members]))
     if leader not in eligible or any(i not in eligible for i in ids):
         return err("El líder y los miembros deben ser auditores activos")
-    if me() not in ids:
+    if not jefe and me() not in ids:
         return err("Usted debe formar parte del equipo que crea la auditoría")
     team = [{"user_id": i, "role": "LIDER" if i == leader else "AUDITOR", "initials": initials_of(eligible[i]["name"])} for i in ids]
     try:
@@ -602,6 +612,8 @@ def audit_overview(a):
             "observations": len(obs), "evidence": len(repo.evidence(a["id"])), "reports": reps,
             "locked": final_locked(a["id"]),
             "can_edit_data": "audit:manage" in perms() and can_edit_data(a),
+            "can_edit_team": ("audit:manage" in perms() and is_domain_jefe(a.get("audit_domain", "GENERAL")) and a["status"] == "IN_PROGRESS"
+                              and not final_locked(a["id"]) and not repo.is_member(a["id"], me())),
             "audit_kinds": {k: {"label": v["label"], "kinds": v["kinds"]} for k, v in AUDIT_KINDS.items()},
             "is_member": repo.is_member(a["id"], me())}
 
@@ -660,6 +672,36 @@ def edit_audit(aid):
     repo.update_audit_data(a["id"], {k: upd[k] for k in changes})
     log("AUDIT_DATA_UPDATED", entity_type="audit", entity_id=a["id"], before_data={k: v["before"] for k, v in changes.items()},
         after_data={k: v["after"] for k, v in changes.items()}, metadata={"reason": reason}, request_id=g.request_id)
+    return jsonify(status="OK")
+
+
+@bp.put("/<uuid:aid>/team")
+@permission_required("audit:manage")
+def edit_team(aid):
+    """El Jefe de Auditoría del dominio cambia el equipo (Auditor responsable y miembros), con motivo y bitácora."""
+    a, e = load(aid)
+    if e:
+        return e
+    if not is_domain_jefe(a.get("audit_domain", "GENERAL")) or repo.is_member(a["id"], me()):
+        return err("Solo el Jefe de Auditoría del dominio, sin formar parte del equipo, cambia el equipo auditor", 403)
+    if a["status"] != "IN_PROGRESS" or final_locked(a["id"]):
+        return err("La auditoría está cerrada o su informe final está en revisión: el equipo no se puede cambiar", 409)
+    d = request.get_json(silent=True) or {}
+    reason = str(d.get("reason") or "").strip()[:1000]
+    if len(reason) < 10:
+        return err("Indique el motivo del cambio (mínimo 10 caracteres)")
+    eligible = {x["id"]: x for x in repo.eligible_auditors(a.get("audit_domain", "GENERAL"))}
+    leader = str(d.get("leader_id") or "")
+    ids = list(dict.fromkeys([leader, *[str(m) for m in d.get("member_ids", [])]]))
+    if not leader or any(i not in eligible for i in ids):
+        return err("El Auditor responsable y los miembros deben ser auditores activos del dominio")
+    before = [{"user_id": t["user_id"], "role": t["role"]} for t in repo.team(a["id"])]
+    team = [{"user_id": i, "role": "LIDER" if i == leader else "AUDITOR", "initials": initials_of(eligible[i]["name"])} for i in ids]
+    _change(a, "audit", a["id"], "AUDIT_TEAM_CHANGED", {"team": {"before": before, "after": [{"user_id": t["user_id"], "role": t["role"]} for t in team]}},
+            reason=reason)
+    repo.replace_team(a["id"], team)
+    log("AUDIT_TEAM_CHANGED", entity_type="audit", entity_id=a["id"], before_data={"team": before},
+        after_data={"team": [t["user_id"] for t in team]}, metadata={"reason": reason}, request_id=g.request_id)
     return jsonify(status="OK")
 
 
@@ -2078,6 +2120,7 @@ def _state(rep, team):
         approved_by=rep["approved_by"],
         approved_body_sha256=rep["approved_body_sha256"],
         signed_roles={d["signer_role"]: d["user_id"] for d in docs},
+        gerencia_omitted=bool(rep.get("gerencia_omitted")),
     )
 
 
@@ -2089,7 +2132,7 @@ def _pdf_for(rep, team):
         "GERENCIA", "CONTRALOR", "APPROVED", "SIGNED"
     )
     return build_pdf(rep["body"], {"final": final, "initials": {t["name"]: valid.get(t["user_id"]) for t in team}, "collaborator": collab,
-                                   "jefe_signature": _jefe_signature(rep),
+                                   "jefe_signature": _jefe_signature(rep), "gerencia_omitted": bool(rep.get("gerencia_omitted")),
                                    "transitions": repo.report_transitions(rep["id"]), "body_sha256": rep["body_sha256"],
                                    "review_points": [p for r in repo.reports(rep["audit_id"]) if r["kind"] == "FINAL"
                                                      for p in repo.review_points(r["id"])]})
@@ -2505,6 +2548,7 @@ def return_report(rid):
         jefe_approved_by=None, jefe_approved_at=None, jefe_approved_body_sha256=None,
         gerente_approved_by=None, gerente_approved_at=None, gerente_approved_body_sha256=None,
         contralor_approved_by=None, contralor_approved_at=None, contralor_approved_body_sha256=None,
+        gerencia_omitted=False,
     )
     if conflict:
         return conflict
@@ -2651,19 +2695,28 @@ def approve_jefe(rid):
         return err("No tiene firma escaneada registrada: el Administrador del Sistema debe cargarla en «Usuarios › Firmas» "
                    "antes de que usted apruebe el informe", 409)
 
+    # Sin Gerente en el cargo, la etapa de Gerencia se omite y el informe pasa directamente al Contralor.
+    omit = not repo.gerencia_available()
+    nxt = "CONTRALOR" if omit else "GERENCIA"
     conflict = _transition(
-        rep, "GERENCIA", "APPROVE_JEFE", delegation=acting_delegation("JEFE", a.get("audit_domain", "GENERAL")),
+        rep, nxt, "APPROVE_JEFE", delegation=acting_delegation("JEFE", a.get("audit_domain", "GENERAL")),
+        comment="Sin Gerente en el cargo: la etapa de Gerencia se omite y el informe pasa al Contralor." if omit else None,
+        comment_kind="REVISION" if omit else None,
         approved_by=None, approved_at=None, approved_body_sha256=None,
         jefe_approved_by=me(), jefe_approved_at="now",
-        jefe_approved_body_sha256=rep["body_sha256"],
+        jefe_approved_body_sha256=rep["body_sha256"], gerencia_omitted=omit,
     )
     if conflict:
         return conflict
     log(
         "AUDIT_REPORT_JEFE_APPROVED", entity_type="audit_report",
-        entity_id=str(rid), after_data={"sha256": rep["body_sha256"]},
+        entity_id=str(rid), after_data={"sha256": rep["body_sha256"], "gerencia_omitida": omit},
         request_id=g.request_id,
     )
+    if omit:
+        notify_report_gerencia_omitted(str(rid), a, str(me()), getattr(g, "request_id", None))
+        return jsonify(status="CONTRALOR", note="Informe aprobado por el Jefe de Auditoría. No hay Gerente en el cargo: "
+                                                 "la etapa de Gerencia se omite y el informe pasa al Contralor.")
     notify_report_jefe_approved(str(rid), a, str(me()), getattr(g, "request_id", None))
     return jsonify(
         status="GERENCIA",
@@ -2723,9 +2776,12 @@ def _sign(rid, role):
             (d for d in reversed(docs) if d["signer_role"] == "GERENTE_CI"),
             None,
         )
-        if manager_doc is None:
+        if st.gerencia_omitted:
+            base = _pdf_for(rep, team)          # sin Gerente en el cargo: firma sobre el PDF sin firma previa
+        elif manager_doc is None:
             return err("Falta la firma digital vigente de Gerencia", 409)
-        base = storage.get(manager_doc["object_key"])
+        else:
+            base = storage.get(manager_doc["object_key"])
         box, field, label = SIG_BOX_CONTRALOR, "FirmaContralor", "Contralor"
 
     cfg = current_app.config

@@ -27,7 +27,7 @@
   const modules = {
     // Cargas, Hallazgos, LC/FT y Dictámenes se retiraron del menú (ningún rol los ve).
     audit: {
-      src: '/static/pages_audit.js?v=20261028-br1',
+      src: '/static/pages_audit.js?v=20261028-jg1',
       pages: [
         {
           id: 'audits',
@@ -44,7 +44,7 @@
     },
 
     contralor: {
-      src: '/static/pages_contralor.js?v=20261028-br1',
+      src: '/static/pages_contralor.js?v=20261028-jg1',
       pages: [
         {
           id: 'contralor-dashboard',

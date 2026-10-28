@@ -122,6 +122,8 @@ class TransitionReportRepositoryTests(unittest.TestCase):
 class ReportTransitionApiTests(unittest.TestCase):
     """Peticiones HTTP directas: el servidor aplica etapa, rol y compare-and-set."""
 
+    has_gerente = True
+
     def setUp(self):
         self.app = Flask("report_transition_tests")
         self.app.config.update(TESTING=True, JWT_SECRET_KEY="clave-exclusiva-de-pruebas-transiciones-informe")
@@ -172,7 +174,9 @@ class ReportTransitionApiTests(unittest.TestCase):
             patch.object(engagement_api, "log"),
             patch.object(engagement_api, "notify_report_submitted"),
             patch.object(engagement_api, "notify_report_jefe_approved"),
+            patch.object(engagement_api, "notify_report_gerencia_omitted"),
             patch.object(engagement_api, "notify_report_returned"),
+            patch.object(engagement_api.repo, "gerencia_available", side_effect=lambda: self.has_gerente),
             patch("app.core.audit.audit_service.audit"),
         ]
         for p in patches:
@@ -209,6 +213,16 @@ class ReportTransitionApiTests(unittest.TestCase):
         self.assertEqual(kwargs["actor"], JEFE)
         self.assertEqual(kwargs["actor_roles"], ["JEFE_AUDITORIA_SISTEMAS"])
         self.assertEqual(kwargs["jefe_approved_body_sha256"], SHA)
+
+    def test_without_gerente_the_report_goes_straight_to_contralor(self):
+        self.has_gerente = False
+        response = self.post("approve/jefe", JEFE, JEFE_PERMS, roles=["JEFE_AUDITORIA_SISTEMAS"])
+        self.assertEqual(response.status_code, 200, response.get_json())
+        kwargs = self.transition.call_args.kwargs
+        self.assertEqual((kwargs["status"], kwargs["gerencia_omitted"]), ("CONTRALOR", True))
+        self.assertIn("Sin Gerente", kwargs["comment"])
+        engagement_api.notify_report_gerencia_omitted.assert_called_once()
+        engagement_api.notify_report_jefe_approved.assert_not_called()
 
     def test_jefe_without_scanned_signature_cannot_approve(self):
         self.scanned.pop(JEFE)

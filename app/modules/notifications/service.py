@@ -148,6 +148,21 @@ def notify_report_returned(report_id: str, audit: dict, stage: str, comment: str
     _safe_emit(f"devolución de informe {report_id}", emit)
 
 
+def notify_report_gerencia_omitted(report_id: str, audit: dict, actor_user_id: str,
+                                   request_id: str | None = None) -> None:
+    """Sin Gerente en el cargo: el informe aprobado por el Jefe pasa directamente al Contralor."""
+    def emit():
+        recipients = sorted(set(_role_user_ids(["CONTRALOR"])) | set(_delegate_ids("CONTRALOR")))
+        _insert_for_users(recipients, category="REPORT",
+            event_key=_event_key("report", report_id, "received-by-contralor-no-gerente", request_id),
+            title="Informe final recibido en Contraloría (sin Gerente)",
+            message=f"El Jefe de Auditoría aprobó el informe final de {audit.get('code', report_id)}. No hay Gerente en el cargo: "
+                    "la etapa de Gerencia se omitió y está pendiente su revisión y firma.",
+            target_path=_audit_path(audit), entity_type="audit_report", entity_id=report_id,
+            actor_user_id=actor_user_id)
+    _safe_emit(f"gerencia omitida {report_id}", emit)
+
+
 def notify_report_signed(report_id: str, audit: dict, role: str, status: str,
                          actor_user_id: str, request_id: str | None = None) -> None:
     domain = str(audit.get("audit_domain") or "").upper()

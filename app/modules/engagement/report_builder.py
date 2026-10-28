@@ -268,7 +268,14 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
             canvas.setFont("Helvetica-Bold", 9); canvas.setFillColor(colors.black)
             canvas.drawString(x1, y1 - 14, label)
             canvas.setFont("Helvetica", 8)
-            canvas.drawString(x1, y1 - 26, "Firma electrónica")
+            if key == "GERENTE_CI" and state.get("gerencia_omitted"):
+                # Sin Gerente en el cargo: la etapa se omitió al aprobar el Jefe de Auditoría.
+                canvas.drawString(x1, y1 - 26, "Etapa omitida: sin Gerente en el cargo")
+                canvas.setFont("Helvetica-Oblique", 9); canvas.setFillColor(colors.grey)
+                canvas.drawCentredString((x1 + x2) / 2, (y1 + y2) / 2, "Sin Gerente en el cargo")
+                canvas.setFillColor(colors.black)
+            else:
+                canvas.drawString(x1, y1 - 26, "Firma electrónica")
         canvas.restoreState()
 
     doc_io = io.BytesIO()
