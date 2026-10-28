@@ -332,106 +332,184 @@
         return panel;
       };
 
-      // Dona de severidad; conserva los conteos y porcentajes reales.
+      // Brechas altas y medias por dominio: dona interactiva, unidades y auditorías.
       const severityDonutPanel = (values) => {
-        const panel = h('section', {
-          class: 'home-panel home-chart-panel home-severity-panel'
-        });
+        const domains = Array.isArray(values.domains) ? values.domains : [];
+        const SEV = [
+          { key: 'alto', label: 'Brechas altas', color: '#d9485f' },
+          { key: 'medio', label: 'Brechas medias', color: '#e0b13e' }
+        ];
+        const NOTE = {
+          SISTEMAS: 'Brechas del cuestionario: alta = sin control, sin soporte ni evidencia; media = evidencia desactualizada.',
+          AUDITORIA: 'Hallazgos vigentes de riesgo alto o medio con el plan de acción pendiente.'
+        };
+        const state = { domain: domains.length > 1 ? 'ALL' : (domains[0]?.key || 'ALL'), sev: null, unit: null, more: false };
+
+        const panel = h('section', { class: 'home-panel home-chart-panel home-severity-panel' });
         const heading = h('div', { class: 'home-panel-head' });
         const copy = h('div', { class: 'home-panel-title' });
-
-        copy.append(
-          h('h3', null, 'Brechas altas y medias'),
-          h('p', { class: 'home-panel-note' },
-            'Sistemas: brechas del cuestionario. Demás auditorías: hallazgos vigentes de riesgo alto o medio con el plan de acción pendiente.')
-        );
+        const note = h('p', { class: 'home-panel-note' });
+        copy.append(h('h3', null, 'Brechas altas y medias'), note);
         heading.append(copy);
         panel.append(heading);
 
-        const rows = [
-          { key: 'alto', label: 'Brechas altas', color: '#d9485f' },
-          { key: 'medio', label: 'Brechas medias', color: '#e0b13e' }
-        ].map((row) => ({
-          ...row,
-          value: Math.max(0, Number(values[row.key] || 0))
-        }));
+        const tabs = h('div', { class: 'home-gap-tabs', role: 'tablist', 'aria-label': 'Dominio de las brechas' });
+        if (domains.length > 1) panel.append(tabs);
+        const body = h('div', { class: 'home-gap-body' });
+        panel.append(body);
 
-        const total = rows.reduce((sum, row) => sum + row.value, 0);
-        const layout = h('div', { class: 'home-donut-layout' });
-        const ring = h('div', {
-          class: 'home-donut-ring',
-          role: 'img',
-          'aria-label': `Total de brechas altas y medias: ${number(total)}`
-        });
+        // Vista combinada (Gerencia y Contralor) o de un dominio.
+        const view = () => {
+          if (state.domain !== 'ALL') return domains.find((d) => d.key === state.domain) || domains[0] || { alto: 0, medio: 0, by_unit: [], audit_list: [] };
+          const units = new Map();
+          domains.forEach((d) => d.by_unit.forEach((u) => {
+            const k = units.get(u.unit) || { unit: u.unit, alto: 0, medio: 0 };
+            k.alto += u.alto; k.medio += u.medio; units.set(u.unit, k);
+          }));
+          const order = (a, b) => b.alto - a.alto || b.medio - a.medio || String(a.unit).localeCompare(String(b.unit));
+          return {
+            alto: domains.reduce((n, d) => n + d.alto, 0),
+            medio: domains.reduce((n, d) => n + d.medio, 0),
+            by_unit: [...units.values()].sort(order),
+            audit_list: domains.flatMap((d) => d.audit_list.map((a) => ({ ...a, domain: d.label }))).sort(order)
+          };
+        };
 
-        if (total > 0) {
+        const donut = (data, total) => {
+          const NS = 'http://www.w3.org/2000/svg';
+          const svg = document.createElementNS(NS, 'svg');
+          svg.setAttribute('viewBox', '0 0 120 120');
+          svg.setAttribute('class', 'home-gap-donut');
+          svg.setAttribute('role', 'group');
+          svg.setAttribute('aria-label', `Total de brechas altas y medias: ${number(total)}`);
+          const R = 48, C = 2 * Math.PI * R;
+          const base = document.createElementNS(NS, 'circle');
+          Object.entries({ cx: 60, cy: 60, r: R, fill: 'none', stroke: '#e7edf4', 'stroke-width': 18 }).forEach(([k, v]) => base.setAttribute(k, v));
+          svg.append(base);
           let offset = 0;
-          const stops = [];
+          SEV.forEach((row) => {
+            const v = data[row.key] || 0;
+            if (!v || !total) return;
+            const len = v / total * C;
+            const arc = document.createElementNS(NS, 'circle');
+            Object.entries({
+              cx: 60, cy: 60, r: R, fill: 'none', stroke: row.color, 'stroke-width': state.sev === row.key ? 22 : 18,
+              'stroke-dasharray': `${len} ${C - len}`, 'stroke-dashoffset': -offset, transform: 'rotate(-90 60 60)',
+              tabindex: 0, role: 'button', class: 'home-gap-arc' + (state.sev && state.sev !== row.key ? ' is-dim' : ''),
+              'aria-label': `${row.label}: ${number(v)} (${Math.round(v / total * 100)}%)`
+            }).forEach(([k, val]) => arc.setAttribute(k, val));
+            const t = document.createElementNS(NS, 'title');
+            t.textContent = `${row.label}: ${number(v)} (${Math.round(v / total * 100)}%)`;
+            arc.append(t);
+            const pick = () => { state.sev = state.sev === row.key ? null : row.key; render(); };
+            arc.addEventListener('click', pick);
+            arc.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+            svg.append(arc);
+            offset += len;
+          });
+          const wrap = h('div', { class: 'home-gap-ring' });
+          const shown = state.sev ? (data[state.sev] || 0) : total;
+          wrap.append(svg, h('div', { class: 'home-donut-center' },
+            h('strong', null, number(shown)),
+            h('span', null, state.sev ? (state.sev === 'alto' ? 'altas' : 'medias') : 'brechas')));
+          return wrap;
+        };
 
-          rows.filter((row) => row.value > 0).forEach((row) => {
-            const end = offset + row.value / total * 100;
-            stops.push(
-              `${row.color} ${offset.toFixed(2)}% ${end.toFixed(2)}%`
-            );
-            offset = end;
+        const render = () => {
+          tabs.replaceChildren(...[{ key: 'ALL', label: 'Todos' }, ...domains].map((d) => {
+            const n = d.key === 'ALL' ? domains.reduce((s, x) => s + x.alto + x.medio, 0) : d.alto + d.medio;
+            const b = h('button', {
+              type: 'button', role: 'tab', class: 'home-gap-tab' + (state.domain === d.key ? ' is-active' : ''),
+              'aria-selected': String(state.domain === d.key)
+            }, d.key === 'ALL' ? 'Todos' : d.label, h('span', { class: 'home-gap-tab-count' }, number(n)));
+            b.addEventListener('click', () => { Object.assign(state, { domain: d.key, unit: null, more: false }); render(); });
+            return b;
+          }));
+          note.textContent = state.domain === 'ALL'
+            ? 'Sistemas: brechas del cuestionario. Auditoría operativa y financiera: hallazgos vigentes de riesgo alto o medio con el plan de acción pendiente.'
+            : NOTE[state.domain] || '';
+
+          const data = view();
+          const total = (data.alto || 0) + (data.medio || 0);
+          const layout = h('div', { class: 'home-donut-layout' });
+          layout.append(donut(data, total));
+
+          const side = h('div', { class: 'home-donut-legend' });
+          SEV.forEach((row) => {
+            const v = data[row.key] || 0;
+            const btn = h('button', {
+              type: 'button', class: 'home-donut-row home-gap-sev' + (state.sev === row.key ? ' is-active' : '') + (state.sev && state.sev !== row.key ? ' is-dim' : ''),
+              'aria-pressed': String(state.sev === row.key), title: 'Filtrar por ' + row.label.toLowerCase()
+            });
+            const sw = h('span', { class: 'home-donut-swatch' });
+            sw.style.backgroundColor = row.color;
+            btn.append(h('span', { class: 'home-donut-name' }, sw, row.label),
+              h('strong', { class: 'home-donut-count' }, number(v)),
+              h('span', { class: 'home-donut-percent' }, (total ? Math.round(v / total * 100) : 0) + '%'));
+            btn.addEventListener('click', () => { state.sev = state.sev === row.key ? null : row.key; render(); });
+            side.append(btn);
           });
 
-          ring.style.background = `conic-gradient(${stops.join(', ')})`;
-        } else {
-          ring.style.background = '#e7edf4';
-        }
+          if (!total) {
+            side.append(h('p', { class: 'home-panel-note' }, 'No hay brechas altas ni medias en las auditorías de este dominio.'));
+          } else {
+            const key = state.sev;
+            const units = data.by_unit.filter((u) => !key || u[key] > 0)
+              .sort((a, b) => key ? b[key] - a[key] : 0);
+            const table = h('table', { class: 'home-gap-table' });
+            const thead = h('thead', null, h('tr', null,
+              h('th', null, 'Unidad'),
+              h('th', { class: 'num' + (key === 'alto' ? ' is-key' : '') }, 'Altas'),
+              h('th', { class: 'num' + (key === 'medio' ? ' is-key' : '') }, 'Medias')));
+            const tbody = h('tbody');
+            units.forEach((u) => {
+              const tr = h('tr', {
+                class: 'home-gap-unit' + (state.unit === u.unit ? ' is-active' : ''), tabindex: 0,
+                title: 'Ver las auditorías de ' + u.unit
+              }, h('td', null, u.unit), h('td', { class: 'num' }, number(u.alto)), h('td', { class: 'num' }, number(u.medio)));
+              const pick = () => { state.unit = state.unit === u.unit ? null : u.unit; state.more = false; render(); };
+              tr.addEventListener('click', pick);
+              tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') pick(); });
+              tbody.append(tr);
+            });
+            table.append(thead, tbody);
+            side.append(h('div', { class: 'home-gap-table-wrap' }, table));
+          }
+          layout.append(side);
 
-        const hole = h('div', { class: 'home-donut-center' });
-        hole.append(
-          h('strong', null, number(total)),
-          h('span', null, 'brechas')
-        );
-        ring.append(hole);
-        layout.append(ring);
+          // Auditorías con brechas según el filtro (severidad y unidad); un clic abre la auditoría.
+          const list = data.audit_list.filter((a) => (!state.sev || a[state.sev] > 0) && (!state.unit || a.unit === state.unit));
+          const detail = h('div', { class: 'home-gap-audits' });
+          if (total) {
+            const filters = [state.unit, state.sev && (state.sev === 'alto' ? 'altas' : 'medias')].filter(Boolean);
+            const head = h('div', { class: 'home-gap-audits-head' },
+              h('strong', null, 'Auditorías con brechas' + (filters.length ? ' · ' + filters.join(' · ') : '')));
+            if (state.sev || state.unit) {
+              const clear = h('button', { type: 'button', class: 'home-gap-clear' }, 'Quitar filtros');
+              clear.addEventListener('click', () => { Object.assign(state, { sev: null, unit: null, more: false }); render(); });
+              head.append(clear);
+            }
+            detail.append(head);
+            const shown = state.more ? list : list.slice(0, 6);
+            shown.forEach((a) => {
+              const row = h('button', { type: 'button', class: 'home-gap-audit', title: 'Abrir la auditoría ' + a.code },
+                h('span', { class: 'home-gap-audit-code' }, a.code),
+                h('span', { class: 'home-gap-audit-unit' }, a.unit + ' · ' + (typeof S.label2 === 'function' ? S.label2(a.phase) : a.phase) + (a.status === 'CLOSED' ? ' · Cerrada' : '')),
+                h('span', { class: 'home-gap-pill alto' }, number(a.alto)),
+                h('span', { class: 'home-gap-pill medio' }, number(a.medio)));
+              row.addEventListener('click', () => { location.hash = '#/audits/' + a.id; });
+              detail.append(row);
+            });
+            if (list.length > 6) {
+              const more = h('button', { type: 'button', class: 'home-gap-clear' }, state.more ? 'Ver menos' : `Ver las ${number(list.length)}`);
+              more.addEventListener('click', () => { state.more = !state.more; render(); });
+              detail.append(more);
+            }
+          }
+          body.replaceChildren(layout, detail);
+        };
 
-        const legend = h('div', { class: 'home-donut-legend' });
-
-        rows.forEach((row) => {
-          const legendRow = h('div', { class: 'home-donut-row' });
-          const name = h('span', { class: 'home-donut-name' });
-          const swatch = h('span', { class: 'home-donut-swatch' });
-          swatch.style.backgroundColor = row.color;
-          name.append(swatch, document.createTextNode(row.label));
-
-          const count = h('strong', { class: 'home-donut-count' },
-            number(row.value));
-          const percentage = total
-            ? Math.round(row.value / total * 100)
-            : 0;
-
-          legendRow.append(
-            name,
-            count,
-            h('span', { class: 'home-donut-percent' }, percentage + '%')
-          );
-          legend.append(legendRow);
-        });
-
-        // Origen de las brechas y unidades con más brechas.
-        const origin = h('p', { class: 'home-panel-note' },
-          `Sistemas: ${number(values.sistemas?.alto)} altas y ${number(values.sistemas?.medio)} medias · ` +
-          `Demás auditorías: ${number(values.auditorias?.alto)} altas y ${number(values.auditorias?.medio)} medias`);
-        legend.append(origin);
-        (values.by_unit || []).slice(0, 5).forEach((u) => {
-          const row = h('div', { class: 'home-donut-row' });
-          row.append(h('span', { class: 'home-donut-name' }, u.unit),
-            h('strong', { class: 'home-donut-count' }, number(u.alto)),
-            h('span', { class: 'home-donut-percent' }, number(u.medio)));
-          legend.append(row);
-        });
-        if ((values.by_unit || []).length) {
-          legend.insertBefore(h('div', { class: 'home-donut-row home-gap-head' },
-            h('span', { class: 'home-donut-name' }, 'Unidad'), h('strong', { class: 'home-donut-count' }, 'Altas'),
-            h('span', { class: 'home-donut-percent' }, 'Medias')), origin.nextSibling);
-        }
-
-        layout.append(legend);
-        panel.append(layout);
+        render();
         return panel;
       };
 

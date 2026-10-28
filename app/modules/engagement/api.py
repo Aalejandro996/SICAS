@@ -450,32 +450,50 @@ def new_file():
 
 
 # ------------------------------------------------------------------ auditorías
+GAP_DOMAINS = (("SISTEMAS", "Auditoría de Sistemas"), ("AUDITORIA", "Auditoría operativa y financiera"))
+
+
+def gap_domain(a) -> str:
+    return "SISTEMAS" if is_systems(a) else "AUDITORIA"
+
+
 @bp.get("/gaps")
 @permission_required("audit:read", "audit:read_final")
 def gaps():
-    """Brechas altas y medias de las auditorías visibles (para el Inicio).
+    """Brechas altas y medias de las auditorías visibles (para el Inicio), separadas por dominio.
 
     Sistemas: brechas del cuestionario (alta = sin control, sin soporte y sin evidencia; media = con control y
     soporte pero evidencia desactualizada). Demás auditorías: hallazgos vigentes de riesgo alto o medio cuyo plan
     de acción no está cumplido. La Evaluación TI de la sucursal no cuenta (es informativa).
+    Cada rol ve solo los dominios de su alcance; Gerencia y Contralor ven ambos.
     """
-    audits = [a for a in repo.list_audits(domains=sorted(audit_domains())) if visible(a)]
-    out = {"alto": 0, "medio": 0, "sistemas": {"alto": 0, "medio": 0}, "auditorias": {"alto": 0, "medio": 0}}
-    units = {}
+    scope = audit_domains()
+    audits = [a for a in repo.list_audits(domains=sorted(scope)) if visible(a)]
+    keys = [k for k, _ in GAP_DOMAINS
+            if "ALL" in scope or (k == "SISTEMAS" and "SISTEMAS" in scope) or (k == "AUDITORIA" and scope - {"SISTEMAS"})]
+    doms = {k: {"key": k, "label": dict(GAP_DOMAINS)[k], "alto": 0, "medio": 0, "audits": 0, "by_unit": {}, "items": {}}
+            for k in keys}
 
-    def add(unit, origin, alto, medio):
-        out["alto"] += alto; out["medio"] += medio
-        out[origin]["alto"] += alto; out[origin]["medio"] += medio
-        u = units.setdefault(unit, {"unit": unit, "alto": 0, "medio": 0})
+    def add(a, alto, medio):
+        d = doms.get(gap_domain(a))
+        if d is None or not (alto or medio):
+            return
+        d["alto"] += alto; d["medio"] += medio
+        u = d["by_unit"].setdefault(a["unit_name"], {"unit": a["unit_name"], "alto": 0, "medio": 0})
         u["alto"] += alto; u["medio"] += medio
+        it = d["items"].setdefault(a["id"], {"id": a["id"], "code": a["code"], "unit": a["unit_name"], "phase": a["phase"],
+                                             "status": a["status"], "alto": 0, "medio": 0})
+        it["alto"] += alto; it["medio"] += medio
 
     others = []
     for a in audits:
+        if gap_domain(a) in doms:
+            doms[gap_domain(a)]["audits"] += 1
         if is_systems(a):
             for ws in repo.worksheets_with_items(a["id"]):
                 if ws["kind"] == "SISTEMAS":
                     st = scoring.system_statistics(ws["criteria"], ws["items"])
-                    add(a["unit_name"], "sistemas", int(st.get("brechas_alto") or 0), int(st.get("brechas_medio") or 0))
+                    add(a, int(st.get("brechas_alto") or 0), int(st.get("brechas_medio") or 0))
         else:
             others.append(a)
     if others:
@@ -484,10 +502,15 @@ def gaps():
                       "WHERE audit_id = ANY(CAST(:ids AS uuid[])) AND superseded_by IS NULL AND risk IN ('ALTO', 'MEDIO') "
                       "AND pac_status <> 'CUMPLIDA' AND COALESCE(rule_key, '') NOT LIKE 'ti_suc:%' GROUP BY 1, 2", ids=list(by_id))
         for r in rows:
-            add(by_id[r["audit_id"]]["unit_name"], "auditorias", int(r["n"]) if r["risk"] == "ALTO" else 0, int(r["n"]) if r["risk"] == "MEDIO" else 0)
-    out["by_unit"] = sorted((u for u in units.values() if u["alto"] or u["medio"]), key=lambda u: (-u["alto"], -u["medio"], u["unit"]))[:8]
-    out["audits"] = len(audits)
-    return jsonify(out)
+            add(by_id[r["audit_id"]], int(r["n"]) if r["risk"] == "ALTO" else 0, int(r["n"]) if r["risk"] == "MEDIO" else 0)
+    order = lambda x: (-x["alto"], -x["medio"], x.get("unit") or "", x.get("code") or "")
+    domains = []
+    for d in doms.values():
+        d["by_unit"] = sorted(d["by_unit"].values(), key=order)
+        d["audit_list"] = sorted(d.pop("items").values(), key=order)
+        domains.append(d)
+    return jsonify(alto=sum(d["alto"] for d in domains), medio=sum(d["medio"] for d in domains),
+                   audits=len(audits), domains=domains)
 
 
 @bp.get("/auditors")
