@@ -239,7 +239,7 @@
 
       async function load() {
         if (start.value && end.value && start.value > end.value) { S.say('La fecha inicial no puede ser posterior a la fecha final.'); return; }
-        output.replaceChildren(h('p', { class: 'muted' }, 'Cargando indicadores…'));
+        output.replaceChildren(S.loading('Cargando indicadores…'));
         const data = await S.get('/analytics/contralor/overview?' + queryString(filters()));
         if (!data) { output.replaceChildren(); return; }
         const s = data.summary, risks = data.observations_by_risk;

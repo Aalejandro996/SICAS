@@ -341,8 +341,8 @@
     );
 
     const el = $('page');
-    el.replaceChildren(S.h('p', { class: 'muted' }, 'Cargando…'));
-    const holder = S.h('div');
+    el.replaceChildren(S.loading('Cargando ' + (page.title || '').toLowerCase() + '…'));
+    const holder = S.h('div', { class: 'sicas-page-enter' });
 
     try {
       await page.render(holder, args, currentNavigation);

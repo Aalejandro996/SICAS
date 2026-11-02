@@ -323,7 +323,12 @@
         h('span', null, `${a.modality === 'PRESENCIAL' ? 'Presencial' : 'Remota'} · ${a.file_code} · ${S.date(a.period_from)} → ${S.date(a.period_to)} · `), S.ratingBadge(d.overall.rating),
         d.overall.final != null ? h('b', null, ' ' + S.score(d.overall.final) + '%') : null, d.locked ? h('span', { class: 'badge PENDING' }, 'Bloqueada: informe en revisión/aprobado') : null),
       h('div', { class: 'tabs' }, tabs.map(([id, t]) => h('button', { class: id === ctx.tab ? 'active' : '', onclick: () => { location.hash = `#/audits/${aid}/${id}`; } }, t))), body);
-    ({ resumen, cedulas, observaciones, evidencias, sinconexion, informes, bitacora })[ctx.tab](body);
+    // La pestaña se arma aparte y reemplaza al indicador de carga cuando sus datos están listos.
+    const pane = h('div', { class: 'sicas-page-enter' });
+    body.replaceChildren(S.loading());
+    Promise.resolve(({ resumen, cedulas, observaciones, evidencias, sinconexion, informes, bitacora })[ctx.tab](pane))
+      .then(() => body.replaceChildren(pane))
+      .catch((e) => body.replaceChildren(h('div', { class: 'warn' }, 'No se pudo mostrar esta pestaña: ' + e.message)));
   }
   const reload = () => renderAudit(ctx.el, ctx.aid, ctx.tab);
 

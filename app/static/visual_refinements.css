@@ -2941,3 +2941,39 @@ tr[hidden] { display: none; }
   #page .home-gap-audit { grid-template-columns: minmax(0, 1fr) 40px 40px; }
   #page .home-gap-audit-unit { grid-column: 1 / -1; grid-row: 2; }
 }
+
+/* Indicadores de carga: barra superior, spinner en botones, esqueleto de pantalla y entrada suave */
+#sicas-loadbar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 10000; overflow: hidden; opacity: 0;
+  pointer-events: none; transition: opacity .2s ease; background: rgba(31, 56, 100, .12); }
+#sicas-loadbar.on { opacity: 1; }
+#sicas-loadbar::before { content: ""; position: absolute; top: 0; bottom: 0; left: -40%; width: 40%;
+  background: linear-gradient(90deg, transparent, #2f6db5, #3aa0a0, transparent); animation: sicas-loadbar 1.1s ease-in-out infinite; }
+@keyframes sicas-loadbar { from { left: -40%; } to { left: 100%; } }
+
+button.is-loading { cursor: progress; opacity: .85; }
+button.is-loading::before { content: ""; display: inline-block; width: .85em; height: .85em; margin-right: .45em;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -.12em;
+  animation: sicas-spin .7s linear infinite; }
+@keyframes sicas-spin { to { transform: rotate(360deg); } }
+
+.sicas-loading { padding: 18px 2px; animation: sicas-fade .25s ease both; }
+.sicas-loading-head { display: flex; align-items: center; gap: 10px; color: #5d7088; font-size: .92rem; margin-bottom: 16px; }
+.sicas-spinner { width: 18px; height: 18px; border: 2.5px solid #c9d6e6; border-top-color: var(--navy); border-radius: 50%;
+  animation: sicas-spin .8s linear infinite; flex: 0 0 auto; }
+.sicas-skeleton { display: grid; gap: 12px; max-width: 920px; }
+.sicas-skeleton .sk { display: block; border-radius: 8px; height: 14px;
+  background: linear-gradient(90deg, #e7edf4 25%, #f3f6fa 37%, #e7edf4 63%); background-size: 400% 100%;
+  animation: sicas-shimmer 1.4s ease infinite; }
+.sicas-skeleton .sk-title { height: 26px; width: 38%; }
+.sicas-skeleton .sk-line { width: 72%; } .sicas-skeleton .sk-line.short { width: 48%; }
+.sicas-skeleton .sk-block { height: 160px; margin-top: 6px; }
+@keyframes sicas-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+
+.sicas-page-enter { animation: sicas-fade .28s ease both; }
+@keyframes sicas-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  #sicas-loadbar::before { animation: none; left: 0; width: 100%; opacity: .6; }
+  button.is-loading::before, .sicas-spinner { animation-duration: 2s; }
+  .sicas-skeleton .sk, .sicas-loading, .sicas-page-enter { animation: none; }
+}

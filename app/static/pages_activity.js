@@ -12,7 +12,7 @@
     render: async (el) => {
       el.append(h('h2', null, 'Registro de actividad del auditor'),
         h('p', { class: 'muted' }, 'Registra tiempo activo declarado mediante inicio, pausa, reanudación y finalización. El registro no mide teclas ni demuestra por sí solo productividad; pausa el cronómetro durante descansos y otras tareas.'));
-      const target = h('div', { class: 'ctl-activity-host' }, h('p', { class: 'muted' }, 'Cargando auditorías asignadas…'));
+      const target = h('div', { class: 'ctl-activity-host' }, S.loading('Cargando auditorías asignadas…'));
       el.append(target);
       let timerInterval = null;
       async function load() {

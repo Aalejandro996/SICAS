@@ -46,7 +46,53 @@
   // ---------------------------------------------------------------- API
   const cookie = (name) => (document.cookie.split('; ').find((c) => c.startsWith(name + '=')) || '').split('=')[1] || '';
 
-  async function raw(path, { method = 'GET', json, form } = {}) {
+  // ---------------------------------------------------------------- Indicadores de carga
+  // Barra fina arriba mientras hay solicitudes en curso (aparece si tardan más de 150 ms, para no parpadear) y
+  // spinner en el botón que disparó la acción, que queda deshabilitado hasta que termina.
+  let inflight = 0, barTimer = null, lastClick = null;
+  const loadBar = () => document.getElementById('sicas-loadbar')
+    || document.body.appendChild(h('div', { id: 'sicas-loadbar', 'aria-hidden': 'true' }));
+  const loadStart = () => {
+    if (++inflight > 1) return;
+    clearTimeout(barTimer);
+    barTimer = setTimeout(() => { loadBar().classList.add('on'); document.body.setAttribute('aria-busy', 'true'); }, 150);
+  };
+  const loadEnd = () => {
+    inflight = Math.max(0, inflight - 1);
+    if (inflight) return;
+    clearTimeout(barTimer);
+    const bar = document.getElementById('sicas-loadbar');
+    if (bar) bar.classList.remove('on');
+    document.body.removeAttribute('aria-busy');
+  };
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('button');
+    lastClick = btn && !btn.closest('#nav') ? { btn, t: Date.now() } : null;
+  }, true);
+  // Marca un botón como «cargando»; devuelve la función que lo restablece.
+  S.markBusy = (btn) => {
+    if (!btn || btn.classList.contains('is-loading')) return () => {};
+    const wasDisabled = btn.disabled;
+    btn.classList.add('is-loading'); btn.setAttribute('aria-busy', 'true'); btn.disabled = true;
+    return () => { btn.classList.remove('is-loading'); btn.removeAttribute('aria-busy'); btn.disabled = wasDisabled; };
+  };
+  // Bloque «Cargando…» con esqueleto para pantallas y paneles que esperan datos.
+  S.loading = (text = 'Cargando…') => h('div', { class: 'sicas-loading', role: 'status', 'aria-live': 'polite' },
+    h('div', { class: 'sicas-loading-head' }, h('span', { class: 'sicas-spinner', 'aria-hidden': 'true' }), text),
+    h('div', { class: 'sicas-skeleton', 'aria-hidden': 'true' },
+      h('span', { class: 'sk sk-title' }), h('span', { class: 'sk sk-line' }), h('span', { class: 'sk sk-line short' }),
+      h('span', { class: 'sk sk-block' })));
+
+  async function raw(path, opts = {}) {
+    // La solicitud que sigue a un clic (dentro de 500 ms) pone ese botón en estado de carga.
+    const click = lastClick && Date.now() - lastClick.t < 500 && lastClick.btn.isConnected ? lastClick.btn : null;
+    lastClick = null;
+    const release = S.markBusy(click);
+    loadStart();
+    try { return await request(path, opts); } finally { loadEnd(); release(); }
+  }
+
+  async function request(path, { method = 'GET', json, form } = {}) {
     const headers = {};
     let body;
     if (json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(json); }
@@ -209,8 +255,8 @@
   };
 
   S.busy = async (btn, fn) => {
-    btn.disabled = true;
-    try { await fn(); } catch (e) { S.say('Error inesperado: ' + e.message); } finally { btn.disabled = false; }
+    const release = S.markBusy(btn);
+    try { await fn(); } catch (e) { S.say('Error inesperado: ' + e.message); } finally { release(); }
   };
 
   S.json = (obj) => h('pre', null, JSON.stringify(obj, null, 2));
