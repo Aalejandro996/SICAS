@@ -68,7 +68,7 @@ class ContentTests(unittest.TestCase):
         first = next(a for a in b["audits"] if a["code"] == "A-SC-001-2026-A1")
         self.assertIn("cerrada el 15/08/2026", first["summary"])
         self.assertIn("2 de riesgo alto", first["summary"])
-        self.assertEqual(set(first["observations"][0]), {"title", "risk", "pac_status", "topic"})   # breve: título y riesgo
+        self.assertEqual(set(first["observations"][0]), {"title", "risk", "pac_status", "pac_due", "overdue", "topic"})   # breve: título, riesgo y plan de acción
         units = {u["unit"]: u for u in b["units"]}
         self.assertEqual(units["PORLAMAR"]["score"], 50.0)
         self.assertEqual(units["PORLAMAR"]["situation"], "CRITICA")        # 3 hallazgos altos

@@ -158,6 +158,15 @@ AUDIT_SQL = ("SELECT a.id::text, a.code, a.legacy_code, a.audit_kind, a.plan_typ
              "FROM engagement.audits a JOIN engagement.files f ON f.id = a.file_id JOIN engagement.units u ON u.id = f.unit_id ")
 
 
+def previous_audit(audit):
+    """Auditoría cerrada anterior de la misma unidad y dominio (para comparar la nota y los temas de los hallazgos)."""
+    return q1(AUDIT_SQL + "WHERE a.status = 'CLOSED' AND a.id <> CAST(:i AS uuid) AND a.audit_domain = :d "
+              "AND f.unit_id = (SELECT unit_id FROM engagement.files WHERE id = CAST(:f AS uuid)) "
+              "AND a.pac_sent_at < COALESCE(CAST(:t AS timestamptz), now()) ORDER BY a.pac_sent_at DESC LIMIT 1",
+              i=str(audit["id"]), d=audit.get("audit_domain") or "GENERAL", f=str(audit["file_id"]),
+              t=str(audit["pac_sent_at"]) if audit.get("pac_sent_at") else None)
+
+
 def list_audits(statuses=None, domains=None):
     sql = AUDIT_SQL
     params = {}

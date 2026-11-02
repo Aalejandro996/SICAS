@@ -16,6 +16,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (BaseDocTemplate, Frame, KeepTogether, NextPageTemplate, PageBreak, PageTemplate,
                                 Paragraph, Spacer, Table, TableStyle)
 
+from . import conclusions
 from .scoring import RATING_LABEL
 from .templates import KINDS, LINES
 
@@ -42,26 +43,19 @@ def initials_of(full_name: str) -> str:
     return (first[0] + last[0]).upper()
 
 
-def auto_conclusion(modality: str, unit: str, overall: dict, observations: list[dict], preliminary: bool) -> str:
-    score = overall.get("final")
-    rating = RATING_LABEL.get(overall["rating"], str(overall["rating"]).replace("_", " ").capitalize()).lower()
-    n = len(observations)
-    by = {r: sum(1 for o in observations if o["risk"] == r) for r in ("ALTO", "MEDIO", "BAJO")}
-    head = "Resultado PRELIMINAR de la auditoría" if preliminary else "Como resultado de la auditoría"
-    t = f"{head} {modality.lower()} practicada a {unit}, "
-    t += (f"la calificación obtenida es {score:.1f}% ({rating}). " if score is not None else "no fue posible calcular una calificación (sin ítems calificados). ")
-    t += (f"Se identificaron {n} observaciones ({by['ALTO']} de riesgo alto, {by['MEDIO']} medio y {by['BAJO']} bajo), "
-          "cuyas recomendaciones deben atenderse mediante el Plan de Acción Correctiva (PAC). " if n else "No se identificaron observaciones. ")
-    if overall.get("exceptions"):
-        t += (f"Se registraron {overall['exceptions']} excepciones por información no recibida; constituyen limitaciones al alcance "
-              "y se detallan en este informe. ")
-    if overall.get("final_method") == "PROMEDIO_FASES":
-        t += ("La nota final corresponde al promedio de las fases de levantamiento de información, documentación y "
-              "pruebas de campo. ")
-    if overall.get("manual_override"):
-        t += "La calificación global fue ajustada manualmente por el auditor, con la justificación indicada en este informe."
-    return t.strip()
+def auto_conclusion(audit: dict, unit: str, overall: dict, sheets: list[dict], observations: list[dict], preliminary: bool,
+                    analysis: dict | None = None) -> str:
+    """Conclusión automática con el motor de conclusiones (ver conclusions.py).
 
+    `analysis` trae lo que el motor necesita además del cuerpo: observaciones con su tema normativo, cuestionarios,
+    auditoría anterior de la unidad y, en Sistemas, fases y documentación obtenida.
+    """
+    a = analysis or {}
+    return conclusions.audit_conclusion(
+        preliminary=preliminary, audit_kind=audit.get("audit_kind"), domain=audit.get("audit_domain"), modality=audit["modality"],
+        unit=unit, overall=overall, sheets=sheets, questionnaires=a.get("questionnaires") or [],
+        observations=a.get("observations") or observations, limitations=int(overall.get("exceptions") or 0),
+        previous=a.get("previous"), systems=a.get("systems"))
 
 
 QUESTIONNAIRE_RISK_LABEL = {"BAJO": "Riesgo bajo", "MEDIO": "Riesgo medio", "ALTO": "Riesgo alto"}
@@ -96,7 +90,8 @@ def _questionnaire_blocks(w: dict, cell, small, width) -> list:
 
 def build_body(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dict], sheets: list[dict], overall: dict,
                observations: list[dict], limitations: list[dict], adjustments: list[dict], evidence: list[dict],
-               company: str, version: int, today: date, conclusion: str | None = None, thresholds: dict | None = None) -> dict:
+               company: str, version: int, today: date, conclusion: str | None = None, thresholds: dict | None = None,
+               analysis: dict | None = None) -> dict:
     body = {
         "kind": kind, "version": version, "company": company, "generated_on": today.isoformat(),
         "audit_code": audit["code"], "file_code": file["code"], "title": file["title"],
@@ -108,8 +103,12 @@ def build_body(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dic
         "sheets": sheets, "overall": overall, "thresholds": thresholds or {},
         "observations": observations, "limitations": limitations, "adjustments": adjustments, "evidence": evidence,
     }
-    body["conclusion"] = conclusion or auto_conclusion(audit["modality"], unit["name"], overall, observations, kind == "PREVIO")
+    auto = auto_conclusion(audit, unit["name"], overall, sheets, observations, kind == "PREVIO", analysis)
+    body["conclusion"] = conclusion or auto
+    body["conclusion_auto"] = auto
     body["conclusion_custom"] = bool(conclusion)
+    if (analysis or {}).get("previous"):
+        body["previous_audit"] = analysis["previous"]
     return body
 
 

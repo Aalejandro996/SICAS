@@ -11,7 +11,7 @@
   const RISK = { ALTO: ['Alto', 'ALTO'], MEDIO: ['Medio', 'MEDIO'], BAJO: ['Bajo', 'BAJO'] };
   const DOC = { ACTUALIZADA: ['Recibida y actualizada', 'BAJO'], DESACTUALIZADA: ['Recibida, desactualizada', 'MEDIO'], NO_ENTREGADA: ['No entregada', 'ALTO'], SIN_RESPUESTA: ['Sin respuesta', 'ALTO'] };
   const STATUS_CLASS = { DRAFT: 'PENDING', IN_REVIEW: 'IN_REVIEW', RETURNED: 'RETURNED', APPROVED: 'APPROVED' };
-  const ACTION = { GENERATED: 'Emitido con las iniciales del Auditor', REGENERATED: 'Datos actualizados', SIGNED_SENT: 'Enviado al Jefe', RETURNED: 'Devuelto',
+  const ACTION = { GENERATED: 'Emitido con las iniciales del Auditor', REGENERATED: 'Datos actualizados', CONCLUSION_EDITED: 'Conclusión editada por el Auditor', CONCLUSION_RESET: 'Conclusión automática restaurada', SIGNED_SENT: 'Enviado al Jefe', RETURNED: 'Devuelto',
     APPROVED: 'Aprobado y distribuido', ACKNOWLEDGED: 'Recepción firmada' };
   const PERIOD = { TRIMESTRE: [['1', '1er trimestre'], ['2', '2do trimestre'], ['3', '3er trimestre'], ['4', '4to trimestre']],
     SEMESTRE: [['1', '1er semestre'], ['2', '2do semestre']], ANUAL: [['1', 'Año completo']] };
@@ -133,7 +133,17 @@
       a.observations.length ? tbl(['N°', 'Hallazgo', 'Riesgo'], a.observations.map((o, i) => [String(i + 1), o.title, chip(RISK, o.risk)])) : null].filter(Boolean))),
     h('h3', null, 'Temas normativos (SUDEASEG)'),
     tbl(['Tema', 'Hallazgos', 'Alto', 'Unidades'], b.topics.map((t) => [t.label, String(t.total), String(t.by_risk.ALTO), t.units.join(', ')])),
-    h('h3', null, 'Conclusión'), ...b.conclusion.map((c) => h('p', null, c))];
+    ...lcftContent(b.lcft)];
+  }
+
+  // Cumplimiento LC/FT/FPADM: índice del cuestionario de prevención y hallazgos de los temas LC/FT.
+  function lcftContent(l) {
+    if (!l || (!l.audits.length && !l.findings)) return [];
+    return [h('h3', null, 'Cumplimiento LC/FT/FPADM'), h('p', null, l.text),
+      l.audits.length ? tbl(['Auditoría', 'Unidad', 'Índice', 'Riesgo', 'Bloques que no cumplen'],
+        l.audits.map((a) => [a.code, a.unit, pct(a.index), a.risk ? chip(RISK, a.risk) : '—', (a.critical || []).join('; ') || '—'])) : null,
+      l.topics.length ? tbl(['Tema de prevención', 'Hallazgos', 'Alto', 'Unidades'], l.topics.map((t) => [t.label, String(t.total), String(t.by_risk.ALTO), t.units.join(', ')])) : null]
+      .filter(Boolean);
   }
 
   function documentationContent(b) {
@@ -142,8 +152,29 @@
       S.stat(String(k.received), 'Documentación obtenida'), S.stat(pct(k.rate), 'Porcentaje obtenido'),
       S.stat(String(k.totals.NO_ENTREGADA + k.totals.SIN_RESPUESTA), 'No entregada o sin respuesta')),
     ...b.audits.map((a) => h('div', { class: 'panel' }, h('b', null, `${a.code} · ${a.unit}`), h('p', null, a.summary),
-      tbl(['Control', 'Documentación pedida', 'Lo obtenido', 'Adjuntos'], a.letter.map((c) => [c.ref, c.question, chip(DOC, c.status), String(c.documents)])))),
-    h('h3', null, 'Conclusión'), ...b.conclusion.map((c) => h('p', null, c))];
+      tbl(['Control', 'Documentación pedida', 'Lo obtenido', 'Adjuntos'], a.letter.map((c) => [c.ref, c.question, chip(DOC, c.status), String(c.documents)]))))];
+  }
+
+  // Conclusión: la redacta el motor de reglas; el Auditor que generó el informe puede editarla mientras está en borrador o devuelto.
+  function conclusionContent(b, can, send) {
+    const out = [h('h3', null, 'Conclusión'), ...b.conclusion.map((c) => h('p', null, c)),
+      h('p', { class: 'muted' }, b.conclusion_custom ? 'Redactada por el Auditor.' : 'Generada automáticamente por el motor de reglas.')];
+    if (b.conclusion_custom && b.conclusion_changed && b.conclusion_auto) {
+      out.push(h('div', { class: 'warn' }, h('b', null, 'Los datos cambiaron después de editar la conclusión. '),
+        'La conclusión automática con los datos vigentes dice:', ...b.conclusion_auto.map((c) => h('p', null, c))));
+    }
+    if (can.conclusion) {
+      const bar = h('div', { class: 'toolbar' }, h('button', { class: 'secondary', onclick: async (e) => {
+        const v = await S.ask('Editar conclusión', [{ name: 'text', type: 'textarea', label: 'Conclusión (separe los párrafos con una línea en blanco)',
+          value: b.conclusion.join('\n\n'), required: true }], 'Guardar', 'Cambiar la conclusión cambia el contenido del informe: se envía al Jefe con este texto.');
+        if (v) send('conclusion', { text: v.text }, 'Conclusión guardada.')(e);
+      } }, 'Editar conclusión'));
+      if (b.conclusion_custom) bar.append(h('button', { class: 'secondary', onclick: async (e) => {
+        if (confirm('¿Volver a la conclusión automática? Se pierde el texto editado.')) send('conclusion', { reset: true }, 'Conclusión automática restaurada.')(e);
+      } }, 'Restaurar automática'));
+      out.push(bar);
+    }
+    return out;
   }
 
   async function detail(el, id) {
@@ -181,6 +212,7 @@
       h('div', { class: 'row' }, status(r), ` ${name} · revisión ${r.revision} · elaborado por ${r.created_by_name} · ${b.audits.length} auditoría(s) · emisión ${b.generated_on}`),
       r.status === 'RETURNED' && lastReturn ? h('div', { class: 'warn' }, `Devuelto por ${lastReturn.actor_name}: ${lastReturn.comment}`) : null,
       ...(r.report_kind === 'DOCUMENTACION' ? documentationContent(b) : executiveContent(b)),
+      ...conclusionContent(b, can, act),
       h('h3', null, 'Recepción (Gerencia y Contralor)'),
       tbl(['Recibido por', 'Rol', 'Fecha', 'Nota'], d.acks.map((a) => [a.name, a.role === 'CONTRALOR' ? 'Contralor' : 'Gerencia', day(a.created_at), a.note || '—'])),
       h('h3', null, 'Bitácora'),

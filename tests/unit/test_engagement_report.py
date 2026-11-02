@@ -31,7 +31,8 @@ class BuilderTest(unittest.TestCase):
 
     def test_auto_conclusion_mentions_key_facts(self):
         c = sample_body()["conclusion"]
-        for frag in ("78.5%", "necesita mejoras", "2 observaciones", "1 de riesgo alto", "2 excepciones", "PAC"):
+        for frag in ("78.5 %", "necesita mejoras", "CON SALVEDADES", "2 observación(es)", "1 de riesgo alto", "2 excepción(es)", "PAC",
+                     "primera auditoría"):
             self.assertIn(frag, c)
         self.assertIn("PRELIMINAR", sample_body("PREVIO")["conclusion"])
 

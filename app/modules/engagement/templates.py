@@ -8,21 +8,22 @@ from __future__ import annotations
 KINDS = {"SUSCRIPCION": "Suscripción", "RECLAMO": "Reclamo / indemnización", "SISTEMAS": "Auditoría de Sistemas",
          "CXP": "Cuentas por pagar", "CXC": "Cuentas por cobrar", "ADMIN": "Gestión administrativa",
          "CARTELERA": "Cartelera fiscal y firmas autorizadas", "ADS": "Evaluación ADS", "LOPCYMAT": "Cuestionario LOPCYMAT",
-         "SERV_SUC": "Administración y servicios en sucursales", "TI_SUC": "Evaluación TI de la sucursal"}
+         "SERV_SUC": "Administración y servicios en sucursales", "TI_SUC": "Evaluación TI de la sucursal",
+         "LCFT": "Prevención LC/FT/FPADM"}
 LINES = {"AUTO": "Auto", "PATRIMONIAL": "Patrimonial", "PERSONAL": "Personal", "ERP_TI": "ERP / TI", "GENERAL": "General"}
 
 # Tipos de auditoría (no Sistemas): a qué unidades se aplican y qué cédulas pueden usar.
 AUDIT_KINDS = {
     "OPERATIVA": {"label": "Operativa (sucursales)", "units": ("SUCURSAL",),
-                  "kinds": ("SUSCRIPCION", "RECLAMO", "CARTELERA", "ADS", "LOPCYMAT", "SERV_SUC", "TI_SUC")},
+                  "kinds": ("SUSCRIPCION", "RECLAMO", "CARTELERA", "ADS", "LOPCYMAT", "SERV_SUC", "LCFT", "TI_SUC")},
     "ESPECIAL": {"label": "Especial (unidades administrativas y/o sucursales)", "units": ("SUCURSAL", "UNIDAD"),
-                 "kinds": ("SUSCRIPCION", "RECLAMO", "CXP", "CXC", "ADMIN", "CARTELERA", "ADS", "LOPCYMAT", "SERV_SUC", "TI_SUC")},
+                 "kinds": ("SUSCRIPCION", "RECLAMO", "CXP", "CXC", "ADMIN", "CARTELERA", "ADS", "LOPCYMAT", "SERV_SUC", "LCFT", "TI_SUC")},
     "ADMINISTRATIVA": {"label": "Administrativa (unidades administrativas)", "units": ("UNIDAD",), "kinds": ("ADMIN",)},
     "FINANCIERA": {"label": "Financiera (cuentas por pagar y por cobrar)", "units": ("SUCURSAL", "UNIDAD"), "kinds": ("CXP", "CXC")},
 }
-GENERAL_KINDS = ("CXP", "CXC", "ADMIN", "CARTELERA", "ADS", "LOPCYMAT", "SERV_SUC", "TI_SUC")   # cédulas sin línea de negocio (línea GENERAL)
+GENERAL_KINDS = ("CXP", "CXC", "ADMIN", "CARTELERA", "ADS", "LOPCYMAT", "SERV_SUC", "LCFT", "TI_SUC")   # cédulas sin línea de negocio (línea GENERAL)
 # Cédulas tipo cuestionario (una fila por pregunta, agrupadas en bloques con peso; ver scoring.questionnaire_summary).
-QUESTIONNAIRE_KINDS = ("CARTELERA", "ADS", "LOPCYMAT", "SERV_SUC")
+QUESTIONNAIRE_KINDS = ("CARTELERA", "ADS", "LOPCYMAT", "SERV_SUC", "LCFT")
 TEMPLATE_KEYS = (("SUSCRIPCION", "AUTO"), ("SUSCRIPCION", "PATRIMONIAL"), ("SUSCRIPCION", "PERSONAL"), ("RECLAMO", "AUTO"), ("RECLAMO", "PATRIMONIAL"), ("RECLAMO", "PERSONAL"), ("SISTEMAS", "ERP_TI"))
 # Respuestas de las cédulas: Sí, No, No aplica y Excepción. PARCIAL ya no se ofrece; solo se conserva en
 # las respuestas registradas antes del cambio (puntúa 50 y no se puede volver a elegir).

@@ -15,7 +15,7 @@ from app.core.security.rbac import permission_required
 from . import assemble as asm
 from . import codification
 from . import score_snapshots
-from . import evidence_rules, observation_rules, offline, phase_documents, regulatory_rules, scoring, storage, system_questionnaire, systems_docs, ti_branch
+from . import conclusions, evidence_rules, observation_rules, offline, phase_documents, regulatory_rules, scoring, storage, system_questionnaire, systems_docs, ti_branch
 from . import repositories as repo
 from . import workflow as wf
 from .pac import build_pac
@@ -2073,6 +2073,44 @@ def _team_info(aid):
              "system_role": t.get("system_role")} for t in repo.team(aid)]
 
 
+def conclusion_catalog(a):
+    """Catálogo con el que se clasifican los hallazgos por tema: dominios de Sistemas o temas normativos SUDEASEG."""
+    if is_systems(a):
+        return [{**r, "topic": r["domain_key"]} for r in repo.systems_rule_catalog()]
+    return repo.regulatory_catalog()
+
+
+def informative(o):
+    """Hallazgos de la Evaluación TI de la sucursal: informativos, no entran en conclusiones ni consolidados."""
+    return str(o.get("rule_key") or "").startswith("ti_suc:")
+
+
+def previous_brief(a, catalog=None):
+    """Nota, fecha de cierre y temas de los hallazgos de la auditoría anterior de la unidad (None si es la primera)."""
+    p = repo.previous_audit(a)
+    if p is None:
+        return None
+    sheets = [ws for ws in repo.worksheets_with_items(p["id"]) if not ti_branch.is_ti_criteria(ws["criteria"])]
+    th = thresholds(p)
+    ov = overall_for(p, asm.summarize_sheets(sheets, th), th)
+    obs = conclusions.annotate_topics([o for o in repo.observations(p["id"]) if not informative(o)], catalog or conclusion_catalog(p))
+    return {"id": p["id"], "code": p["code"], "closed_at": str(p.get("pac_sent_at") or "")[:10], "score": ov.get("final"),
+            "topics": sorted({o["topic"] for o in obs if o.get("topic")}), "observations": len(obs),
+            "high": sum(1 for o in obs if o.get("risk") == "ALTO")}
+
+
+def systems_brief(a, worksheets, observations, catalog):
+    """Sistemas: nota de cada fase cerrada, documentación obtenida de la carta y dominios críticos con brechas."""
+    letter = [r for ws in worksheets if ws["kind"] == "SISTEMAS" for r in systems_docs.letter_rows(ws["items"], ws["criteria"])]
+    critical = {c["topic"]: c["label"] for c in catalog if c.get("critical")}
+    obs = conclusions.annotate_topics(observations, catalog)
+    phases = repo.audit_phase_scores(a["id"])
+    return {"phases": [{"phase": p, "score": None if phases[p].get("score") is None else float(phases[p]["score"])}
+                       for p in scoring.SYSTEM_SCORED_PHASES if p in phases],
+            "requested": len(letter), "received": sum(1 for r in letter if r["status"] in systems_docs.WITH_DOCS),
+            "critical_domains": sorted({critical[o["topic"]] for o in obs if o.get("topic") in critical})}
+
+
 def _make_body(a, kind, version, conclusion, revision=1, report_code=None):
     """Cuerpo del informe con los datos vigentes y su trazabilidad.
 
@@ -2090,12 +2128,16 @@ def _make_body(a, kind, version, conclusion, revision=1, report_code=None):
             "review_points": [p for r in reports_ for p in repo.review_points(r["id"])],
             "reopenings": [{"version": r["version"], **o} for r in reports_ for o in [repo.reopening(r["id"])] if o],
         }
+    worksheets, observations, catalog = repo.worksheets_with_items(a["id"]), repo.observations(a["id"]), conclusion_catalog(a)
+    analysed = [o for o in observations if not informative(o)]
     return asm.assemble(
         kind=kind, audit=a, file={"code": a["file_code"], "title": a["title"], "period_from": a["period_from"], "period_to": a["period_to"]},
         unit={"code": a["unit_code"], "name": a["unit_name"], "kind": a["unit_kind"]}, team=team,
-        worksheets=repo.worksheets_with_items(a["id"]), observations=repo.observations(a["id"]), evidence=repo.evidence(a["id"]),
+        worksheets=worksheets, observations=observations, evidence=repo.evidence(a["id"]),
         thresholds=thresholds(a), company=repo.company() or current_app.config["COMPANY_NAME"], version=version, today=date.today(), conclusion=conclusion,
-        history=history, revision=revision, overall_for=lambda pairs, th: overall_for(a, pairs, th), report_code=report_code)
+        history=history, revision=revision, overall_for=lambda pairs, th: overall_for(a, pairs, th), report_code=report_code,
+        catalog=catalog, previous=previous_brief(a, catalog),
+        systems=systems_brief(a, worksheets, analysed, catalog) if is_systems(a) else None)
 
 
 def _transition(rep, status, action, delegation=None, **kw):

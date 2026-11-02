@@ -191,7 +191,7 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
                    "criterio de la Superintendencia de la Actividad Aseguradora y la normativa interna aplicable.", small))
         for t in body["topics"]:
             br = t["by_risk"]
-            block = [Paragraph(f"<b>{escape(t['label'].capitalize())}</b> — {t['total']} hallazgo(s): {br['ALTO']} alto, {br['MEDIO']} medio, "
+            block = [Paragraph(f"<b>{escape(t['label'][:1].upper() + t['label'][1:])}</b> — {t['total']} hallazgo(s): {br['ALTO']} alto, {br['MEDIO']} medio, "
                                f"{br['BAJO']} bajo · unidades: {escape(', '.join(t['units']))}", text),
                      Paragraph("<b>Criterio:</b> " + escape(_cut(t["criteria"], crit_n)), cell)]
             if level < 2:
@@ -201,9 +201,23 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
     else:
         s.append(P("No hay hallazgos vigentes en las auditorías seleccionadas.", text))
 
+    lcft = body.get("lcft") or {}
+    if lcft.get("audits") or lcft.get("findings"):
+        s.append(Paragraph("4.4 Cumplimiento LC/FT/FPADM", h2))
+        s.append(P(lcft["text"], text))
+        if lcft.get("audits"):
+            rows = [[Paragraph(x, hdr) for x in ("Auditoría", "Unidad", "Índice", "Riesgo", "Bloques que no cumplen")]]
+            rows += [[P(a["code"]), P(a["unit"]), P(_pct(a["index"])), P(RISK_LABEL.get(a.get("risk"), "—")),
+                      P(_cut("; ".join(a.get("critical") or []) or "—", 300))] for a in lcft["audits"]]
+            s.append(table(rows, [W * x for x in (0.2, 0.2, 0.1, 0.1, 0.4)]))
+        s.append(P("Referencia: Providencia SUDEASEG SAA-01-0536-2024 (G.O. Ext. N° 6.835 del 03/09/2024) y Ley Orgánica contra la "
+                   "Delincuencia Organizada y Financiamiento al Terrorismo.", small))
+
     # 5. Conclusión
     s.append(Paragraph("5. Conclusión", h1))
     s += [P(c, text) for c in body["conclusion"]]
+    if body.get("conclusion_custom"):
+        s.append(P("Conclusión redactada por el Auditor.", small))
     if body["recommendations"]:
         s += [Spacer(1, 3), Paragraph("<b>Recomendaciones prioritarias</b>", text)]
         s += [P("• " + _cut(r, 500 if level < 3 else 260), text) for r in body["recommendations"]]
@@ -248,6 +262,8 @@ def _documentation(body, level, W, text, small, cell, hdr, h1, h2, table, P):
         else:
             s += block
     s += [Paragraph("5. Conclusión", h1)] + [P(c, text) for c in body["conclusion"]]
+    if body.get("conclusion_custom"):
+        s.append(P("Conclusión redactada por el Auditor.", small))
     return s
 
 

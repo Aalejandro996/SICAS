@@ -276,7 +276,7 @@ class SheetSummary:
     scoring_excluded: bool = False
 
 
-# ------------------------------------------------------------------ cédulas tipo cuestionario (LOPCYMAT, servicios, cartelera, ADS)
+# ------------------------------------------------------------------ cédulas tipo cuestionario (LOPCYMAT, servicios, cartelera, ADS, LC/FT)
 # Mismas fórmulas del Excel «Atributos Auditorias» (hojas LOPCYMAT y Servicios Sucursal):
 #   Sí = 1, Parcialmente = 0,5, No = 0, N/A no cuenta.
 #   Cumplimiento del bloque = PROMEDIO de sus preguntas respondidas; sin respuestas vale 0 (SI.ERROR(...; 0)).
@@ -286,7 +286,8 @@ class SheetSummary:
 QUESTIONNAIRE_RISK = ((80.0, "BAJO"), (60.0, "MEDIO"))
 NEGATIVE_ANSWERS = ("NO_CUMPLE", "PARCIAL")
 # Nombre del índice en cada cédula, como en el Excel.
-INDEX_LABEL = {"SERV_SUC": "Índice de Madurez (IMS)", "LOPCYMAT": "Índice de cumplimiento LOPCYMAT"}
+INDEX_LABEL = {"SERV_SUC": "Índice de Madurez (IMS)", "LOPCYMAT": "Índice de cumplimiento LOPCYMAT",
+               "LCFT": "Índice de cumplimiento LC/FT/FPADM"}
 
 
 def index_label(kind: str | None) -> str:

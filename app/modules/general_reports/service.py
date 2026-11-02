@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import uuid
 
+from app.modules.engagement import api as eng
 from app.modules.engagement import assemble as asm
+from app.modules.engagement import conclusions, observation_rules
 from app.modules.engagement import repositories as repo
 from app.modules.engagement import systems_docs
 from app.modules.engagement.repositories import q, q1, x, db
@@ -70,15 +72,19 @@ def documentation_data(a):
         if ev.get("item_id"):
             docs.setdefault(ev["item_id"], []).append(ev["id"])
     letter = []
+    domains = observation_rules.domains_from_rows(repo.systems_rule_catalog())
     for ws in repo.worksheets_with_items(a["id"]):
         if ws["kind"] == "SISTEMAS":
-            letter += systems_docs.letter_rows(ws["items"], ws["criteria"], docs)
+            for r in systems_docs.letter_rows(ws["items"], ws["criteria"], docs):
+                d = observation_rules.domain_for(r["section"], r["question"], domains)
+                letter.append({**r, "domain": d.label, "critical": d.critical})
     return {"id": a["id"], "code": a["code"], "title": a["title"], "unit_name": a["unit_name"], "phase": a["phase"],
             "period_from": a["period_from"], "period_to": a["period_to"], "letter": letter}
 
 
-def audit_data(a, thresholds, overall_for):
-    """Calificación, hallazgos vigentes y limitaciones de una auditoría (para el motor del informe)."""
+def audit_data(a, thresholds, overall_for, catalog=None, with_previous=True):
+    """Calificación, hallazgos vigentes (con su tema), limitaciones, auditoría anterior de la unidad y cuestionario de
+    prevención LC/FT/FPADM de una auditoría (para el motor del informe)."""
     sheets = [ws for ws in repo.worksheets_with_items(a["id"]) if not asm.scoring.ti_branch.is_ti_criteria(ws["criteria"])]
     th = thresholds(a)
     pairs = asm.summarize_sheets(sheets, th)
@@ -90,7 +96,10 @@ def audit_data(a, thresholds, overall_for):
             "period_from": a["period_from"], "period_to": a["period_to"], "score": overall.get("final"), "rating": overall.get("rating"),
             "limitations": limitations, "closed_at": a.get("pac_sent_at"),
             # La Evaluación TI de la sucursal es informativa (módulo del Jefe de Sistemas): sus hallazgos no entran.
-            "observations": [o for o in repo.observations(a["id"]) if not str(o.get("rule_key") or "").startswith("ti_suc:")]}
+            "observations": conclusions.annotate_topics([o for o in repo.observations(a["id"]) if not eng.informative(o)],
+                                                        catalog if catalog is not None else eng.conclusion_catalog(a)),
+            **({"previous": eng.previous_brief(a)} if with_previous else {}),
+            "lcft": next((q for q in asm.questionnaires(sheets) if q["kind"] == "LCFT"), None)}
 
 
 def catalog(domain):
@@ -183,6 +192,18 @@ def replace_body(rep, body, sha, audit_ids, user, role):
         db.session.rollback()
         raise StaleState("El informe cambió mientras se regeneraba; recargue e intente de nuevo")
     _event(rep["id"], "REGENERATED", rep["status"], rep["status"], sha, user, role)
+    db.session.commit()
+
+
+def set_conclusion(rep, body, sha, user, role, action, comment):
+    """Guarda la conclusión editada (o restaurada) por el Auditor: cambia el contenido y su SHA-256, sin nueva revisión."""
+    row = x("UPDATE engagement.general_reports SET body = CAST(:b AS jsonb), body_sha256 = :h, updated_at = now() "
+            "WHERE id = CAST(:i AS uuid) AND body_sha256 = :old AND status = :st RETURNING id",
+            b=json.dumps(body, default=str), h=sha, i=rep["id"], old=rep["body_sha256"], st=rep["status"]).first()
+    if row is None:
+        db.session.rollback()
+        raise StaleState("El informe cambió mientras se editaba la conclusión; recargue e intente de nuevo")
+    _event(rep["id"], action, rep["status"], rep["status"], sha, user, role, comment)
     db.session.commit()
 
 

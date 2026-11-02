@@ -7,8 +7,8 @@
   const KINDS = [['SUSCRIPCION', 'Suscripción'], ['RECLAMO', 'Reclamo / indemnización'], ['SISTEMAS', 'Auditoría de Sistemas'],
     ['CXP', 'Cuentas por pagar'], ['CXC', 'Cuentas por cobrar'], ['ADMIN', 'Gestión administrativa'],
     ['CARTELERA', 'Cartelera fiscal y firmas autorizadas'], ['ADS', 'Evaluación ADS'], ['LOPCYMAT', 'Cuestionario LOPCYMAT'],
-    ['SERV_SUC', 'Administración y servicios en sucursales'], ['TI_SUC', 'Evaluación TI de la sucursal']];
-  const GENERAL_KINDS = ['CXP', 'CXC', 'ADMIN', 'CARTELERA', 'ADS', 'LOPCYMAT', 'SERV_SUC', 'TI_SUC'];
+    ['SERV_SUC', 'Administración y servicios en sucursales'], ['LCFT', 'Prevención LC/FT/FPADM'], ['TI_SUC', 'Evaluación TI de la sucursal']];
+  const GENERAL_KINDS = ['CXP', 'CXC', 'ADMIN', 'CARTELERA', 'ADS', 'LOPCYMAT', 'SERV_SUC', 'LCFT', 'TI_SUC'];
   const TI_RISK = { 1: 'BAJO', 2: 'MEDIO', 3: 'ALTO', 4: 'ALTO' };
   // Respuestas de todas las cédulas: Sí / No / No aplica / Excepción.
   // PARCIAL solo aparece en respuestas registradas antes del cambio (no se puede volver a elegir).
@@ -578,7 +578,7 @@
     if (ctx.canWrite && d.audit.phase !== 'INFORME') bar.append(h('button', { onclick: addSheet }, 'Agregar cédula'));
     const isSys = d.audit.audit_domain === 'SISTEMAS';
     el.append(bar, h('p', { class: 'muted' }, isSys ? 'Cuestionario ERP / TI. Cada fila representa un activo, aplicación, servicio o componente evaluado.' : 'Una cédula por tipo (suscripción o reclamo/indemnización) y línea (Auto, Patrimonial, Personal). Cada fila es una póliza o un siniestro de la muestra.'),
-      h('p', { class: 'muted' }, 'Los cuestionarios (Cartelera fiscal, Evaluación ADS, LOPCYMAT y Administración y servicios en sucursales) se responden una sola vez por unidad: una fila por pregunta.'),
+      h('p', { class: 'muted' }, 'Los cuestionarios (Cartelera fiscal, Evaluación ADS, LOPCYMAT, Administración y servicios en sucursales y Prevención LC/FT/FPADM) se responden una sola vez por unidad: una fila por pregunta.'),
       tbl(['Cédula', 'Criterios', 'Ítems', 'Excepciones', 'Final', 'Calificación'], d.sheets.map((s) => [s.title, s.criteria_count, s.items, s.exceptions, S.score(s.final), s.kind === 'TI_SUC' ? h('span', { class: 'muted' }, 'Informativa (no cuenta)') : S.ratingBadge(s.rating)]), (i) => { location.hash = `#/audits/${ctx.aid}/cedulas/${d.sheets[i].id}`; }));
   }
   async function addSheet() {
@@ -1408,7 +1408,7 @@
         h('b', null, 'Colaborador'), (d.signoffs.filter((s) => s.signer_type === 'COLABORADOR').slice(-1)[0]?.display) || (b.contact.name ? b.contact.name + ' (de la auditoría)' : 'sin registrar (firma manuscrita en la impresión)'),
         h('b', null, 'Contralor'), d.signatures.find((x) => x.signer_role === 'CONTRALOR') ? '✔ firmado ' + fmt(d.signatures.find((x) => x.signer_role === 'CONTRALOR').signed_at) : 'pendiente',
         h('b', null, 'Gerente de Control Interno'), d.signatures.find((x) => x.signer_role === 'GERENTE_CI') ? '✔ firmado ' + fmt(d.signatures.find((x) => x.signer_role === 'GERENTE_CI').signed_at) : 'pendiente')) : null,
-      h('h3', null, 'Conclusión'), h('p', null, b.conclusion), b.conclusion_custom ? h('span', { class: 'muted' }, '(redactada por el auditor)') : h('span', { class: 'muted' }, '(generada automáticamente)'),
+      h('h3', null, 'Conclusión'), ...String(b.conclusion || '').split(/\n\s*\n/).map((t) => h('p', null, t)), b.conclusion_custom ? h('span', { class: 'muted' }, '(redactada por el auditor)') : h('span', { class: 'muted' }, '(generada automáticamente)'),
       r.kind === 'FINAL' ? h('div', null, h('h3', null, 'Revisión Auditor ↔ Contralor'), h('div', { class: 'thread' }, d.comments.length ? d.comments.map((x) => h('div', { class: 'c' }, h('b', null, `${x.full_name} (${x.kind.toLowerCase()}) `), h('span', { class: 'muted' }, fmt(x.created_at)), h('div', null, x.text))) : h('span', { class: 'muted' }, 'Sin comentarios'))) : null);
     const m = dlg(`${r.kind === 'PREVIO' ? 'Informe previo' : 'Informe final'} v${r.version}`, content);
     holder.m = m;

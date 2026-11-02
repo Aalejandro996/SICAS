@@ -9,6 +9,7 @@ escaneada registrada en SICAS. Firma y aprobaciones quedan atadas al SHA-256 del
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
 
 from flask import Blueprint, Response, current_app, g, jsonify, request
@@ -122,16 +123,31 @@ def candidates():
                    period=period, max_audits=content.MAX_AUDITS)
 
 
+def _previous_period(domain, period, owner, catalog):
+    """Calificación promedio y hallazgos de las auditorías del Auditor cerradas en el período anterior (tendencia)."""
+    try:
+        prev = _period(dict(zip(("period_type", "period_n", "year"), content.previous_period(period["type"], period["n"], period["year"]))))
+    except (KeyError, ValueError):
+        return None
+    rows = [service.audit_data(a, eng.thresholds, eng.overall_for, catalog, with_previous=False)
+            for c in service.candidates({domain}, {}, owner, "EJECUTIVO", prev)[:content.MAX_AUDITS]
+            for a in [repo.get_audit(c["id"])] if a]
+    obs = [o for r in rows for o in r["observations"]]
+    return {"label": prev["label"], "audits": len(rows), "avg_score": content._avg(r["score"] for r in rows),
+            "by_risk": content._count(obs)}
+
+
 def _build(kind, period, domain, title, objective, audit_ids, f, code, owner, revision=1, author=None):
     """Lee las auditorías elegibles del Auditor y arma el cuerpo con el motor de reglas. (cuerpo, usados, descartados)."""
     eligible = {a["id"] for a in service.candidates({domain}, {}, owner, kind, period)}
+    catalog = service.catalog(domain) if kind == "EJECUTIVO" else None
     used, dropped, data = [], [], []
     for aid in audit_ids:
         a = repo.get_audit(aid) if aid in eligible else None
         if a is None:
             dropped.append(aid); continue
         used.append(aid)
-        data.append(service.documentation_data(a) if kind == "DOCUMENTACION" else service.audit_data(a, eng.thresholds, eng.overall_for))
+        data.append(service.documentation_data(a) if kind == "DOCUMENTACION" else service.audit_data(a, eng.thresholds, eng.overall_for, catalog))
     if not data:
         return None, used, dropped
     unit_name = next((a["unit_name"] for a in data if f.get("unit_id")), None)
@@ -139,7 +155,8 @@ def _build(kind, period, domain, title, objective, audit_ids, f, code, owner, re
     common = dict(company=company, title=title, code=code, author=author, filters_text=_filters_text(kind, f, period or {}, unit_name),
                   today=date.today(), objective=objective, revision=revision)
     body = (content.build_documentation(audits=data, **common) if kind == "DOCUMENTACION" else
-            content.build(audits=data, catalog=service.catalog(domain), domain=domain, period_label=period["label"], **common))
+            content.build(audits=data, catalog=catalog, domain=domain, period_label=period["label"],
+                          previous_period=_previous_period(domain, period, owner, catalog), **common))
     return json.loads(json.dumps(body, default=str)), used, dropped
 
 
@@ -207,6 +224,7 @@ def _refresh(rep):
         title = f"{content.REPORT_KINDS[rep['report_kind']]} — {period['label']}" if period else rep["title"]
         body, used, _ = _build(rep["report_kind"], period, rep["audit_domain"], title, (rep["filters"] or {}).get("objective"),
                                rep["audit_ids"], f, rep["code"], rep["created_by"], revision=rep["revision"] + 1, author=rep["body"].get("author"))
+        body = keep_conclusion(body, rep["body"])
     if body is None:
         service.delete(rep["id"])
         log("GENERAL_REPORT_DELETED", entity_type="general_report", entity_id=rep["id"],
@@ -215,6 +233,15 @@ def _refresh(rep):
     service.refresh(rep, body, body_hash(body), used, eng.me(), _role_label())
     log("GENERAL_REPORT_REFRESHED", entity_type="general_report", entity_id=rep["id"], request_id=g.request_id)
     return service.get(rep["id"])
+
+
+def keep_conclusion(body, old_body):
+    """Al regenerar, la conclusión editada por el Auditor se conserva; se marca si la automática cambió desde entonces."""
+    if body is None or not (old_body or {}).get("conclusion_custom"):
+        return body
+    changed = body.get("conclusion_auto") != (old_body.get("conclusion_auto") or old_body.get("conclusion"))
+    return {**body, "conclusion": old_body["conclusion"], "conclusion_custom": True,
+            "conclusion_changed": bool(changed or old_body.get("conclusion_changed"))}
 
 
 def _load(rid):
@@ -239,6 +266,7 @@ def _can(rep):
     acked = any(a["user_id"] == uid for a in service.acks(rep["id"]))
     return {
         "regenerate": mine and rep["status"] in ("DRAFT", "RETURNED"),
+        "conclusion": mine and rep["status"] in ("DRAFT", "RETURNED") and "general_report:create" in p,
         "sign": mine and rep["status"] in ("DRAFT", "RETURNED") and "general_report:create" in p,
         "approve": jefe and rep["status"] == "IN_REVIEW",
         "return": jefe and rep["status"] == "IN_REVIEW",
@@ -305,6 +333,7 @@ def regenerate(rid):
                                  ids, f, rep["code"], rep["created_by"], revision=rep["revision"] + 1, author=rep["body"].get("author"))
     if body is None:
         return err("Ninguna de las auditorías sigue cumpliendo las condiciones del informe", 409)
+    body = keep_conclusion(body, rep["body"])
     sha = body_hash(body)
     try:
         service.replace_body(rep, body, sha, used, eng.me(), _role_label())
@@ -313,6 +342,42 @@ def regenerate(rid):
     log("GENERAL_REPORT_REGENERATED", entity_type="general_report", entity_id=rep["id"], after_data={"sha256": sha, "auditorias": len(used)},
         request_id=g.request_id)
     return jsonify(status=rep["status"], dropped=dropped)
+
+
+CONCLUSION_MIN, CONCLUSION_MAX = 30, 6000
+
+
+@bp.post("/<uuid:rid>/conclusion")
+@permission_required("general_report:create")
+def conclusion(rid):
+    """El Auditor que generó el informe edita su conclusión ({text}) o vuelve a la automática ({reset: true})."""
+    rep, e = _load(rid)
+    if e:
+        return e
+    if not _can(rep)["conclusion"]:
+        return err("Solo el Auditor que generó el informe edita la conclusión, mientras está en borrador o devuelto", 409)
+    d = request.get_json(silent=True) or {}
+    body = dict(rep["body"])
+    auto = body.get("conclusion_auto") or body.get("conclusion") or []
+    if d.get("reset"):
+        body.update(conclusion=list(auto), conclusion_custom=False, conclusion_changed=False)
+        action, comment = "CONCLUSION_RESET", "Se restauró la conclusión automática"
+    else:
+        text = str(d.get("text") or "").replace("\r\n", "\n").strip()
+        if not CONCLUSION_MIN <= len(text) <= CONCLUSION_MAX:
+            return err(f"La conclusión debe tener entre {CONCLUSION_MIN} y {CONCLUSION_MAX} caracteres")
+        paragraphs = [" ".join(p.split()) for p in re.split(r"\n\s*\n", text) if p.strip()]
+        if paragraphs == body.get("conclusion"):
+            return jsonify(status=rep["status"], note="La conclusión no cambió.")
+        body.update(conclusion=paragraphs, conclusion_auto=list(auto), conclusion_custom=True, conclusion_changed=False)
+        action, comment = "CONCLUSION_EDITED", f"Conclusión editada por el Auditor ({len(paragraphs)} párrafo(s))"
+    sha = body_hash(body)
+    try:
+        service.set_conclusion(rep, body, sha, eng.me(), _role_label(), action, comment)
+    except service.StaleState as ex:
+        return err(str(ex), 409)
+    log("GENERAL_REPORT_" + action, entity_type="general_report", entity_id=rep["id"], after_data={"sha256": sha}, request_id=g.request_id)
+    return jsonify(status=rep["status"], note=("Conclusión automática restaurada." if d.get("reset") else "Conclusión guardada."))
 
 
 def _name(rep):

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from . import scoring
+from . import conclusions, scoring
 from .report_builder import actor_label, build_body
 from .templates import KINDS, LINES
 
@@ -16,9 +16,21 @@ def summarize_sheets(worksheets: list[dict], thresholds: dict | None) -> list[tu
     return [(ws, scoring.worksheet_summary(ws["criteria"], ws["items"], ws.get("manual_score"), thresholds)) for ws in worksheets]   # Decimal -> float dentro de scoring
 
 
+def questionnaires(worksheets: list[dict]) -> list[dict]:
+    """Índice, riesgo y bloques que no cumplen de las cédulas tipo cuestionario (LOPCYMAT, servicios, LC/FT...)."""
+    out = []
+    for ws in worksheets:
+        if ws["kind"] != "SISTEMAS" and scoring.is_questionnaire(ws["criteria"]):
+            s = scoring.questionnaire_summary(ws["criteria"], ws["items"])
+            out.append({"kind": ws["kind"], "title": KINDS.get(ws["kind"], ws["kind"]), "index": s["index"], "risk": s["risk"],
+                         "critical": s["critical"], "index_label": scoring.index_label(ws["kind"])})
+    return out
+
+
 def assemble(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dict], worksheets: list[dict], observations: list[dict],
              evidence: list[dict], thresholds: dict | None, company: str, version: int, today: date, conclusion: str | None = None,
-             history: dict | None = None, revision: int = 1, overall_for=None, report_code: str | None = None) -> dict:
+             history: dict | None = None, revision: int = 1, overall_for=None, report_code: str | None = None,
+             catalog: list[dict] | None = None, previous: dict | None = None, systems: dict | None = None) -> dict:
     # La Evaluación TI de la sucursal no forma parte del informe ni de la calificación: alimenta el módulo del Jefe de Sistemas.
     worksheets = [ws for ws in worksheets if not scoring.ti_branch.is_ti_criteria(ws["criteria"])]
     pairs = summarize_sheets(worksheets, thresholds)
@@ -43,9 +55,13 @@ def assemble(*, kind: str, audit: dict, file: dict, unit: dict, team: list[dict]
             "unit_decision": o.get("unit_decision"), "unit_response": o.get("unit_response") or "", "pac_action": o.get("pac_action") or "",
             "pac_owner": o.get("pac_owner") or "", "pac_due": str(o["pac_due"]) if o.get("pac_due") else ""} for n, o in enumerate(sorted(observations, key=lambda x: x["seq"]), 1)]
     ev = [{"n": i, "filename": e["filename"], "description": e.get("description") or "", "sha256": e["sha256"]} for i, e in enumerate(evidence, 1)]
+    # Los hallazgos de la Evaluación TI de la sucursal son informativos: no entran en la conclusión.
+    analysed = [o for o in observations if not str(o.get("rule_key") or "").startswith("ti_suc:")]
+    analysis = {"observations": conclusions.annotate_topics(analysed, catalog or []), "previous": previous, "systems": systems,
+                "questionnaires": questionnaires(worksheets)}
     body = build_body(kind=kind, audit=audit, file=file, unit=unit, team=team, sheets=sheets, overall=overall, observations=obs,
                       limitations=limitations, adjustments=adjustments, evidence=ev, company=company, version=version, today=today,
-                      conclusion=conclusion, thresholds=thresholds)
+                      conclusion=conclusion, thresholds=thresholds, analysis=analysis)
     if audit.get("manual_score") is not None:
         body["overall_reason"] = audit.get("manual_reason") or ""
     body["revision"] = revision
