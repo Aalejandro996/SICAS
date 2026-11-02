@@ -341,7 +341,9 @@
     );
 
     const el = $('page');
-    el.replaceChildren(S.loading('Cargando ' + (page.title || '').toLowerCase() + '…'));
+    // El título puede ser un texto o una función (Auditorías cambia según el dominio): solo se usa si es texto.
+    const pageTitle = typeof page.title === 'string' ? page.title.toLowerCase() : '';
+    el.replaceChildren(S.loading(pageTitle ? `Cargando ${pageTitle}…` : 'Cargando…'));
     const holder = S.h('div', { class: 'sicas-page-enter' });
 
     try {
