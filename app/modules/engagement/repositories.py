@@ -614,15 +614,19 @@ def create_financial_worksheet(audit_id, kind, line, user):
         raise
 
     
-def system_worksheet(audit_id, user):
+def system_worksheet(audit_id, user, criteria=None, title=None):
+    """Cédula de Sistemas de la auditoría. Las de aplicativos reciben los controles de su plantilla (p. ej. AcselX)."""
     existing = q1("SELECT id::text FROM engagement.worksheets WHERE audit_id = CAST(:a AS uuid) AND kind = 'SISTEMAS' AND line = 'ERP_TI'", a=str(audit_id))
     if existing:
         return existing["id"]
-    criteria, version = get_template("SISTEMAS", "ERP_TI")
+    if criteria is None:
+        criteria, version = get_template("SISTEMAS", "ERP_TI")
+    else:
+        version = 1
     wid = str(uuid.uuid4())
     x("INSERT INTO engagement.worksheets (id, audit_id, kind, line, title, criteria, template_version, created_by) "
       "VALUES (CAST(:i AS uuid), CAST(:a AS uuid), 'SISTEMAS', 'ERP_TI', :t, CAST(:c AS jsonb), :v, CAST(:u AS uuid))",
-      i=wid, a=str(audit_id), t="Auditoría de Sistemas — ERP / TI", c=json.dumps(criteria), v=version, u=user)
+      i=wid, a=str(audit_id), t=title or "Auditoría de Sistemas — ERP / TI", c=json.dumps(criteria, ensure_ascii=False), v=version, u=user)
     for c in criteria:
         x("INSERT INTO engagement.items (id, worksheet_id, ref, source, updated_by) VALUES (CAST(:i AS uuid), CAST(:w AS uuid), :r, 'ONLINE', CAST(:u AS uuid)) ON CONFLICT (worksheet_id, ref) DO NOTHING",
           i=str(uuid.uuid4()), w=wid, r=c["code"], u=user)
@@ -817,7 +821,7 @@ def set_ws_manual(ws_id, score, reason, user):
 # ------------------------------------------------------------------ observaciones y evidencias
 OBS_SQL = ("SELECT id::text, audit_id::text, item_id::text, seq, title, condition, criteria, cause, effect, recommendation, risk, unit_decision, unit_response, "
            "unit_response_at, pac_action, pac_owner, pac_due, pac_status, origin, covered_items::text[] AS covered_items, "
-           "superseded_by::text AS superseded_by, rule_key FROM engagement.observations ")
+           "superseded_by::text AS superseded_by, rule_key, accepted_at, discarded_at FROM engagement.observations ")
 
 
 def observations(audit_id):
@@ -856,7 +860,7 @@ def add_observation(audit_id, d, user, origin="MANUAL", commit=True):
 def observed_item_ids(audit_id, exclude=()):
     """Ítems ya cubiertos por una observación vigente (no se generan duplicadas)."""
     rows = q("SELECT id::text AS id, item_id::text AS item_id, covered_items::text[] AS covered FROM engagement.observations "
-             "WHERE audit_id = CAST(:a AS uuid) AND superseded_by IS NULL", a=str(audit_id))
+             "WHERE audit_id = CAST(:a AS uuid) AND (superseded_by IS NULL OR discarded_at IS NOT NULL)", a=str(audit_id))
     out = set()
     for r in rows:
         if r["id"] in exclude:
@@ -870,7 +874,7 @@ def observed_item_ids(audit_id, exclude=()):
 def active_rule_keys(audit_id):
     """Reglas que ya tienen una observación automática vigente en la auditoría."""
     return {r["rule_key"] for r in q("SELECT rule_key FROM engagement.observations WHERE audit_id = CAST(:a AS uuid) "
-                                     "AND rule_key IS NOT NULL AND superseded_by IS NULL", a=str(audit_id))}
+                                     "AND rule_key IS NOT NULL AND (superseded_by IS NULL OR discarded_at IS NOT NULL)", a=str(audit_id))}
 
 
 def regulatory_catalog(include_inactive=False):

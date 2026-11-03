@@ -15,6 +15,8 @@ from app.core.security.rbac import permission_required
 from . import assemble as asm
 from . import codification
 from . import score_snapshots
+from . import app_audit, app_repo, learning
+from . import norms as norms_catalog
 from . import conclusions, evidence_rules, observation_rules, offline, phase_documents, regulatory_rules, scoring, storage, system_questionnaire, systems_docs, ti_branch
 from . import repositories as repo
 from . import workflow as wf
@@ -544,8 +546,13 @@ def new_audit():
         domain = str(f.get("audit_domain") or "GENERAL")
         if not allowed_domain(domain):
             return err("El expediente está fuera del alcance de su rol", 403)
+        app_profile = None
         if domain == "SISTEMAS":
             lines = ["ERP_TI"]
+            if str(f.get("unit_kind") or "").upper() == "APLICATIVO":
+                app_profile = app_repo.application(f["unit_id"])
+                if app_profile is None:
+                    return err("El aplicativo no tiene ficha técnica en el inventario", 409)
             contact_name = str(d.get("contact_name") or f.get("responsible_name") or "").strip()
             contact_role = str(d.get("contact_role") or f.get("responsible_role") or "").strip()
         else:
@@ -572,7 +579,7 @@ def new_audit():
         if len(contact_name) > 120 or len(contact_role) > 120:
             return err("Responsable de la unidad y cargo: máximo 120 caracteres")
         data = {"modality": modality, "audit_domain": domain, "lines": sorted(set(lines)),
-                "audit_kind": "SISTEMAS" if domain == "SISTEMAS" else d["audit_kind"], "objectives": txt(d, "objectives", 10, 3000), "scope": txt(d, "scope", 10, 3000),
+                "audit_kind": ("APLICATIVO" if app_profile else "SISTEMAS") if domain == "SISTEMAS" else d["audit_kind"], "objectives": txt(d, "objectives", 10, 3000), "scope": txt(d, "scope", 10, 3000),
                 "procedures": txt(d, "procedures", 0, 3000), "location": txt(d, "location", 0, 200),
                 "contact_name": contact_name or None, "contact_role": contact_role or None,
                 "planned_start": parse_date(d.get("planned_start"), "Inicio previsto"), "planned_end": parse_date(d.get("planned_end"), "Fin previsto")}
@@ -602,7 +609,13 @@ def new_audit():
     aid, code = repo.create_audit(f["id"], data, team, me())
     if domain == "SISTEMAS":
         try:
-            repo.system_worksheet(aid, me())
+            if app_profile:
+                from .app_api import app_criteria
+                from .app_audit import TEMPLATE_LABEL
+                repo.system_worksheet(aid, me(), app_criteria(app_profile["template_code"]),
+                                      f"{TEMPLATE_LABEL.get(app_profile['template_code'], 'Auditoría de aplicativo')} — {app_profile['name']}")
+            else:
+                repo.system_worksheet(aid, me())
         except Exception:  # noqa: BLE001
             repo.db.session.rollback()
             return err("La auditoría fue creada, pero no fue posible preparar el cuestionario ERP/TI", 500)
@@ -1436,6 +1449,16 @@ def _auto_observations(a, ws):
             continue
         rows.append((crit, result, it.get("observation"), it["id"]))
     drafts = observation_rules.consolidate(rows, systems_domains())
+    catalog = None
+    for o in drafts:
+        o["rule_key"] = f"sis:{o['domain']}"
+        cited = [n for code in o.get("controls") or [] for n in (criteria.get(code) or {}).get("norms") or []]
+        if cited:
+            # Auditoría de aplicativos: el criterio sale del catálogo normativo único (normas citadas por cada control).
+            catalog = catalog if catalog is not None else (app_repo.norms_map() or None)
+            o["criteria"] = norms_catalog.cite(list(dict.fromkeys(cited)), catalog) or o["criteria"]
+    engine_rules = app_repo.active_rules_map()
+    drafts = [d for d in (learning.apply_rules(o, engine_rules) for o in drafts) if d is not None]
     # Un control que queda solo en su dominio y ya tiene su observación automática no se rehace:
     # solo se reemplazan las individuales que efectivamente se agrupan con otras.
     replaceable_items = {i for o in replaceable for i in (o["covered"] or [])}
@@ -1447,7 +1470,7 @@ def _auto_observations(a, ws):
     try:
         first_id = None
         for o in drafts:
-            fields = {k: o[k] for k in ("title", "condition", "criteria", "cause", "effect", "recommendation", "risk")}
+            fields = {k: o[k] for k in ("title", "condition", "criteria", "cause", "effect", "recommendation", "risk", "rule_key")}
             fields.update(item_id=o["item_id"], covered_items=o["covered_items"])
             _change(a, "observation", None, "OBSERVATION_AUTO_CREATED",
                     {"controls": o["controls"], "gap": o["gap"], "domain": o["domain"], "risk": o["risk"]},
@@ -1511,6 +1534,9 @@ def audit_auto_observations(aid):
               if not ti_branch.is_ti_criteria(ws["criteria"])   # la Evaluación TI no genera hallazgos de la auditoría
               for o in regulatory_rules.findings(ws, catalog)
               if o["rule_key"] not in existing]
+    # Reglas aprobadas por el Contralor a partir de la retroalimentación (riesgo, recomendación o supresión).
+    engine_rules = app_repo.active_rules_map()
+    drafts = [d for d in (learning.apply_rules(o, engine_rules) for o in drafts) if d is not None]
     if not drafts:
         return jsonify(created=0, note="No hay incumplimientos nuevos sin hallazgo.")
     try:
@@ -1717,8 +1743,14 @@ def update_item(iid):
             evidence = str(v.get("evidencia", "")).upper()
             if control == "PARCIAL":
                 return err("En Auditoría de Sistemas el control se responde solo SI o NO")
-            if control in scoring.SYSTEM_CONTROL_VALUES or doc in scoring.SYSTEM_DOC_POINTS or evidence in scoring.SYSTEM_EVIDENCE_POINTS:
+            crit_k = next((c for c in ws["criteria"] if c["code"] == k), {})
+            prev_k = (it.get("results") or {}).get(k) if isinstance((it.get("results") or {}).get(k), dict) else {}
+            # El dato medible (encuesta direccionada) se conserva si la edición en pantalla no lo envía.
+            dato = app_audit.normalize_data(crit_k, v["dato"] if "dato" in v else prev_k.get("dato")) if crit_k.get("data") else None
+            if control in scoring.SYSTEM_CONTROL_VALUES or doc in scoring.SYSTEM_DOC_POINTS or evidence in scoring.SYSTEM_EVIDENCE_POINTS or dato is not None:
                 results[k] = {"control": control if control in scoring.SYSTEM_CONTROL_VALUES else "", "documental": doc if doc in scoring.SYSTEM_DOC_POINTS else "", "evidencia": evidence if evidence in scoring.SYSTEM_EVIDENCE_POINTS else ""}
+                if dato is not None:
+                    results[k]["dato"] = dato
     elif ti_branch.is_ti_criteria(ws["criteria"]):
         results = {}
         for k, v in raw_results.items():
@@ -1921,6 +1953,8 @@ def edit_observation(oid):
         return err("Indique el motivo de la modificación de la observación (mínimo 10 caracteres)")
     reason = reason if len(reason) >= 10 else "Registro de la respuesta de la unidad / seguimiento del PAC"
     latest = repo.latest_final(a["id"])
+    from .app_api import record_edit_feedback
+    record_edit_feedback(a, o, upd, reason)
     _change(a, "observation", str(oid), "OBSERVATION_UPDATED",
             {k: {"before": o.get(k), "after": v} for k, v in upd.items()}, reason=reason)
     repo.update_observation(oid, upd, me(), reason, latest["status"] if latest else None)
@@ -2130,7 +2164,7 @@ def _make_body(a, kind, version, conclusion, revision=1, report_code=None):
         }
     worksheets, observations, catalog = repo.worksheets_with_items(a["id"]), repo.observations(a["id"]), conclusion_catalog(a)
     analysed = [o for o in observations if not informative(o)]
-    return asm.assemble(
+    body = asm.assemble(
         kind=kind, audit=a, file={"code": a["file_code"], "title": a["title"], "period_from": a["period_from"], "period_to": a["period_to"]},
         unit={"code": a["unit_code"], "name": a["unit_name"], "kind": a["unit_kind"]}, team=team,
         worksheets=worksheets, observations=observations, evidence=repo.evidence(a["id"]),
@@ -2138,6 +2172,10 @@ def _make_body(a, kind, version, conclusion, revision=1, report_code=None):
         history=history, revision=revision, overall_for=lambda pairs, th: overall_for(a, pairs, th), report_code=report_code,
         catalog=catalog, previous=previous_brief(a, catalog),
         systems=systems_brief(a, worksheets, analysed, catalog) if is_systems(a) else None)
+    if str(a.get("audit_kind") or "") == "APLICATIVO":
+        from .app_api import report_section
+        body["application"] = report_section(a)
+    return body
 
 
 def _transition(rep, status, action, delegation=None, **kw):
@@ -3391,3 +3429,6 @@ def upload_signing_certificate():
         after_data={"subject": info["subject"], "serial": info["serial"],
                     "not_after": info["not_after"].isoformat() if info["not_after"] else None}, request_id=g.request_id)
     return jsonify(subject=info["subject"], serial=info["serial"], not_after=info["not_after"])
+
+
+from . import app_api  # noqa: E402,F401  (rutas de aplicativos y del motor; usan este blueprint)

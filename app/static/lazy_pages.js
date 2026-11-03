@@ -27,7 +27,7 @@
   const modules = {
     // Cargas, Hallazgos, LC/FT y Dictámenes se retiraron del menú (ningún rol los ve).
     audit: {
-      src: '/static/pages_audit.js?v=20261102-ld2',
+      src: '/static/pages_audit.js?v=20261103-app1',
       pages: [
         {
           id: 'audits',
@@ -55,6 +55,22 @@
             'audit:financial_review',
             'audit:systems_review'
           ]
+        }
+      ]
+    },
+
+    apps: {
+      src: '/static/pages_apps.js?v=20261103-app1',
+      pages: [
+        {
+          id: 'applications',
+          title: 'Inventario de aplicativos',
+          perms: ['audit:systems_read', 'audit:systems_review', 'audit:unit_manage']
+        },
+        {
+          id: 'engine',
+          title: 'Motor de reglas',
+          perms: ['rule:configure', 'audit:systems_review', 'audit:financial_review']
         }
       ]
     },

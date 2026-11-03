@@ -376,6 +376,16 @@ def conclusion(rid):
         service.set_conclusion(rep, body, sha, eng.me(), _role_label(), action, comment)
     except service.StaleState as ex:
         return err(str(ex), 409)
+    if action == "CONCLUSION_EDITED":
+        # Retroalimentación del motor: el auditor reescribió la conclusión automática.
+        from app.modules.engagement import app_repo
+        try:
+            app_repo.add_feedback("CONCLUSION_REWRITTEN", eng.me(), pattern_key=f"conclusion:{body.get('kind') or rep.get('kind')}",
+                                  before={"conclusion": list(auto)}, after={"conclusion": paragraphs}, reason=rep.get("code"))
+            app_repo.db.session.commit()
+        except Exception:  # noqa: BLE001 - la retroalimentación nunca bloquea la edición
+            app_repo.db.session.rollback()
+            current_app.logger.exception("No se registró la retroalimentación de la conclusión")
     log("GENERAL_REPORT_" + action, entity_type="general_report", entity_id=rep["id"], after_data={"sha256": sha}, request_id=g.request_id)
     return jsonify(status=rep["status"], note=("Conclusión automática restaurada." if d.get("reset") else "Conclusión guardada."))
 

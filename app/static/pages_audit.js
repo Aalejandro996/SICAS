@@ -316,7 +316,8 @@
     ctx = { d, aid, el, tab: tab || 'resumen', canWrite: d.is_member && d.audit.status === 'IN_PROGRESS' && !d.locked };
     const a = d.audit;
     const body = h('div');
-    const tabs = [['resumen', 'Resumen'], ['cedulas', 'Cédulas'], ['observaciones', 'Observaciones'], ['evidencias', 'Evidencias'], ['sinconexion', 'Sin conexión'], ['informes', 'Informes y PAC'], ['bitacora', 'Bitácora']];
+    const tabs = [['resumen', 'Resumen'], ...(a.audit_kind === 'APLICATIVO' ? [['aplicativo', 'Aplicativo']] : []), ['cedulas', 'Cédulas'], ['observaciones', 'Observaciones'], ['evidencias', 'Evidencias'], ['sinconexion', 'Sin conexión'], ['informes', 'Informes y PAC'], ['bitacora', 'Bitácora']];
+    if (ctx.tab === 'aplicativo' && a.audit_kind !== 'APLICATIVO') ctx.tab = 'resumen';
     el.replaceChildren(h('div', { class: 'row' }, h('a', { href: '#/audits' }, '← Auditorías')),
       h('h2', null, `${a.code} — ${a.unit_name}`),
       h('div', { class: 'row' }, h('span', { class: 'badge ' + a.status }, ({ IN_PROGRESS: 'En curso', CLOSED: 'Cerrada' })[a.status] || a.status),
@@ -326,7 +327,7 @@
     // La pestaña se arma aparte y reemplaza al indicador de carga cuando sus datos están listos.
     const pane = h('div', { class: 'sicas-page-enter' });
     body.replaceChildren(S.loading());
-    Promise.resolve(({ resumen, cedulas, observaciones, evidencias, sinconexion, informes, bitacora })[ctx.tab](pane))
+    Promise.resolve(({ resumen, aplicativo, cedulas, observaciones, evidencias, sinconexion, informes, bitacora })[ctx.tab](pane))
       .then(() => body.replaceChildren(pane))
       .catch((e) => body.replaceChildren(h('div', { class: 'warn' }, 'No se pudo mostrar esta pestaña: ' + e.message)));
   }
@@ -1197,8 +1198,14 @@
             h('button', {
               class: 'sm secondary',
               onclick: () => obsResponse(o)
-            }, 'Respuesta / PAC')
+            }, 'Respuesta / PAC'),
+            h('button', { class: 'sm secondary', onclick: () => obsSuggestions(o) }, 'Sugerencias')
           );
+          if (o.origin === 'AUTO' && !o.accepted_at && !o.unit_decision) {
+            actions.append(
+              h('button', { class: 'sm secondary', title: 'Confirma la redacción del motor', onclick: () => obsAccept(o) }, 'Aceptar'),
+              h('button', { class: 'sm danger', onclick: () => obsDiscard(o) }, 'Descartar'));
+          }
         } else {
           actions.append('Solo lectura');
         }
@@ -1210,6 +1217,9 @@
             h('strong', null, o.title || 'Sin título'),
             o.condition
               ? h('p', { class: 'muted' }, o.condition)
+              : null,
+            o.origin === 'AUTO'
+              ? h('span', { class: 'badge ' + (o.accepted_at ? 'OK' : 'PENDING') }, o.accepted_at ? 'Motor · aceptado' : 'Redactado por el motor')
               : null
           ),
           decisionLabels[o.unit_decision] ||
@@ -1246,6 +1256,48 @@
     root.append(toolbar, kpis, filters, tablePanel);
     el.replaceChildren(root);
     renderRows();
+  }
+
+  // Pestaña del aplicativo: el código vive en app_audit_tab.js y se carga solo en las auditorías de aplicativos.
+  let appTabLoading = null;
+  function loadAppTab() {
+    if (S.appAuditTab) return Promise.resolve();
+    appTabLoading = appTabLoading || new Promise((resolve, reject) => {
+      const sc = h('script', { src: '/static/app_audit_tab.js?v=20261103-app1' });
+      sc.addEventListener('load', () => resolve(), { once: true });
+      sc.addEventListener('error', () => { appTabLoading = null; reject(new Error('No fue posible cargar la pestaña del aplicativo')); }, { once: true });
+      document.head.append(sc);
+    });
+    return appTabLoading;
+  }
+  async function aplicativo(el) {
+    await loadAppTab();
+    await S.appAuditTab(el, ctx, () => reload());
+  }
+
+  // Retroalimentación del motor: redacciones de hallazgos parecidos ya aprobados.
+  async function obsSuggestions(o) {
+    const d = await S.get(`${A}/observations/${o.id}/suggestions`);
+    if (!d) return;
+    const body = h('div');
+    if (!d.suggestions.length) body.append(h('p', { class: 'muted' }, 'No hay hallazgos aprobados parecidos todavía. El motor aprende de los informes finales aprobados.'));
+    const m = dlg('Redacciones sugeridas por el motor', body);
+    for (const sg of d.suggestions) {
+      body.append(h('div', { class: 'panel' },
+        h('p', null, h('strong', null, sg.title), ` · ${sg.audit_code} · similitud ${sg.similarity} %` + (sg.same_topic ? ' · mismo tema' : '')),
+        h('p', null, h('b', null, 'Causa: '), sg.cause || '—'), h('p', null, h('b', null, 'Recomendación: '), sg.recommendation || '—'),
+        canEditObs() ? h('button', { class: 'sm', onclick: () => { m.close(); obsForm({ ...o, cause: sg.cause || o.cause, recommendation: sg.recommendation || o.recommendation, effect: sg.effect || o.effect }); } }, 'Usar esta redacción') : null));
+    }
+    m.footer.append(closeBtn(m));
+  }
+  const canEditObs = () => ctx.canWrite;
+  async function obsAccept(o) {
+    if (await S.send(`${A}/observations/${o.id}/accept`, 'POST', {})) { S.say('Hallazgo aceptado: el motor lo toma como redacción correcta.', true); reload(); }
+  }
+  async function obsDiscard(o) {
+    const v = await S.ask('Descartar hallazgo ' + o.seq, [{ name: 'reason', label: 'Motivo (mínimo 10 caracteres)', type: 'textarea', required: true }], 'Descartar',
+      'El hallazgo sale de la auditoría y del informe. El motivo queda en la bitácora y en la retroalimentación del motor.');
+    if (v && await S.send(`${A}/observations/${o.id}/discard`, 'POST', v)) { S.say('Hallazgo descartado.', true); reload(); }
   }
 
   async function obsForm(o) {

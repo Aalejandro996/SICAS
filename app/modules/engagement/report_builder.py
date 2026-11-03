@@ -158,6 +158,60 @@ MAX_PAGES = 15
 RISK_ORDER = {"ALTO": 0, "MEDIO": 1, "BAJO": 2}
 
 
+def _application_section(app: dict, level: int, table, P, hdr, cell, small, body_st, h2) -> list:
+    """Ficha del aplicativo, cumplimiento por bloque, matriz de riesgos, pruebas técnicas, madurez y dictamen."""
+    h3 = ParagraphStyle("h3a", parent=h2, fontSize=10, keepWithNext=1)
+    pct = lambda v: "—" if v is None else f"{v:.1f}%"
+    pr, ov = app.get("profile") or {}, app.get("overview") or {}
+    out = [Paragraph("3.5 Evaluación del aplicativo", h2)]
+    ficha = [("Aplicativo", f"{pr.get('product') or pr.get('name') or '—'} {pr.get('version') or ''}".strip()),
+             ("Fabricante / proveedor", pr.get("vendor") or "—"), ("Base de datos", pr.get("db_engine") or "—"),
+             ("Alojamiento", pr.get("hosting") or "—"), ("Criticidad", (pr.get("criticality") or "—").capitalize()),
+             ("Dueño del proceso", pr.get("owner_unit_name") or "—")]
+    rows = [[P(ficha[i][0], cell), P(ficha[i][1], cell), P(ficha[i + 1][0], cell), P(ficha[i + 1][1], cell)] for i in range(0, 6, 2)]
+    out.append(table(rows, [3.3 * cm, 5.4 * cm, 3.3 * cm, 5.5 * cm], header=False))
+    out.append(P(f"Controles evaluados: {ov.get('total', 0)} · conformes {ov.get('conformes', 0)} · hallazgos {ov.get('hallazgos', 0)} · "
+                 f"cumplimiento efectivo {pct(ov.get('cumplimiento_efectivo'))} · promedio de la fórmula {pct(ov.get('promedio_general'))}.", small))
+    rows = [[Paragraph(x, hdr) for x in ("Bloque", "Total", "Conformes", "Hallazgos", "Cumplimiento", "Diagnóstico")]] + \
+           [[P(b["label"], cell), P(b["total"], cell), P(b["conformes"], cell), P(b["hallazgos"], cell), P(pct(b["cumplimiento"]), cell),
+             P(b["diagnostico"], cell)] for b in app.get("blocks") or []]
+    out += [Paragraph("Cumplimiento por bloque", h3), table(rows, [5.4 * cm, 1.3 * cm, 2.2 * cm, 2.1 * cm, 2.6 * cm, 3.9 * cm])]
+    rows = [[Paragraph(x, hdr) for x in ("Riesgo", "Categoría", "Control", "P", "I", "Nivel", "Estatus")]]
+    for r in app.get("risks") or []:
+        status = r["status"] + (" (ajustado por el auditor)" if r.get("override_reason") else "")
+        rows.append([P(r["code"], cell), P(r["category"], cell), P(r["control"], cell), P(r["probability"], cell), P(r["impact"], cell),
+                     P(r["level"], cell), P(status, cell)])
+    out += [Paragraph("Matriz de riesgos (probabilidad x impacto: ≥ 15 crítico, ≥ 10 alto, ≥ 5 medio)", h3),
+            table(rows, [2.3 * cm, 4 * cm, 1.6 * cm, 0.8 * cm, 0.8 * cm, 1.8 * cm, 6.2 * cm])]
+    hist = [r for r in app.get("risks") or [] if r.get("history_reason")]
+    if hist and level <= 2:
+        out.append(P("Ajuste por historial: " + " ".join(f"{r['control']}: {r['history_reason']}" for r in hist), small))
+    tests = app.get("tests") or []
+    ts = app.get("tests_summary") or {}
+    if tests:
+        out.append(Paragraph("Pruebas técnicas sustantivas", h3))
+        if level <= 2:
+            label = {"CUMPLE": "Cumple", "NO_CUMPLE": "No cumple", "NO_APLICA": "No aplica", "PENDIENTE": "Pendiente"}
+            rows = [[Paragraph(x, hdr) for x in ("Prueba", "Área de evaluación", "Resultado", "Detalle")]] + \
+                   [[P(t["code"], cell), P(t["area"], cell), P(label.get(t["result"], t["result"]), cell),
+                     P(_cut(t.get("detail") or "—", (None, 220, 120)[level]), cell)] for t in tests]
+            out.append(table(rows, [2.3 * cm, 4.2 * cm, 2.2 * cm, 8.8 * cm]))
+        out.append(P(f"Ejecutadas {ts.get('executed', 0)} de {ts.get('total', 0)}: {ts.get('CUMPLE', 0)} cumplen, {ts.get('NO_CUMPLE', 0)} no cumplen, "
+                     f"{ts.get('NO_APLICA', 0)} no aplican y {ts.get('PENDIENTE', 0)} pendientes.", small))
+    rows = [[Paragraph(x, hdr) for x in ("Dominio COBIT / estándar", "Nivel (0-5)", "Nombre", "Estado", "Dictamen técnico")]] + \
+           [[P(m["label"], cell), P("—" if m["level"] is None else m["level"], cell), P(m["name"], cell), P(m["state"], cell),
+             P(_cut(m.get("note") or "—", (None, 200, 120, 80)[min(level, 3)]), cell)] for m in app.get("maturity") or []]
+    out += [Paragraph("Madurez de los controles de TI (COBIT / CMMI)", h3), table(rows, [4.6 * cm, 1.8 * cm, 2.8 * cm, 2.8 * cm, 5.5 * cm])]
+    if level <= 2:
+        rows = [[Paragraph(x, hdr) for x in ("Código", "Marco regulatorio", "Control", "Estado")]] + \
+               [[P(t["code"], cell), P(t["framework"], cell), P(t["control"], cell), P(t["state"].capitalize(), cell)] for t in app.get("trace") or []]
+        out += [Paragraph("Trazabilidad regulatoria", h3), table(rows, [2 * cm, 9.5 * cm, 2 * cm, 4 * cm])]
+    op = app.get("opinion") or {}
+    if op.get("text"):
+        out += [Paragraph(f"Dictamen: {escape(op.get('label') or '')}", h3), P(op["text"], body_st)]
+    return out
+
+
 def build_pdf(body: dict, state: dict | None = None) -> bytes:
     """
     Informe en seis secciones: Introducción, Objetivo y alcance, Resultados de la evaluación,
@@ -472,6 +526,11 @@ def _render(body: dict, state: dict, level: int) -> tuple[bytes, int]:
                             f"({total} revisión(es) con motivo); el registro original y cada cambio constan en SICAS.", small))
     if trace:
         s += [Paragraph("3.4 Ajustes y trazabilidad de la calificación", h2)] + trace
+
+    # ------------------------------------------------------------ 3.5 Evaluación del aplicativo (auditoría de aplicativos)
+    app = body.get("application")
+    if app:
+        s += _application_section(app, level, table, _p, hdr, cell, small, body_st, h2)
 
     # ------------------------------------------------------------ 4. Limitaciones
     s.append(Paragraph("4. Limitaciones al alcance", h1))
