@@ -2977,3 +2977,53 @@ button.is-loading::before { content: ""; display: inline-block; width: .85em; he
   button.is-loading::before, .sicas-spinner { animation-duration: 2s; }
   .sicas-skeleton .sk, .sicas-loading, .sicas-page-enter { animation: none; }
 }
+
+/* MENÚ LATERAL AGRUPADO (20261103): secciones plegables, íconos y desplegable en móvil. */
+#nav .sicas-nav-mobile { display: none !important; }
+#nav .sicas-nav-group { display: flex; flex-direction: column; gap: 2px; }
+#nav .sicas-nav-group + .sicas-nav-group { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.07); }
+#nav .sicas-nav-items { display: flex; flex-direction: column; gap: 2px; }
+#nav .sicas-nav-group.folded .sicas-nav-items { display: none; }
+#nav button.sicas-nav-group-head {
+  justify-content: space-between;
+  padding: 6px 11px 4px !important;
+  min-height: 0;
+  color: var(--cc-sidebar-muted, #93a6bf) !important;
+  font-size: .66rem;
+  font-weight: 750;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+#nav button.sicas-nav-group-head:hover:not(:disabled) { color: #e5edf7 !important; background: transparent !important; }
+#nav .sicas-nav-chevron { width: 7px; height: 7px; border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor; transform: rotate(45deg); margin: -3px 3px 0; transition: transform .15s ease; flex: none; }
+#nav .sicas-nav-group.folded .sicas-nav-chevron { transform: rotate(-45deg); margin-top: 0; }
+#nav [data-sicas-nav-item] { padding-block: 8px; }
+#nav .sicas-nav-icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; opacity: .85; }
+#nav [data-sicas-nav-item].active .sicas-nav-icon { opacity: 1; }
+#nav .sicas-nav-toggle { margin-bottom: 4px; }
+
+/* Plegado: solo íconos; las secciones se reducen a separadores. */
+#view-app.sicas-nav-collapsed #nav button.sicas-nav-group-head { display: none !important; }
+#view-app.sicas-nav-collapsed #nav .sicas-nav-group.folded .sicas-nav-items { display: flex; }
+#view-app.sicas-nav-collapsed #nav [data-sicas-nav-item].has-icon::after { display: none; }
+#view-app.sicas-nav-collapsed #nav [data-sicas-nav-item].has-icon { min-height: 40px; }
+#view-app.sicas-nav-collapsed #nav [data-sicas-nav-item].has-icon .sicas-nav-icon { width: 20px; height: 20px; }
+
+@media (max-width: 760px) {
+  #nav, #view-app.sicas-nav-collapsed #nav { flex-direction: column !important; align-items: stretch !important; overflow: visible !important; padding: 8px !important; gap: 0 !important; }
+  #nav .sicas-nav-toggle { display: none !important; }
+  #nav button.sicas-nav-mobile { display: flex !important; width: 100% !important; min-height: 44px; max-width: none !important; gap: 10px; font-weight: 650; color: #fff !important; }
+  #nav .sicas-nav-mobile-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #nav .sicas-nav-burger, #nav .sicas-nav-burger::before, #nav .sicas-nav-burger::after { display: block; width: 16px; height: 2px; background: currentColor; border-radius: 2px; position: relative; flex: none; }
+  #nav .sicas-nav-burger::before, #nav .sicas-nav-burger::after { content: ""; position: absolute; left: 0; }
+  #nav .sicas-nav-burger::before { top: -5px; }
+  #nav .sicas-nav-burger::after { top: 5px; }
+  #nav.sicas-nav-open .sicas-nav-mobile .sicas-nav-chevron { transform: rotate(-135deg); margin-top: 3px; }
+  #nav:not(.sicas-nav-open) .sicas-nav-group { display: none; }
+  #nav.sicas-nav-open .sicas-nav-group:first-of-type { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.07); }
+  #nav .sicas-nav-group button, #view-app.sicas-nav-collapsed #nav [data-sicas-nav-item] { width: 100% !important; max-width: none !important; justify-content: flex-start !important; }
+  #nav .sicas-nav-group button.sicas-nav-group-head { justify-content: space-between !important; }
+  #view-app.sicas-nav-collapsed #nav button.sicas-nav-group-head { display: flex !important; }
+  #view-app.sicas-nav-collapsed #nav .sicas-nav-group.folded .sicas-nav-items { display: none; }
+  #view-app.sicas-nav-collapsed #nav .sicas-nav-label { display: inline !important; }
+}

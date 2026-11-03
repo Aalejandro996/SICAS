@@ -33,10 +33,7 @@ def is_app_audit(a) -> bool:
 
 def app_criteria(template_code: str) -> list[dict]:
     """Controles de la plantilla con los pesos aprobados por el Contralor (reglas WEIGHT vigentes)."""
-    rules = arepo.active_rules_map()
-    weights = {t.split(":", 1)[1]: int(v.get("weight", 1)) for (k, t), v in rules.items()
-               if k == "WEIGHT" and t.startswith(f"{template_code}:")}
-    return ap.criteria(template_code, weights)
+    return ap.criteria(template_code, learning.template_weights(arepo.active_rules_map(), template_code))
 
 
 # ------------------------------------------------------------------ inventario de aplicativos
@@ -160,7 +157,8 @@ def app_state(a, app, ws) -> dict:
     code = app["template_code"]
     params = ap.params_of(app)
     crit = ws["criteria"]
-    history = learning.history_adjustments(arepo.control_history(a["id"]))
+    history = learning.history_adjustments(
+        [r for r in arepo.control_history(a["id"], apps_only=True) if r["template"] == code])
     risks = ap.risk_matrix(code, ws["items"], history, arepo.risk_overrides(a["id"]))
     blocks = ap.block_summary(crit, ws["items"])
     ov = ap.overview(crit, ws["items"], params)
@@ -498,7 +496,7 @@ def analyze_patterns() -> int:
     rules = arepo.active_rules_map()
     weights = {t: int(v.get("weight", 1)) for (k, t), v in rules.items() if k == "WEIGHT"}
     created = 0
-    for p in learning.propose(fb, hist, weights, arepo.open_targets()):
+    for p in learning.propose(fb, hist, weights, arepo.open_targets(), pattern_rows=arepo.pattern_history()):
         arepo.add_proposal(p)
         created += 1
     repo.db.session.commit()

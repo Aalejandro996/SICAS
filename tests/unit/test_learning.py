@@ -56,3 +56,32 @@ def test_apply_only_approved_rules():
     out = ln.apply_rules(draft, {("RISK", "sis:accesos"): {"risk": "ALTO"}, ("RECOMMEND", "sis:accesos"): {"recommendation": "b"}})
     assert out["risk"] == "ALTO" and out["recommendation"] == "b" and out["rules_applied"] == ["RISK", "RECOMMEND"]
     assert ln.apply_rules(draft, {("SUPPRESS", "sis:accesos"): {"suppress": True}}) is None
+
+
+def test_recurrence_marks_and_escalates():
+    from app.modules.engagement import learning as L
+    d = {"rule_key": "ws1:reaseguro", "risk": "MEDIO", "condition": "Incumplimientos en reaseguro."}
+    h = [{"pattern_key": "sudeaseg:reaseguro", "audit_code": "O-1", "closed_at": "2026-01-01"},
+         {"pattern_key": "sudeaseg:otro", "audit_code": "O-2", "closed_at": "2026-03-01"}]
+    one = L.recurrence(d, h)
+    assert one["risk"] == "MEDIO" and one["history"]["delta"] == 0 and "O-1" in one["condition"]
+    h.append({"pattern_key": "sudeaseg:reaseguro", "audit_code": "O-3", "closed_at": "2026-05-01"})
+    two = L.recurrence(d, h)
+    assert two["risk"] == "ALTO" and two["history"]["audits"] == ["O-1", "O-3"]
+    assert L.recurrence(d, []) is d
+    assert L.recurrence({"rule_key": "sis:redes", "risk": "BAJO"}, h) == {"rule_key": "sis:redes", "risk": "BAJO"}
+    long = L.recurrence({**d, "condition": "x" * 3000}, h)
+    assert len(long["condition"]) <= L.MAX_TEXT
+
+
+def test_propose_weights_all_templates_and_systemic_risk():
+    from app.modules.engagement import learning as L
+    hist = [{"control": "TI005", "conforme": False, "audit_code": f"S-{i}", "template": "SISTEMAS/ERP_TI"} for i in range(3)]
+    hist += [{"control": "C01", "conforme": False, "audit_code": f"O-{i}", "template": "LCFT/GENERAL"} for i in range(3)]
+    rows = [{"pattern_key": "sudeaseg:reaseguro", "audit_code": f"O-{i}", "unit": u} for i, u in enumerate(["CARACAS", "VALENCIA", "CARACAS"])]
+    rows += [{"pattern_key": "sis:redes", "audit_code": f"S-{i}", "unit": "Gerencia de TI"} for i in range(4)]
+    out = L.propose([], hist, {"LCFT/GENERAL:C01": 3}, set(), pattern_rows=rows)
+    kinds = {(p["kind"], p["target"]) for p in out}
+    assert ("WEIGHT", "SISTEMAS/ERP_TI:TI005") in kinds and ("WEIGHT", "LCFT/GENERAL:C01") not in kinds
+    assert ("RISK", "sudeaseg:reaseguro") in kinds and ("RISK", "sis:redes") not in kinds   # una sola unidad: no es sistémico
+    assert L.template_weights({("WEIGHT", "SISTEMAS/ERP_TI:TI005"): {"weight": 3}}, "SISTEMAS/ERP_TI") == {"TI005": 3}

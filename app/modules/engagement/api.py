@@ -1429,6 +1429,28 @@ def systems_domains():
         return None
 
 
+def _learned(a, drafts):
+    """Lo aprendido aplicado a los hallazgos automáticos de cualquier dominio, antes de guardarlos.
+
+    1. Historial de la unidad: un tema ya observado en auditorías cerradas se marca como reiterado y, si se repite
+       en dos o más, sube un nivel de riesgo. 2. Reglas aprobadas por el Contralor (riesgo, recomendación o supresión);
+    estas van después porque son decisiones expresas y prevalecen.
+    """
+    try:
+        history = app_repo.pattern_history(same_unit_as=a["id"])
+    except Exception:  # noqa: BLE001 - el historial nunca impide redactar
+        repo.db.session.rollback()
+        current_app.logger.exception("No se pudo leer el historial de hallazgos de la unidad")
+        history = []
+    engine_rules = app_repo.active_rules_map()
+    out = []
+    for o in drafts:
+        d = learning.apply_rules(learning.recurrence(o, history), engine_rules)
+        if d is not None:
+            out.append(d)
+    return out
+
+
 def _auto_observations(a, ws):
     """Redacta las observaciones de las brechas de la cédula, agrupadas por dominio de control, en una transacción.
 
@@ -1457,8 +1479,7 @@ def _auto_observations(a, ws):
             # Auditoría de aplicativos: el criterio sale del catálogo normativo único (normas citadas por cada control).
             catalog = catalog if catalog is not None else (app_repo.norms_map() or None)
             o["criteria"] = norms_catalog.cite(list(dict.fromkeys(cited)), catalog) or o["criteria"]
-    engine_rules = app_repo.active_rules_map()
-    drafts = [d for d in (learning.apply_rules(o, engine_rules) for o in drafts) if d is not None]
+    drafts = _learned(a, drafts)
     # Un control que queda solo en su dominio y ya tiene su observación automática no se rehace:
     # solo se reemplazan las individuales que efectivamente se agrupan con otras.
     replaceable_items = {i for o in replaceable for i in (o["covered"] or [])}
@@ -1473,7 +1494,8 @@ def _auto_observations(a, ws):
             fields = {k: o[k] for k in ("title", "condition", "criteria", "cause", "effect", "recommendation", "risk", "rule_key")}
             fields.update(item_id=o["item_id"], covered_items=o["covered_items"])
             _change(a, "observation", None, "OBSERVATION_AUTO_CREATED",
-                    {"controls": o["controls"], "gap": o["gap"], "domain": o["domain"], "risk": o["risk"]},
+                    {"controls": o["controls"], "gap": o["gap"], "domain": o["domain"], "risk": o["risk"],
+                     "history": o.get("history"), "rules_applied": o.get("rules_applied")},
                     reason="Redactada por el motor de reglas a partir de la cédula (consolidada por dominio)")
             oid, _ = repo.add_observation(a["id"], fields, me(), origin="AUTO", commit=False)
             first_id = first_id or oid
@@ -1534,9 +1556,7 @@ def audit_auto_observations(aid):
               if not ti_branch.is_ti_criteria(ws["criteria"])   # la Evaluación TI no genera hallazgos de la auditoría
               for o in regulatory_rules.findings(ws, catalog)
               if o["rule_key"] not in existing]
-    # Reglas aprobadas por el Contralor a partir de la retroalimentación (riesgo, recomendación o supresión).
-    engine_rules = app_repo.active_rules_map()
-    drafts = [d for d in (learning.apply_rules(o, engine_rules) for o in drafts) if d is not None]
+    drafts = _learned(a, drafts)
     if not drafts:
         return jsonify(created=0, note="No hay incumplimientos nuevos sin hallazgo.")
     try:
@@ -1544,7 +1564,8 @@ def audit_auto_observations(aid):
             fields = {k: o[k] for k in ("title", "condition", "criteria", "cause", "effect", "recommendation", "risk", "rule_key")}
             fields.update(item_id=o["item_id"], covered_items=o["covered_items"])
             _change(a, "observation", None, "OBSERVATION_AUTO_CREATED",
-                    {"criteria": o["controls"], "topic": o["topic"], "risk": o["risk"]},
+                    {"criteria": o["controls"], "topic": o["topic"], "risk": o["risk"],
+                     "history": o.get("history"), "rules_applied": o.get("rules_applied")},
                     reason="Redactada por el motor de reglas (normativa SUDEASEG) a partir de los incumplimientos de la cédula")
             repo.add_observation(a["id"], fields, me(), origin="AUTO", commit=False)
         repo.db.session.commit()

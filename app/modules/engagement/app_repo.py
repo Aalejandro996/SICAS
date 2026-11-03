@@ -109,24 +109,64 @@ def add_survey(audit_id, area, respondent, filename, sha, rows, evidence_id, use
       f=filename, s=sha, n=rows, e=evidence_id, u=user)
 
 
-def control_history(exclude_audit=None):
-    """Resultado de cada control en auditorías de aplicativos CERRADAS (para el ajuste de probabilidad)."""
-    rows = q("SELECT a.id::text AS audit_id, a.code AS audit_code, a.pac_sent_at AS closed_at, u.name AS app, "
-             "COALESCE(p.template_code, 'ACSELX') AS template, i.ref AS control, i.results "
+def control_history(exclude_audit=None, apps_only=False):
+    """Resultado de cada control o criterio en auditorías CERRADAS (ajuste de probabilidad y propuestas de peso).
+
+    Plantilla: la del aplicativo (ACSELX…), «SISTEMAS/ERP_TI» en las de Sistemas por unidad y «TIPO/LÍNEA» en las
+    cédulas de las demás auditorías (Operativa, Financiera, Administrativa, Especial). La Evaluación TI no cuenta.
+    """
+    from . import app_audit as ap
+    from .regulatory_rules import ANSWERED, FAIL, _answer
+    x_ = str(exclude_audit or uuid.UUID(int=0))
+    rows = q("SELECT a.id::text AS audit_id, a.code AS audit_code, a.pac_sent_at AS closed_at, a.audit_kind, u.name AS app, "
+             "CASE WHEN a.audit_kind = 'APLICATIVO' THEN COALESCE(p.template_code, 'ACSELX') ELSE 'SISTEMAS/' || w.line END AS template, "
+             "i.ref AS control, i.results "
              "FROM engagement.audits a JOIN engagement.files f ON f.id = a.file_id JOIN engagement.units u ON u.id = f.unit_id "
              "LEFT JOIN engagement.applications p ON p.unit_id = u.id "
              "JOIN engagement.worksheets w ON w.audit_id = a.id AND w.kind = 'SISTEMAS' JOIN engagement.items i ON i.worksheet_id = w.id "
-             "WHERE a.audit_kind = 'APLICATIVO' AND a.status = 'CLOSED' AND a.id <> CAST(:x AS uuid)",
-             x=str(exclude_audit or uuid.UUID(int=0)))
-    from . import app_audit as ap
+             "WHERE a.status = 'CLOSED' AND a.id <> CAST(:x AS uuid)" + (" AND a.audit_kind = 'APLICATIVO'" if apps_only else ""), x=x_)
     out = []
     for r in rows:
         res = (r.get("results") or {}).get(r["control"])
         if not isinstance(res, dict) or ap.control_points(res) is None:
             continue
-        out.append({"control": r["control"], "conforme": ap.is_conforme(res), "audit_code": r["audit_code"], "app": r["app"],
-                    "closed_at": r["closed_at"], "template": r["template"]})
+        out.append({"control": r["control"], "conforme": ap.is_conforme(res), "audit_code": r["audit_code"],
+                    "app": r["app"] if r["audit_kind"] == "APLICATIVO" else None, "closed_at": r["closed_at"], "template": r["template"]})
+    if apps_only:
+        return out
+    sheets = q("SELECT w.id::text AS id, w.kind, w.line, w.criteria, a.code AS audit_code, a.pac_sent_at AS closed_at "
+               "FROM engagement.worksheets w JOIN engagement.audits a ON a.id = w.audit_id "
+               "WHERE a.status = 'CLOSED' AND a.id <> CAST(:x AS uuid) AND w.kind NOT IN ('SISTEMAS', 'TI_SUC')", x=x_)
+    items = {}
+    if sheets:
+        for it in q("SELECT worksheet_id::text AS w, results FROM engagement.items WHERE worksheet_id = ANY(CAST(:ids AS uuid[]))",
+                    ids=[w["id"] for w in sheets]):
+            items.setdefault(it["w"], []).append(it.get("results") or {})
+    for w in sheets:
+        for c in w.get("criteria") or []:
+            answers = [_answer(res, c) for res in items.get(w["id"], [])]
+            if not c.get("code") or c.get("evaluation_mode") == "TI_SUC" or not any(v in ANSWERED for v in answers):
+                continue
+            out.append({"control": c["code"], "conforme": not any(v in FAIL for v in answers), "audit_code": w["audit_code"],
+                        "app": None, "closed_at": w["closed_at"], "template": f"{w['kind']}/{w['line']}"})
     return out
+
+
+def pattern_history(same_unit_as=None):
+    """Hallazgos vigentes (ni descartados ni reemplazados) de auditorías CERRADAS, con su patrón, para el historial.
+
+    same_unit_as: id de una auditoría; limita a las otras auditorías cerradas de su misma unidad.
+    """
+    from .learning import pattern_key
+    rows = q("SELECT o.rule_key, a.code AS audit_code, a.pac_sent_at AS closed_at, u.name AS unit, o.risk "
+             "FROM engagement.observations o JOIN engagement.audits a ON a.id = o.audit_id "
+             "JOIN engagement.files f ON f.id = a.file_id JOIN engagement.units u ON u.id = f.unit_id "
+             "WHERE a.status = 'CLOSED' AND o.rule_key IS NOT NULL AND o.superseded_by IS NULL AND o.discarded_at IS NULL "
+             "AND a.id <> CAST(:x AS uuid)" + (" AND f.unit_id = (SELECT f2.unit_id FROM engagement.audits a2 "
+                                                 "JOIN engagement.files f2 ON f2.id = a2.file_id WHERE a2.id = CAST(:x AS uuid))"
+                                                 if same_unit_as else ""),
+             x=str(same_unit_as or uuid.UUID(int=0)))
+    return [{**r, "pattern_key": pattern_key(r["rule_key"])} for r in rows if pattern_key(r["rule_key"])]
 
 
 # ------------------------------------------------------------------ retroalimentación del motor

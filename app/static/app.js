@@ -264,6 +264,57 @@
     root.dataset.sicasView = view;
   }
 
+  // Menú lateral agrupado por secciones: con muchos módulos (Contralor, jefes) la lista plana se veía recargada.
+  const NAV_GROUPS = [
+    ['principal', 'Principal', ['home', 'contralor-dashboard', 'general-reports']],
+    ['auditoria', 'Auditoría', ['audits', 'ti-branches', 'applications', 'findings', 'lcft', 'reports', 'ingestion']],
+    ['gestion', 'Gestión', ['roles', 'overtime', 'auditor-activity', 'work-schedule']],
+    ['config', 'Configuración', ['engine', 'users', 'rules-admin', 'system', 'admin-monitor', 'access-review', 'annulments']],
+  ];
+  const NAV_ICON_PATHS = {
+    home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z',
+    'contralor-dashboard': 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+    'general-reports': 'M6 2h9l5 5v15H6zM14 2v6h6M9 13h8M9 17h8',
+    audits: 'M9 3h6v3H9zM6 5h3M15 5h3v16H6V5M9 12l2 2 4-4',
+    'ti-branches': 'M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6',
+    applications: 'M3 4h18v12H3zM8 20h8M12 16v4',
+    findings: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5',
+    lcft: 'M12 2l8 4v6c0 5-4 9-8 10-4-1-8-5-8-10V6z',
+    reports: 'M6 2h12v20H6zM9 7h6M9 11h6M9 15h4',
+    ingestion: 'M12 3v12M7 10l5 5 5-5M4 21h16',
+    roles: 'M4 4h16v12H8l-4 4zM8 9h8M8 12h5',
+    overtime: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 3',
+    'auditor-activity': 'M3 12h4l3-8 4 16 3-8h4',
+    'work-schedule': 'M3 5h18v16H3zM3 10h18M8 3v4M16 3v4',
+    engine: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2',
+    users: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21c0-4 3-6 7-6s7 2 7 6M17 11a3 3 0 1 0 0-6M22 20c0-3-2-5-5-5',
+    'rules-admin': 'M4 6h16M4 12h10M4 18h6M17 15l2 2 3-4',
+    system: 'M3 4h18v6H3zM3 14h18v6H3zM7 7h.01M7 17h.01',
+    'admin-monitor': 'M3 4h18v13H3zM8 21h8M6 12l3-3 3 3 4-4',
+    'access-review': 'M8 11V7a4 4 0 1 1 8 0v4M5 11h14v10H5zM12 15v2',
+    annulments: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM6 6l12 12',
+  };
+  const NAV_FOLD_KEY = 'sicas.nav.folded';
+  function navFolded() {
+    try { return JSON.parse(localStorage.getItem(NAV_FOLD_KEY) || '[]'); } catch { return []; }
+  }
+  function saveNavFolded(list) {
+    try { localStorage.setItem(NAV_FOLD_KEY, JSON.stringify(list)); } catch { /* sin almacenamiento */ }
+  }
+  function navIcon(id) {
+    const d = NAV_ICON_PATHS[id];
+    if (!d) return null;
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.classList.add('sicas-nav-icon');
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', d);
+    svg.appendChild(path);
+    return svg;
+  }
+
   function buildNav() {
     const nav = $('nav');
     const app = $('view-app');
@@ -289,7 +340,19 @@
       }
     });
 
-    const buttons = visible().filter((p) => !p.hiddenFromNav).map((p) => {
+    // En pantallas pequeñas el menú es un desplegable: un solo botón con la página actual.
+    const mobile = document.createElement('button');
+    mobile.type = 'button';
+    mobile.className = 'sicas-nav-mobile';
+    mobile.setAttribute('aria-expanded', 'false');
+    mobile.innerHTML = '<span class="sicas-nav-burger" aria-hidden="true"></span><span class="sicas-nav-mobile-label">Menú</span><span class="sicas-nav-chevron" aria-hidden="true"></span>';
+    mobile.addEventListener('click', () => {
+      const open = nav.classList.toggle('sicas-nav-open');
+      mobile.setAttribute('aria-expanded', String(open));
+    });
+
+    const pages = visible().filter((p) => !p.hiddenFromNav);
+    const makeButton = (p) => {
       const label = String(pageTitle(p) || '').trim();
       const button = document.createElement('button');
 
@@ -300,19 +363,76 @@
       button.setAttribute('aria-label', label);
       button.title = label;
 
+      const icon = navIcon(p.id);
+      if (icon) {
+        button.appendChild(icon);
+        button.classList.add('has-icon');
+      }
       const labelElement = document.createElement('span');
       labelElement.className = 'sicas-nav-label';
       labelElement.textContent = label;
       button.appendChild(labelElement);
 
       button.addEventListener('click', () => {
+        nav.classList.remove('sicas-nav-open');
+        mobile.setAttribute('aria-expanded', 'false');
         location.hash = '#/' + p.id;
       });
 
       return button;
+    };
+
+    const known = new Set(NAV_GROUPS.flatMap((g) => g[2]));
+    const groups = NAV_GROUPS.map(([key, label, ids]) => [key, label, ids.map((id) => pages.find((p) => p.id === id)).filter(Boolean)]);
+    const others = pages.filter((p) => !known.has(p.id));
+    if (others.length) groups.push(['otros', 'Otros', others]);
+
+    const folded = navFolded();
+    const sections = groups.filter((g) => g[2].length).map(([key, label, items]) => {
+      const section = document.createElement('div');
+      section.className = 'sicas-nav-group';
+      section.dataset.group = key;
+      if (folded.includes(key)) section.classList.add('folded');
+
+      const head = document.createElement('button');
+      head.type = 'button';
+      head.className = 'sicas-nav-group-head';
+      head.setAttribute('aria-expanded', String(!folded.includes(key)));
+      head.innerHTML = '<span></span><span class="sicas-nav-chevron" aria-hidden="true"></span>';
+      head.firstChild.textContent = label;
+      head.addEventListener('click', () => {
+        const isFolded = section.classList.toggle('folded');
+        head.setAttribute('aria-expanded', String(!isFolded));
+        const list = navFolded().filter((k) => k !== key);
+        if (isFolded) list.push(key);
+        saveNavFolded(list);
+      });
+
+      const list = document.createElement('div');
+      list.className = 'sicas-nav-items';
+      list.append(...items.map(makeButton));
+      section.append(head, list);
+      return section;
     });
 
-    nav.replaceChildren(toggle, ...buttons);
+    nav.replaceChildren(toggle, mobile, ...sections);
+  }
+
+  // Marca la página activa, abre su sección y rotula el desplegable móvil.
+  function syncNav(page) {
+    document.querySelectorAll('#nav [data-sicas-nav-item]').forEach((b) => {
+      const on = b.id === 'nav-' + page.id;
+      b.classList.toggle('active', on);
+      if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    });
+    const active = document.getElementById('nav-' + page.id);
+    const section = active && active.closest('.sicas-nav-group');
+    if (section && section.classList.contains('folded')) {
+      section.classList.remove('folded');
+      section.querySelector('.sicas-nav-group-head')?.setAttribute('aria-expanded', 'true');
+    }
+    const label = document.querySelector('#nav .sicas-nav-mobile-label');
+    if (label) label.textContent = active ? active.getAttribute('aria-label') : 'Menú';
   }
   let navigationToken = 0;
   S.isNavigationCurrent = (token) => Boolean(S.user) && token === navigationToken;
@@ -336,9 +456,7 @@
       return;
     }
 
-    document.querySelectorAll('#nav button').forEach((b) =>
-      b.classList.toggle('active', b.id === 'nav-' + page.id)
-    );
+    syncNav(page);
 
     const el = $('page');
     // El título puede ser un texto o una función (Auditorías cambia según el dominio): solo se usa si es texto.

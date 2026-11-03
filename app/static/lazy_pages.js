@@ -60,7 +60,7 @@
     },
 
     apps: {
-      src: '/static/pages_apps.js?v=20261103-app1',
+      src: '/static/pages_apps.js?v=20261103-app2',
       pages: [
         {
           id: 'applications',

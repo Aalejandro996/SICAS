@@ -3,8 +3,10 @@
 El motor NO se modifica solo. Aprende de cuatro fuentes y deja todo trazado:
 1. Decisiones del auditor: acepta, edita o descarta un hallazgo automático, cambia su riesgo o reescribe una
    conclusión (engagement.engine_feedback).
-2. Historial de controles: un control que falla en varias auditorías o aplicativos sube un punto de probabilidad en
-   la matriz de riesgos; uno conforme de forma sostenida baja un punto. Cada ajuste lleva su explicación.
+2. Historial: un control que falla en varias auditorías o aplicativos sube un punto de probabilidad en la matriz de
+   riesgos; uno conforme de forma sostenida baja un punto. En todos los dominios (Sistemas, Operativa, Financiera,
+   Administrativa, Especial), un hallazgo automático cuyo tema ya se observó en auditorías cerradas de la misma unidad
+   se marca como reiterado y, si se repite en dos o más, sube un nivel de riesgo. Cada ajuste lleva su explicación.
 3. Redacción sugerida: condición, causa y recomendación de hallazgos parecidos ya aprobados (similitud de términos).
 4. Reglas propuestas: cuando un patrón se repite, el motor plantea la regla con su evidencia; solo el Contralor la
    aprueba (queda quién y cuándo) y recién entonces se aplica.
@@ -30,6 +32,8 @@ PROPOSAL_KINDS = {
     "RECOMMEND": "Recomendación por defecto de un tema",
     "SUPPRESS": "Dejar de redactar automáticamente un tema",
 }
+RISK_LEVELS = ("BAJO", "MEDIO", "ALTO")
+MAX_TEXT = 3000          # largo máximo de la condición (el mismo que valida la edición)
 MIN_EVIDENCE = 3          # repeticiones mínimas para proponer una regla
 HISTORY_WINDOW = 5        # resultados recientes por control que se consideran
 FINDING_FIELDS = ("title", "condition", "criteria", "cause", "effect", "recommendation")
@@ -108,6 +112,38 @@ def history_adjustments(rows: list[dict], window: int = HISTORY_WINDOW) -> dict:
     return out
 
 
+def recurrence(draft: dict, history: list[dict], window: int = HISTORY_WINDOW) -> dict:
+    """Marca como reiterado un hallazgo automático cuyo tema ya se observó en auditorías cerradas de la unidad.
+
+    history: {"pattern_key", "audit_code", "closed_at"} de observaciones vigentes de auditorías CERRADAS de la misma
+    unidad (sin la actual). Se miran las últimas `window` auditorías de la unidad. Una aparición previa deja la nota;
+    dos o más suben el riesgo un nivel (BAJO→MEDIO→ALTO). El auditor puede cambiarlo y eso también se aprende.
+    """
+    key = pattern_key(draft.get("rule_key"), draft.get("controls"))
+    if not key or not history:
+        return draft
+    recent = []
+    for r in sorted(history, key=lambda r: str(r.get("closed_at") or ""), reverse=True):
+        if r.get("audit_code") not in recent:
+            recent.append(r.get("audit_code"))
+    recent = recent[:window]
+    seen = sorted({r.get("audit_code") for r in history if r.get("audit_code") in recent and r.get("pattern_key") == key})
+    if not seen:
+        return draft
+    out = dict(draft)
+    risk = out.get("risk") if out.get("risk") in RISK_LEVELS else "MEDIO"
+    delta = 1 if len(seen) >= 2 and risk != "ALTO" else 0
+    if delta:
+        out["risk"] = RISK_LEVELS[RISK_LEVELS.index(risk) + 1]
+    reason = (f"Observación reiterada: el mismo tema se observó en {len(seen)} de las últimas {len(recent)} auditorías cerradas "
+              f"de la unidad ({', '.join(seen)})" + (f"; el riesgo sube de {risk} a {out['risk']}." if delta else "."))
+    base = str(out.get("condition") or "")
+    room = MAX_TEXT - len(reason) - 2
+    out["condition"] = (base if len(base) <= room else base[: room - 1].rstrip() + "…") + "\n\n" + reason
+    out["history"] = {"audits": seen, "window": len(recent), "delta": delta, "reason": reason}
+    return out
+
+
 # ------------------------------------------------------------------ 3. redacción sugerida
 def suggestions(target: dict, approved: list[dict], limit: int = 3) -> list[dict]:
     """Hallazgos aprobados más parecidos al indicado (título + condición), con bonificación por mismo tema o control.
@@ -148,12 +184,13 @@ def _evidence(events: list[dict]) -> list[dict]:
 
 
 def propose(feedback: list[dict], history_rows: list[dict], weights: dict, existing: set[tuple[str, str]],
-            min_evidence: int = MIN_EVIDENCE) -> list[dict]:
+            min_evidence: int = MIN_EVIDENCE, pattern_rows: list[dict] | None = None) -> list[dict]:
     """Reglas nuevas a partir de patrones repetidos. Nunca se activan solas.
 
     feedback: eventos de engine_feedback (kind, pattern_key, before, after, audit_code, user_name, created_at).
-    history_rows: igual que history_adjustments (auditorías cerradas de aplicativos).
-    weights: peso vigente por control {"ACSELX:SEG04": 1}.
+    history_rows: igual que history_adjustments, con "template" (ACSELX, SISTEMAS/ERP_TI, LCFT/GENERAL…) de todas las
+        auditorías cerradas; "pattern_rows": {"pattern_key", "audit_code", "unit"} de sus hallazgos vigentes.
+    weights: peso vigente por control {"ACSELX:SEG04": 1, "SISTEMAS/ERP_TI:TI005": 1}.
     existing: (tipo, objetivo) de propuestas pendientes o reglas ya activas (no se repiten).
     """
     out = []
@@ -172,9 +209,24 @@ def propose(feedback: list[dict], history_rows: list[dict], weights: dict, exist
     for target, audits in sorted(fails.items()):
         if len(audits) >= min_evidence and int(weights.get(target, 1)) < 3:
             add("WEIGHT", target, {"weight": 3},
-                f"El control {target.split(':', 1)[1]} no fue conforme en {len(audits)} auditorías cerradas: se propone "
-                f"marcarlo como crítico (peso 3), con lo que pesa más en la calificación y sube el riesgo de su hallazgo.",
-                [{"audit_code": a} for a in sorted(a for a in audits if a)])
+                f"El criterio {target.split(':', 1)[1]} de {template_label(target)} no se cumplió en {len(audits)} auditorías "
+                f"cerradas: se propone marcarlo como crítico (peso 3), con lo que pesa más en la calificación de las próximas "
+                f"cédulas.", [{"audit_code": a} for a in sorted(a for a in audits if a)])
+
+    # RISK sistémico: el mismo tema se observa en varias auditorías cerradas de distintas unidades.
+    audits_by_key, units_by_key = defaultdict(set), defaultdict(set)
+    for r in pattern_rows or []:
+        k = r.get("pattern_key")
+        if k and not k.startswith(("ti_suc:", "ctrl:")):
+            audits_by_key[k].add(r.get("audit_code"))
+            units_by_key[k].add(r.get("unit"))
+    for key, audits in sorted(audits_by_key.items()):
+        units = sorted(u for u in units_by_key[key] if u)
+        if len(audits) >= min_evidence and len(units) >= 2:
+            add("RISK", key, {"risk": "ALTO"},
+                f"«{pattern_label(key)}» se observó en {len(audits)} auditorías cerradas de {len(units)} unidades "
+                f"({', '.join(units[:6])}{'…' if len(units) > 6 else ''}): es una debilidad sistémica y se propone que el motor "
+                f"redacte esos hallazgos con riesgo ALTO.", [{"audit_code": a} for a in sorted(a for a in audits if a)][:20])
 
     by_key = defaultdict(list)
     for e in feedback:
@@ -215,6 +267,18 @@ def propose(feedback: list[dict], history_rows: list[dict], weights: dict, exist
                 f"El hallazgo automático de «{pattern_label(key)}» fue descartado {len(evs)} veces y aceptado {accepted}: se propone "
                 f"dejar de redactarlo automáticamente (el auditor puede registrarlo a mano).", _evidence(evs))
     return out
+
+
+def template_label(target: str) -> str:
+    """«SISTEMAS/ERP_TI:TI005» → «la cédula SISTEMAS / ERP_TI»; «ACSELX:SEG04» → «la plantilla ACSELX»."""
+    tpl = str(target or "").split(":", 1)[0]
+    return f"la cédula {tpl.replace('/', ' / ')}" if "/" in tpl else f"la plantilla {tpl}"
+
+
+def template_weights(rules: dict, template: str) -> dict:
+    """Pesos aprobados {código: peso} de una plantilla a partir de las reglas WEIGHT vigentes."""
+    return {t.split(":", 1)[1]: int(v.get("weight", 1)) for (k, t), v in rules.items()
+            if k == "WEIGHT" and t.startswith(f"{template}:")}
 
 
 def apply_rules(draft: dict, rules: dict) -> dict | None:

@@ -363,8 +363,20 @@ def update_audit_data(audit_id, d):
 
 # ------------------------------------------------------------------ plantillas, cédulas e ítems
 def get_template(kind, line):
+    """Criterios vigentes de la cédula, con los pesos que el Contralor aprobó en el motor de reglas (reglas WEIGHT)."""
     r = q1("SELECT criteria, version FROM engagement.templates WHERE kind=:k AND line=:l", k=kind, l=line)
-    return (r["criteria"], r["version"]) if r else (default_criteria(kind, line), 0)
+    criteria, version = (r["criteria"], r["version"]) if r else (default_criteria(kind, line), 0)
+    weights = approved_weights(f"{kind}/{line}")
+    if weights:
+        criteria = [{**c, "weight": weights[c.get("code")]} if c.get("code") in weights else c for c in criteria]
+    return criteria, version
+
+
+def approved_weights(template):
+    """{código: peso} de las reglas WEIGHT activas de una plantilla («SISTEMAS/ERP_TI», «LCFT/GENERAL», «ACSELX»)."""
+    rows = q("SELECT target, value FROM engagement.engine_rules WHERE active AND kind = 'WEIGHT' AND target LIKE :p",
+             p=template.replace("%", "") + ":%")
+    return {r["target"].split(":", 1)[1]: int((r["value"] or {}).get("weight", 1)) for r in rows}
 
 
 def list_templates(keys=None):
@@ -485,6 +497,8 @@ def create_financial_worksheet(audit_id, kind, line, user):
         )
 
     criteria = []
+    # Pesos aprobados por el Contralor en el motor de reglas (propuestas WEIGHT a partir del historial).
+    learned = approved_weights(f"{kind}/{line}")
 
     for row in template["criteria"]:
         criterion = {
@@ -514,6 +528,8 @@ def create_financial_worksheet(audit_id, kind, line, user):
         # mientras se define formalmente la metodología financiera.
         if row["weight"] is not None:
             criterion["weight"] = row["weight"]
+        if row["source_id"] in learned:
+            criterion["weight"] = learned[row["source_id"]]
 
         criteria.append(criterion)
 

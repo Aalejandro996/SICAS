@@ -72,7 +72,7 @@
       const tabs = [['propuestas', 'Propuestas'], ['retroalimentacion', 'Retroalimentación'], ['reglas', 'Reglas aprobadas'], ['normativa', 'Normativa']];
       const body = h('div');
       el.replaceChildren(h('h2', null, 'Motor de reglas'),
-        h('p', { class: 'muted' }, 'El motor aprende de las decisiones del auditor y del historial de los controles, pero nunca cambia sus reglas solo: '
+        h('p', { class: 'muted' }, 'El motor aprende en todas las auditorías (Sistemas, aplicativos, Operativa, Financiera, Administrativa y Especial) de las decisiones del auditor y del historial de controles y hallazgos, pero nunca cambia sus reglas solo: '
           + 'plantea propuestas con su evidencia y el Contralor las aprueba o rechaza. Cada decisión queda registrada con su autor y fecha.'),
         h('div', { class: 'tabs' }, tabs.map(([id, t]) => h('button', { class: id === tab ? 'active' : '', onclick: () => go(id) }, t))), body);
       body.replaceChildren(S.loading());
