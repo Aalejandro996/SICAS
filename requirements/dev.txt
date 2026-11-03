@@ -1,4 +1,4 @@
 -r base.txt
-bandit>=1.7
-pip-audit>=2.7
-pytest>=8
+bandit==1.9.4
+pip-audit==2.10.1
+pytest==9.1.1
