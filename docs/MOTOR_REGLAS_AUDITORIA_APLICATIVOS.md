@@ -59,7 +59,7 @@ Menú **Auditoría → Inventario de aplicativos**. Cada aplicativo es una unida
 | `failover_months` | 6 | Antigüedad máxima de la última prueba de conmutación, en meses |
 | `log_review_days` | 31 | Antigüedad máxima de la última revisión de bitácoras, en días |
 
-Al crear la auditoría de un aplicativo, el sistema arma su cédula con los controles de la plantilla (con los pesos que el Contralor haya aprobado, ver sección 9).
+Al crear la auditoría de un aplicativo, el sistema arma su cédula con los controles de la plantilla (con los pesos que el Contralor haya aprobado, ver sección 8.5).
 
 ---
 
